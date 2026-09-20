@@ -13,6 +13,10 @@ Apache 2.0 licensed. Inspired by [Log Sentinel](https://github.com/dabit3/jev-ex
 
 An ERROR whose retry succeeded can be routine. An INFO message saying a backup wrote zero bytes can be important. Jev judges the meaning; a separate keyword baseline lets you compare its decisions. This is a Python 3.11+ terminal tool and local browser dashboard with no runtime dependencies.
 
+![Live Kubernetes dashboard showing streaming logs, selecting two important events, and copying an investigation prompt for a coding agent](docs/images/live-demo.gif)
+
+Live tail → select important events → copy a prompt for Claude, Codex, or another coding agent. Recorded with synthetic logs and simulated classifications and cost counters; no real cluster data. [Recreate the demo](docs/demo.md).
+
 ## Quick start
 
 Using Claude, Codex, or another coding agent? Paste this prompt:
