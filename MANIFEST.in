@@ -7,7 +7,6 @@ prune dist
 prune .venv
 prune .kube
 global-exclude __pycache__ *.py[cod] .DS_Store .env .env.* *.pem *.key kubeconfig kubeconfig.*
-include jevernetes jev-ernetes jev-log-analyzer
 global-exclude .review-rules.json
 include LICENSE NOTICE SECURITY.md CONTRIBUTING.md
 recursive-include tests *.cjs

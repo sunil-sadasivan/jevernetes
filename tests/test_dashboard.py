@@ -10,7 +10,7 @@ import urllib.error
 import urllib.request
 from unittest.mock import patch
 
-from jev_log_analyzer.dashboard import Dashboard, make_server, scan_args
+from jevernetes.dashboard import Dashboard, make_server, scan_args
 
 
 class DashboardTests(unittest.TestCase):
@@ -43,7 +43,7 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(report["scope"]["files"], ["app.log"])
         self.assertEqual(report["events"][0]["source"]["path"], "app.log")
         self.assertNotIn("topsecret", json.dumps(report))
-        self.assertNotIn("jev-logs-", json.dumps(report))
+        self.assertNotIn("jevernetes-logs-", json.dumps(report))
         self.assertEqual((Path(self.temp.name) / job["report_id"]).stat().st_mode & 0o777, 0o600)
 
     def test_single_active_job(self):
@@ -66,7 +66,7 @@ class DashboardTests(unittest.TestCase):
             self.app.report(path.name)
 
     def test_kubernetes_runs_through_shared_engine_and_reports_failure(self):
-        with patch("jev_log_analyzer.dashboard.analyze", side_effect=ValueError("Cannot inventory Kubernetes pods: timed out")) as analyze:
+        with patch("jevernetes.dashboard.analyze", side_effect=ValueError("Cannot inventory Kubernetes pods: timed out")) as analyze:
             self.app.start({"kind": "kubernetes", "offline": True, "context": "test-cluster", "namespace": "prod", "since": "30m"})
             job = self.wait_job()
             self.assertEqual(job["status"], "error")
@@ -79,7 +79,7 @@ class DashboardTests(unittest.TestCase):
     def test_ai_analysis_uses_existing_engine(self):
         def judge(_client, batch):
             return [{"importance": "important", "importance_confidence": .98, "severity": "impact", "category": "dependency"} for event in batch]
-        with patch.dict("os.environ", {"TYPESAFE_API_KEY": "test-key"}), patch("jev_log_analyzer.jev.Jev.judge", judge):
+        with patch.dict("os.environ", {"TYPESAFE_API_KEY": "test-key"}), patch("jevernetes.jev.Jev.judge", judge):
             payload = self.payload()
             payload["offline"] = False
             self.app.start(payload)

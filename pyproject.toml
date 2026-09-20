@@ -18,12 +18,10 @@ Repository = "https://github.com/sunil-sadasivan/jevernetes"
 Issues = "https://github.com/sunil-sadasivan/jevernetes/issues"
 
 [project.scripts]
-jevernetes = "jev_log_analyzer.cli:main"
-jev-ernetes = "jev_log_analyzer.cli:main"
-jev-log-analyzer = "jev_log_analyzer.cli:main"
+jevernetes = "jevernetes.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["jev_log_analyzer*"]
+include = ["jevernetes*"]
 
 [tool.setuptools.package-data]
-jev_log_analyzer = ["web/*.html", "web/*.css", "web/*.js"]
+jevernetes = ["web/*.html", "web/*.css", "web/*.js"]

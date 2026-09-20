@@ -4,7 +4,7 @@ Use Python 3.11 or newer. Runtime dependencies are limited to the Python standar
 
 ```sh
 python3 -m unittest discover -s tests -v
-node --check jev_log_analyzer/web/app.js
+node --check jevernetes/web/app.js
 node tests/test_context_ui.cjs
 node tests/test_prompt_ui.cjs
 ```

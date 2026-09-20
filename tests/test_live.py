@@ -11,13 +11,13 @@ import unittest
 import urllib.error
 from unittest.mock import patch
 
-from jev_log_analyzer.cli import parser
-from jev_log_analyzer.dashboard import Dashboard, scan_args
-from jev_log_analyzer.events import parse_stream
-from jev_log_analyzer.jev import Jev
-from jev_log_analyzer.live import Cursor, Grouper, LiveSession, running_targets
-from jev_log_analyzer.usage import UsageMeter
-from jev_log_analyzer.report import TailPrinter
+from jevernetes.cli import parser
+from jevernetes.dashboard import Dashboard, scan_args
+from jevernetes.events import parse_stream
+from jevernetes.jev import Jev
+from jevernetes.live import Cursor, Grouper, LiveSession, running_targets
+from jevernetes.usage import UsageMeter
+from jevernetes.report import TailPrinter
 
 
 def options(*extra):
@@ -261,7 +261,7 @@ class StreamTests(unittest.TestCase):
             return subprocess.Popen([sys.executable,'-u','-c','import time; print("2026-09-20T12:00:00Z ERROR example"); time.sleep(60)'], **kwargs)
         def factory(args):
             return LiveSession(args,run_kubectl=inventory,popen=spawn)
-        with tempfile.TemporaryDirectory() as directory, patch('jev_log_analyzer.dashboard.LiveSession', factory):
+        with tempfile.TemporaryDirectory() as directory, patch('jevernetes.dashboard.LiveSession', factory):
             app = Dashboard(directory)
             app.start({'kind':'kubernetes','offline':True,'live':True})
             until = time.monotonic() + 4

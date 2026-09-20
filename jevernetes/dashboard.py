@@ -191,7 +191,7 @@ class Dashboard:
                 with self.lock:
                     self.job.update(status="complete", message=report["live"]["message"], report_id=report_id)
                 return
-            with tempfile.TemporaryDirectory(prefix="jev-logs-") as temporary:
+            with tempfile.TemporaryDirectory(prefix="jevernetes-logs-") as temporary:
                 names = {}
                 if uploads:
                     for i, (name, data) in enumerate(uploads):

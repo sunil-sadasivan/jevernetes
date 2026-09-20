@@ -37,7 +37,7 @@ jobs:
           python -m venv .security-venv
           .security-venv/bin/python -m pip install -r requirements-dev.txt
       - name: Fail on medium or high severity Python findings
-        run: .security-venv/bin/python -m bandit -r jev_log_analyzer --severity-level medium --confidence-level medium
+        run: .security-venv/bin/python -m bandit -r jevernetes --severity-level medium --confidence-level medium
       - name: Audit development and build dependencies
         run: .security-venv/bin/python -m pip_audit --strict -r requirements-dev.txt
   codeql:

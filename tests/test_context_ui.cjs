@@ -1,5 +1,5 @@
 const fs=require('node:fs'), vm=require('node:vm'), assert=require('node:assert/strict');
-const sandbox={};vm.createContext(sandbox);vm.runInContext(fs.readFileSync('jev_log_analyzer/web/context.js','utf8')+';globalThis.helpers=LogContext',sandbox);
+const sandbox={};vm.createContext(sandbox);vm.runInContext(fs.readFileSync('jevernetes/web/context.js','utf8')+';globalThis.helpers=LogContext',sandbox);
 const h=sandbox.helpers;
 const source={type:'kubernetes',context:'demo',namespace:'demo',pod:'api-one',container:'app',pod_uid:'one',restart_count:0};
 const anchor={id:'selected',source,timestamp:'2026-09-20T12:00:00Z',text:'ERROR problem',importance:'important',line_start:20,line_end:20};

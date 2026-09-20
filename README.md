@@ -48,14 +48,14 @@ kubectl config current-context
 kubectl get pods --all-namespaces
 
 # Try local keyword analysis without an API key.
-./jevernetes k8s -f --tail 0 --offline
+python3 -m jevernetes k8s -f --tail 0 --offline
 
 # For Jev semantic analysis, set your own TypeSafe API key.
 export TYPESAFE_API_KEY='your-api-key'
-./jevernetes k8s -f --tail 0
+python3 -m jevernetes k8s -f --tail 0
 
 # Or launch the local dashboard.
-./jevernetes dashboard
+python3 -m jevernetes dashboard
 ```
 
 All namespaces are selected by default. You need permission to list pods and read pod logs in the selected scope. Use `--namespace my-namespace` if you only have access to one namespace, or `--context my-cluster` to select a different configured context. For file analysis, Kubernetes and `kubectl` are not required.
@@ -63,8 +63,8 @@ All namespaces are selected by default. You need permission to list pods and rea
 ## Local dashboard
 
 ```sh
-./jevernetes dashboard
-# Or: python3 -m jev_log_analyzer dashboard --port 8792 --reports-dir .runs
+python3 -m jevernetes dashboard
+# Or: python3 -m jevernetes dashboard --port 8792 --reports-dir .runs
 ```
 
 Open **http://127.0.0.1:8792**. The dashboard loads existing JSON reports from `.runs` and selects the newest one. It includes:
@@ -85,7 +85,7 @@ The server binds only to `127.0.0.1`. Host validation and a per-session request 
 For a `tail -f` experience, click **Start live tail** in the sidebar. This defaults to new lines only (`--tail 0`), opens the **Live tail** tab, and shows all arriving events in order before analysis completes. Pending labels update in place when Jev finishes. Use autoscroll, text filtering, **Important only**, or **Pause display** to inspect the stream. Pausing the display does not stop collection, classification, or costs; **Stop live analysis** stops the session. The tail shows the latest 300 matching buffered events. Queue-overflow events appear as `dropped`, not as analyzed judgments.
 
 ```sh
-./jevernetes k8s -f --tail 0
+python3 -m jevernetes k8s -f --tail 0
 ```
 
 `-f`, `--follow`, and `--live` are equivalent. The terminal prints incoming redacted log text to stdout once, and counters/later classification updates to stderr. With `--tail 0`, streams start with lines emitted after each container is attached; set `--tail 100` to include recent history. `--json` continues to emit report snapshots, now including `tail_events` with arrival sequences and pending/final labels. Arrival order is the collector's observed order, not a globally synchronized cluster clock. Display-buffer gaps are reported in terminal output.
@@ -93,12 +93,12 @@ For a `tail -f` experience, click **Start live tail** in the sidebar. This defau
 In the dashboard choose **New analysis → Kubernetes → Follow new logs continuously**. Results and the cost panel refresh every second. **Stop live analysis** stops collection, finishes/cancels in-flight work and saves a session report. You can browse older reports while a session runs and return with **Live session**.
 
 ```sh
-./jevernetes k8s --live \
+python3 -m jevernetes k8s --live \
   --since 30s --tail 100 --max-batches 5000 --max-cost 0.25 \
   --output .runs/live-session.json
 
 # Bounded local-only collection check
-./jevernetes k8s --live --offline --duration 60 --since 30s
+python3 -m jevernetes k8s --live --offline --duration 60 --since 30s
 ```
 
 Live mode uses `kubectl logs --follow` for running normal, init and ephemeral containers. It rediscovers pods every 15 seconds and identifies container instances by pod UID, container name and restart count. Reconnects resume from the last timestamp and skip already-seen occurrences at that timestamp. This is best-effort continuity: rotations, terminated containers between discovery cycles and removed pods can still lose logs. Use the snapshot command without `--live` to inspect retained previous-container logs.
@@ -132,7 +132,7 @@ If an existing log tail works but fresh requests time out, compare the context, 
 Run from this directory. Set `TYPESAFE_API_KEY` for Jev analysis; `TYPESAFEAI_API_KEY` and `TYPESAFE_API_KEY_FILE` (a file containing only the key) are also supported. Credentials stay in the process and are not written into reports.
 
 ```sh
-python3 -m jev_log_analyzer kubernetes \
+python3 -m jevernetes kubernetes \
   --since 1h --tail 500 \
   --output .runs/kubernetes.json
 ```
@@ -143,23 +143,23 @@ The scan enumerates every visible pod, including normal, init and ephemeral cont
 
 ```sh
 # Larger cluster/window: raise the collection and AI budgets explicitly.
-python3 -m jev_log_analyzer k8s --since 6h --tail 2000 \
+python3 -m jevernetes k8s --since 6h --tail 2000 \
   --max-events 100000 --max-batches 12500 --output .runs/cluster.json
 
 # Narrow investigation
-python3 -m jev_log_analyzer k8s -n my-namespace -l app=my-app --since 30m
+python3 -m jevernetes k8s -n my-namespace -l app=my-app --since 30m
 
 # Local rules only: no calls to Jev
-python3 -m jev_log_analyzer k8s --offline --output .runs/offline.json
+python3 -m jevernetes k8s --offline --output .runs/offline.json
 ```
 
 ## Analyze files
 
 ```sh
-python3 -m jev_log_analyzer files examples/mixed.log
-python3 -m jev_log_analyzer files /path/app.log /path/worker.log.gz \
+python3 -m jevernetes files examples/mixed.log
+python3 -m jevernetes files /path/app.log /path/worker.log.gz \
   --output .runs/files.json
-cat /path/app.log | python3 -m jev_log_analyzer files - --json
+cat /path/app.log | python3 -m jevernetes files - --json
 ```
 
 Plain text, JSONL, gzip and stdin work without configuration. Parsing is limited to 32 MiB of decompressed input per file or stdin; `--max-file-bytes` changes the CLI limit. The limit also covers blank and oversized lines, and partial coverage is reported. Common Java/JavaScript/Python stack trace continuations are grouped into one event; the original line range is preserved. Grouping is heuristic, not a parser for every log format. Each event includes redacted text, source, timestamp when recognized, line range, local baseline and Jev results. Repeated important messages are grouped by exact text and source; unrelated incidents are not merged solely because they share a category.
@@ -197,7 +197,7 @@ Open **Rules & reviews** in the sidebar to inspect or disable expected-event rul
 
 ## Appearance and command name
 
-**jevernetes** defaults to dark mode. Use **Light mode** or **Dark mode** in the sidebar; your browser remembers the selection on this computer. The `jevernetes` command is the primary entry point. The earlier `jev-ernetes` and `jev-log-analyzer` commands and `python3 -m jev_log_analyzer` remain compatible.
+**jevernetes** defaults to dark mode. Use **Light mode** or **Dark mode** in the sidebar; your browser remembers the selection on this computer. Run `python3 -m jevernetes` from the checkout, or use the `jevernetes` command after installation.
 
 ## Judgments and budgets
 
@@ -231,7 +231,7 @@ GitHub CI includes Dependabot updates, TruffleHog secret scanning, Bandit, pip-a
 
 ```sh
 python3 -m unittest discover -s tests -v
-python3 -m compileall -q jev_log_analyzer
+python3 -m compileall -q jevernetes
 node tests/test_context_ui.cjs
 node tests/test_prompt_ui.cjs
 ```

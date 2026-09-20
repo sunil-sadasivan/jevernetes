@@ -4,8 +4,8 @@ Run the automated checks from the project directory:
 
 ```sh
 python3 -m unittest discover -s tests -v
-python3 -m compileall -q jev_log_analyzer
-node --check jev_log_analyzer/web/app.js
+python3 -m compileall -q jevernetes
+node --check jevernetes/web/app.js
 node tests/test_context_ui.cjs
 node tests/test_prompt_ui.cjs
 ```
@@ -19,7 +19,7 @@ Context and review regression checks cover time windows, redaction, pod replacem
 The included `examples/mixed.log` is synthetic. Analyze it without network requests:
 
 ```sh
-./jevernetes files examples/mixed.log --offline
+python3 -m jevernetes files examples/mixed.log --offline
 ```
 
 For a semantic analysis check, configure your own `TYPESAFE_API_KEY` and omit `--offline`. Results and token usage can vary between model versions and requests; this fixture is not an accuracy or cost benchmark.
@@ -31,8 +31,8 @@ Use a configured context with pod-list and pod-log read permissions. These comma
 ```sh
 kubectl config current-context
 kubectl --request-timeout=8s get pods --all-namespaces
-./jevernetes k8s --offline --since 5m --tail 100
-./jevernetes k8s -f --offline --duration 30 --tail 0
+python3 -m jevernetes k8s --offline --since 5m --tail 100
+python3 -m jevernetes k8s -f --offline --duration 30 --tail 0
 ```
 
 Add `--namespace my-namespace` to the analyzer commands and `--namespace my-namespace` in place of `--all-namespaces` for `kubectl` when access is namespace-scoped. Live mode with `--tail 0` only receives new lines emitted after attachment, so a quiet workload may produce no events.

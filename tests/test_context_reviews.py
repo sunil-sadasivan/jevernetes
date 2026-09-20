@@ -6,13 +6,13 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from jev_log_analyzer.cli import parser, analyze
-from jev_log_analyzer.context import fetch_context, MAX_BYTES
-from jev_log_analyzer.dashboard import Dashboard
-from jev_log_analyzer.events import baseline, BASELINE_RULES, parse_stream
-from jev_log_analyzer.live import LiveSession
-from jev_log_analyzer.report import build_report, write_report
-from jev_log_analyzer.reviews import ReviewStore
+from jevernetes.cli import parser, analyze
+from jevernetes.context import fetch_context, MAX_BYTES
+from jevernetes.dashboard import Dashboard
+from jevernetes.events import baseline, BASELINE_RULES, parse_stream
+from jevernetes.live import LiveSession
+from jevernetes.report import build_report, write_report
+from jevernetes.reviews import ReviewStore
 
 
 def event():
@@ -170,7 +170,7 @@ class DashboardReviewTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             app=Dashboard(temp);e=event();write_report(Path(temp)/'test.json',build_report([e],[],{},'jev',1,1))
             payload={'report_id':'test.json','event_id':e['id'],'window_seconds':120,'source':{'context':'untrusted'}}
-            with patch('jev_log_analyzer.dashboard.fetch_context',return_value={'events':[]}) as fetch:
+            with patch('jevernetes.dashboard.fetch_context',return_value={'events':[]}) as fetch:
                 app.context(payload)
                 self.assertEqual(fetch.call_args.args[0]['source']['context'],'test-cluster')
             app.review({**payload,'action':'expected','pattern':'optional record not found'})

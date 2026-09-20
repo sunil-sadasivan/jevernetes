@@ -2,9 +2,9 @@ import gzip
 import io
 import unittest
 
-from jev_log_analyzer.dashboard import scan_args
-from jev_log_analyzer.events import parse_stream, redact
-from jev_log_analyzer.live import Grouper
+from jevernetes.dashboard import scan_args
+from jevernetes.events import parse_stream, redact
+from jevernetes.live import Grouper
 
 
 class SecurityRegressionTests(unittest.TestCase):

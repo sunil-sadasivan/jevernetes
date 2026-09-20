@@ -67,7 +67,7 @@ const server = createServer(async (req, res) => {
           status: 'running', message: 'Live analysis · following new Kubernetes logs'}}));
     } else if (assets[path]) {
       res.setHeader('Content-Type', assets[path][1]);
-      res.end(await readFile(join(root, 'jev_log_analyzer/web', assets[path][0])));
+      res.end(await readFile(join(root, 'jevernetes/web', assets[path][0])));
     } else { res.writeHead(404); res.end(); }
   } catch { res.writeHead(500); res.end(); }
 });

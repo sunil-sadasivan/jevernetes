@@ -10,11 +10,11 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from jev_log_analyzer.cli import main
-from jev_log_analyzer.events import MAX_EVENT, MAX_LINE, baseline, parse_stream, redact
-from jev_log_analyzer.jev import CATEGORY, IMPORTANCE, SEVERITY, Jev, build_request, classify, decode
-from jev_log_analyzer.kubernetes import collect, kubectl, kubectl_error, targets
-from jev_log_analyzer.report import build_report, safe_console, write_report
+from jevernetes.cli import main
+from jevernetes.events import MAX_EVENT, MAX_LINE, baseline, parse_stream, redact
+from jevernetes.jev import CATEGORY, IMPORTANCE, SEVERITY, Jev, build_request, classify, decode
+from jevernetes.kubernetes import collect, kubectl, kubectl_error, targets
+from jevernetes.report import build_report, safe_console, write_report
 
 
 def events(text="INFO ready\n"):
@@ -213,7 +213,7 @@ class ReportAndCliTests(unittest.TestCase):
             self.assertEqual(main(["kubernetes"]), 1)
 
     def test_cli_stdin_end_to_end(self):
-        result = subprocess.run([sys.executable, "-m", "jev_log_analyzer", "files", "-", "--offline", "--json"], input="ERROR fail\nINFO ready\n", capture_output=True, text=True)
+        result = subprocess.run([sys.executable, "-m", "jevernetes", "files", "-", "--offline", "--json"], input="ERROR fail\nINFO ready\n", capture_output=True, text=True)
         self.assertEqual(result.returncode, 0)
         report = json.loads(result.stdout)
         self.assertEqual(report["summary"]["important"], 1)
