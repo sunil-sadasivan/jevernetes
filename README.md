@@ -15,6 +15,18 @@ An ERROR whose retry succeeded can be routine. An INFO message saying a backup w
 
 ## Quick start
 
+Using Claude, Codex, or another coding agent? Paste this prompt:
+
+```text
+Set up https://github.com/sunil-sadasivan/jevernetes locally. Check that Python
+3.11+ and kubectl are available, show me my current Kubernetes context, and
+launch the local dashboard. Help me start a read-only live tail in offline
+mode first, then explain how to enable Jev analysis and set a cost threshold.
+Never commit API keys, kubeconfigs, logs, or reports.
+```
+
+Or follow the steps below yourself.
+
 Requirements: Python 3.11 or newer, `kubectl` on your PATH, and a kubeconfig that can access your cluster. The analyzer uses the same authentication as `kubectl`, including `KUBECONFIG` and credential plugins. No cloud-provider-specific tooling is required beyond what your kubeconfig already uses.
 
 Clone the repository and enter the project directory:
