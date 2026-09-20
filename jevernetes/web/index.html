@@ -17,7 +17,20 @@
     <div class="page-heading"><div><div class="eyebrow" id="report-scope">YOUR LOGS, IN FOCUS</div><h1 id="report-title">Log analysis</h1><p id="report-meta" class="muted">Choose a saved report or start a new analysis.</p></div><a id="download" class="button secondary hidden" download="jevernetes-report.json">↓ Export JSON</a></div>
     <div id="job" class="notice hidden" role="status" aria-live="polite"></div>
     <div id="error" class="notice error hidden" role="alert"></div>
-    <section id="live-panel" class="live-panel hidden" aria-label="Live session"><div class="live-heading"><div><span class="dot"></span><strong id="live-status">LIVE</strong><span id="live-message" class="muted"></span></div><button id="stop-live" class="secondary">Stop live analysis</button></div><div class="live-counters"><div><span>Estimated session cost</span><strong id="live-cost">$0.00000000</strong></div><div><span>Input / output tokens</span><strong id="live-tokens">0 / 0</strong></div><div><span>Requests / unmetered</span><strong id="live-requests">0 / 0</strong></div><div><span>Open streams / queue</span><strong id="live-queue">0 / 0</strong></div></div><p id="live-cost-note" class="field-note"></p><p id="live-health" class="field-note"></p></section>
+    <section id="live-panel" class="live-panel hidden" aria-label="Live session">
+      <div class="live-overview">
+        <div class="live-heading"><span class="dot"></span><strong id="live-status">LIVE</strong></div>
+        <div class="live-metric"><span>Estimated cost</span><strong id="live-cost">$0.00000000</strong></div>
+        <div class="live-metric"><span>Streams / queue</span><strong id="live-queue">0 / 0</strong></div>
+        <span id="live-alert" class="warning hidden" role="status"></span>
+        <button id="stop-live" class="secondary">Stop live analysis</button>
+      </div>
+      <details id="session-details"><summary>Session details</summary>
+        <p id="live-message" class="muted"></p>
+        <div class="live-counters"><div><span>Input / output tokens</span><strong id="live-tokens">0 / 0</strong></div><div><span>Requests / unmetered</span><strong id="live-requests">0 / 0</strong></div></div>
+        <p id="live-cost-note" class="field-note"></p><p id="live-health" class="field-note"></p>
+      </details>
+    </section>
     <div id="empty" class="empty hidden"><span class="empty-symbol">≋</span><h2>Find the logs that need attention.</h2><p>Analyze log files or scan every namespace in your Kubernetes cluster.</p><button class="primary new-scan">Start an analysis</button></div>
     <div id="report" class="hidden">
       <div class="stats" aria-label="Analysis summary">

@@ -121,6 +121,13 @@ function renderUsage(report) {
   $('live-cost-note').textContent = `Estimate, not a bill · $${u.input_usd_per_million}/M input + $${u.output_usd_per_million}/M output · ${u.in_flight} requests in flight${u.cost_complete ? '' : ' · Incomplete usage; actual cost may be higher'}`;
   $('live-health').textContent = live ? `${live.events_per_second} events/s · ${fmt(live.dropped)} dropped · ${fmt(live.unfollowed_streams)} containers beyond stream limit · ${fmt(live.reconnects)} reconnects · showing latest ${fmt(live.retained_events)} events; counters cover the full session` : `${fmt(u.metered_requests)} requests with input usage · ${fmt(u.missing_output_usage)} with missing output usage`;
   $('live-health').classList.toggle('warning', Boolean(live?.dropped || live?.unfollowed_streams));
+  const alerts = [];
+  if (live?.dropped) alerts.push(`${fmt(live.dropped)} dropped`);
+  if (live?.unfollowed_streams) alerts.push(`${fmt(live.unfollowed_streams)} containers not followed`);
+  if (u.unmetered_requests || !u.cost_complete) alerts.push('Incomplete cost estimate');
+  if (live?.inventory_error) alerts.push('Inventory unavailable');
+  $('live-alert').textContent = alerts.join(' · ');
+  $('live-alert').classList.toggle('hidden', !alerts.length);
   $('stop-live').classList.toggle('hidden', !state.watchingLive || !live || live.status === 'stopped');
   $('stop-live').disabled = live?.status === 'stopping';
 }
@@ -243,6 +250,8 @@ async function refresh() {
     else if (job?.report_id && (oldJob?.report_id !== job.report_id)) await selectReport(job.report_id);
     else if (!state.selected && next.reports.length) await selectReport(next.reports[0].id);
     $('empty').classList.toggle('hidden', Boolean(state.report));
+    // A healthy live session already has a status strip; keep errors and startup notices visible.
+    $('job').classList.toggle('hidden', !job || (state.watchingLive && state.report?.usage && job.live && job.status === 'running' && state.report.live?.status === 'running' && !state.report.live?.inventory_error));
     showError('');
   } catch (e) { showError('Dashboard unavailable. ' + e.message); }
   finally { state.loading = false; }

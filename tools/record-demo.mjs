@@ -157,7 +157,6 @@ try {
   await frame('01  Follow Kubernetes logs. Watch usage as events arrive.', 2);
   for (count = 4; count <= samples.length; count++) {
     await evaluate('updateLive()');
-    if (count === 4) await evaluate('window.scrollTo(0,300)');
     await frame('01  Live tail surfaces the events worth investigating.', 0.8);
   }
   count = samples.length;
@@ -166,7 +165,7 @@ try {
   await click('[data-filter="important"]');
   await frame('02  Open Important to focus your investigation.', 1.5);
   await hidePointer();
-  await evaluate('window.scrollTo(0,400)');
+  await evaluate('window.scrollTo(0,0)');
   await click('#event-rows tr:nth-child(1) input');
   await frame('03  Select the database error…', 1.4);
   await click('#event-rows tr:nth-child(2) input');
