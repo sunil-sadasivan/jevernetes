@@ -108,6 +108,60 @@ class ReviewTests(unittest.TestCase):
         for pattern in ('INFO','not in this event', 'x'*501):
             with self.assertRaises(ValueError):self.store.add(event(),pattern)
 
+    def test_short_pattern_matches_only_whole_message(self):
+        e=event();e['text']='  } '
+        rule=self.store.add(e,'}')
+        self.assertEqual(rule['match'],'exact')
+        self.assertTrue(self.store.apply(e))
+        for text in ('ERROR failed {"status":500}', 'ERROR failed\n}', '}}', 'INFO }'):
+            other=event();other['text']=text
+            self.assertFalse(self.store.apply(other),text)
+        other=event();other['text']='}'
+        other['source']['namespace']='another'
+        self.assertFalse(self.store.apply(other))
+        reloaded=ReviewStore(self.store.path)
+        other=event();other['text']='}\n'
+        self.assertTrue(reloaded.apply(other))
+        reloaded.set_enabled(rule['id'],False)
+        self.assertFalse(reloaded.apply(other))
+        self.assertEqual(other['importance'],'important')
+
+    def test_bulk_rules_validate_before_writing_and_deduplicate(self):
+        e=event();short=event();short['id']='short';short['text']='}'
+        before=self.store.snapshot()
+        with self.assertRaises(ValueError):
+            self.store.add_many([(e,'optional record not found'),(short,'missing text')])
+        self.assertEqual(self.store.snapshot(),before)
+        self.assertFalse(self.store.path.exists())
+        with patch.object(self.store,'_save',wraps=self.store._save) as save:
+            rules=self.store.add_many([(e,'optional record not found'),(e,'optional record not found'),(short,'}')])
+            self.assertEqual(save.call_count,1)
+        self.assertEqual(len(self.store.snapshot()['rules']),2)
+        self.assertEqual(rules[0]['id'],rules[1]['id'])
+        self.store.set_enabled(rules[0]['id'],False)
+        self.store.add_many([(e,'optional record not found')])
+        self.assertTrue(self.store.snapshot()['rules'][0]['enabled'])
+
+    def test_invalid_empty_or_control_patterns_and_failed_save_leave_no_changes(self):
+        for value in ('','   ','a\nb','\t}',None):
+            with self.assertRaises(ValueError): self.store.add(event(),value)
+        with patch.object(self.store,'_save',side_effect=OSError('disk full')):
+            with self.assertRaises(OSError): self.store.add(event(),'optional record not found')
+        self.assertEqual(self.store.snapshot()['rules'],[])
+
+    def test_legacy_rules_keep_literal_contains_matching(self):
+        rule=self.store.add(event(),'optional record not found')
+        data=self.store.snapshot();data['rules'][0].pop('match')
+        write_report(self.store.path,data)
+        self.assertTrue(ReviewStore(self.store.path).apply(event()))
+
+    def test_short_expected_event_skips_live_ai(self):
+        e=event();e['text']='}';self.store.add(e,'}')
+        args=parser().parse_args(['k8s','--offline','--live']);args.review_store=self.store
+        session=LiveSession(args);session.emit(e)
+        self.assertTrue(session.queue.empty())
+        self.assertEqual(session.snapshot()['events'][0]['review']['status'],'expected')
+
     def test_acknowledgment_is_event_and_report_scoped_and_reversible(self):
         e=event();original=copy.deepcopy(e)
         self.store.acknowledge('one.json',e['id'])
@@ -166,6 +220,66 @@ class ReviewTests(unittest.TestCase):
 
 
 class DashboardReviewTests(unittest.TestCase):
+    def test_bulk_acknowledge_and_undo_are_report_scoped(self):
+        with tempfile.TemporaryDirectory() as temp:
+            app=Dashboard(temp);a=event();b=event();b['id']='second'
+            report=build_report([a,b],[],{},'jev',1,1)
+            for name in ('one.json','two.json'):write_report(Path(temp)/name,report)
+            payload={'report_id':'one.json','events':[{'event_id':a['id']},{'event_id':b['id']}]}
+            with patch.object(app.reviews,'_save',wraps=app.reviews._save) as save:
+                app.review({**payload,'action':'acknowledge'})
+                self.assertEqual(save.call_count,1)
+            self.assertEqual(app.report('one.json')['summary']['important'],0)
+            self.assertEqual(app.report('two.json')['summary']['important'],2)
+            app.review({**payload,'action':'unacknowledge'})
+            self.assertEqual(app.report('one.json')['summary']['important'],2)
+
+    def test_bulk_expected_uses_trusted_sources_and_rejects_partial_batches(self):
+        with tempfile.TemporaryDirectory() as temp:
+            app=Dashboard(temp);a=event();b=event();b['id']='brace';b['text']='}'
+            write_report(Path(temp)/'one.json',build_report([a,b],[],{},'jev',1,1))
+            payload={'report_id':'one.json','action':'expected','events':[
+                {'event_id':a['id'],'pattern':'optional record not found','source':{'namespace':'untrusted'}},
+                {'event_id':b['id'],'pattern':'}'}]}
+            bad=copy.deepcopy(payload);bad['events'][1]['event_id']='evicted'
+            with self.assertRaises(ValueError):app.review(bad)
+            self.assertFalse(app.reviews.path.exists())
+            bad=copy.deepcopy(payload);bad['events'][1]['pattern']='not present'
+            with self.assertRaises(ValueError):app.review(bad)
+            self.assertFalse(app.reviews.path.exists())
+            app.review(payload)
+            self.assertEqual(app.report('one.json')['summary']['important'],0)
+            rules=app.reviews.snapshot()['rules']
+            self.assertEqual(len(rules),2)
+            self.assertTrue(all(r['scope']['namespace']=='demo' for r in rules))
+            self.assertEqual(rules[1]['match'],'exact')
+
+    def test_bulk_request_limits_and_ambiguous_sources(self):
+        with tempfile.TemporaryDirectory() as temp:
+            app=Dashboard(temp)
+            for entries in ([],None,'invalid',[None],[{'event_id':False}],
+                            [{'event_id':str(i)} for i in range(51)],
+                            [{'event_id':'same'},{'event_id':'same'}]):
+                with self.assertRaises(ValueError):
+                    app.review({'action':'acknowledge','report_id':'one.json','events':entries})
+            with self.assertRaises(ValueError):
+                app.review({'action':'acknowledge','report_id':'one.json','live_id':'live','events':[{'event_id':'one'}]})
+            self.assertFalse(app.reviews.path.exists())
+
+    def test_bulk_live_snapshot_once_and_changed_session_rejected(self):
+        with tempfile.TemporaryDirectory() as temp:
+            app=Dashboard(temp);a=event();b=event();b['id']='second'
+            args=parser().parse_args(['k8s','--offline','--live'])
+            args.review_store=app.reviews;args.review_key='live.json'
+            session=LiveSession(args);session.record([a,b]);app.live_session=session;app.job={'id':'live'}
+            payload={'live_id':'live','action':'acknowledge','events':[{'event_id':a['id']},{'event_id':b['id']}]}
+            with patch.object(session,'snapshot',wraps=session.snapshot) as snapshot:
+                app.review(payload);self.assertEqual(snapshot.call_count,1)
+            self.assertEqual(session.snapshot()['summary']['important'],0)
+            before=app.reviews.snapshot()
+            with self.assertRaises(ValueError):app.review({**payload,'live_id':'previous'})
+            self.assertEqual(app.reviews.snapshot(),before)
+
     def test_event_lookup_is_server_side_and_pinned_to_report(self):
         with tempfile.TemporaryDirectory() as temp:
             app=Dashboard(temp);e=event();write_report(Path(temp)/'test.json',build_report([e],[],{},'jev',1,1))

@@ -227,8 +227,18 @@ class Dashboard:
         return session.snapshot(event_limit=1000)
 
     def selected_event(self, payload):
-        if not isinstance(payload, dict) or not isinstance(payload.get("event_id"), str):
+        if not isinstance(payload, dict):
             raise ValueError("Choose an event from a saved report or live session")
+        events, key = self.selected_events(payload, [payload.get("event_id")])
+        return events[0], key
+
+    def selected_events(self, payload, ids):
+        if (not isinstance(ids, list) or not 1 <= len(ids) <= 50
+                or any(not isinstance(value, str) or not value for value in ids)
+                or len(set(ids)) != len(ids)):
+            raise ValueError("Select between 1 and 50 distinct events")
+        if payload.get("live_id") and payload.get("report_id"):
+            raise ValueError("Choose one saved report or live session")
         if payload.get("live_id"):
             with self.lock:
                 if not self.job or self.job["id"] != payload["live_id"] or self.live_session is None:
@@ -237,11 +247,12 @@ class Dashboard:
             report = session.snapshot()
         else:
             report = self.report(payload.get("report_id"))
-        event = next((e for e in report.get("events", []) + report.get("tail_events", [])
-                      if e.get("id") == payload["event_id"]), None)
-        if event is None:
-            raise ValueError("This event is no longer retained; open a saved report containing it")
-        return event, payload["live_id"] + ".json" if payload.get("live_id") else payload["report_id"]
+        # Read one snapshot, and resolve every ID before allowing any writes.
+        available = {e['id']: e for e in report.get('tail_events', [])}
+        available.update({e['id']: e for e in report.get('events', [])})
+        if any(value not in available for value in ids):
+            raise ValueError("A selected event is no longer retained; open a saved report containing it")
+        return [available[value] for value in ids], payload["live_id"] + ".json" if payload.get("live_id") else payload["report_id"]
 
     def review(self, payload):
         if not isinstance(payload, dict):
@@ -250,11 +261,15 @@ class Dashboard:
         if action == "toggle":
             self.reviews.set_enabled(payload.get("rule_id"), payload.get("enabled"))
         elif action in ("acknowledge", "unacknowledge", "expected"):
-            event, key = self.selected_event(payload)
+            entries = payload.get("events", [payload])
+            if (not isinstance(entries, list) or not 1 <= len(entries) <= 50
+                    or any(not isinstance(item, dict) for item in entries)):
+                raise ValueError("Select events to review")
+            events, key = self.selected_events(payload, [item.get("event_id") for item in entries])
             if action == "expected":
-                self.reviews.add(event, payload.get("pattern"), payload.get("scope", "workload"))
+                self.reviews.add_many([(event, item.get("pattern")) for event, item in zip(events, entries)], payload.get("scope", "workload"))
             else:
-                self.reviews.acknowledge(key, event["id"], action == "acknowledge")
+                self.reviews.acknowledge_many(key, [event["id"] for event in events], action == "acknowledge")
         else:
             raise ValueError("Unknown review action")
         return {"status": "saved"}

@@ -42,10 +42,14 @@ class ReviewStore:
         write_report(self.path, self.data)
         self.stamp = self.path.stat().st_mtime_ns
 
-    def add(self, event, pattern, scope_mode='workload'):
-        if not isinstance(pattern, str) or not 8 <= len(pattern.strip()) <= 500 or any(ord(c) < 32 for c in pattern):
-            raise ValueError('Use a literal message pattern between 8 and 500 characters')
+    @staticmethod
+    def expected_rule(event, pattern, scope_mode):
+        if not isinstance(pattern, str) or not 1 <= len(pattern.strip()) <= 500 or any(ord(c) < 32 for c in pattern):
+            raise ValueError('Use a literal message pattern between 1 and 500 characters')
         pattern = pattern.strip()
+        match = 'exact' if len(pattern) < 8 else 'contains'
+        if match == 'exact' and pattern != event['text'].strip():
+            raise ValueError('Patterns shorter than 8 characters must match the entire event')
         if pattern not in event['text']:
             raise ValueError('The pattern must occur in the selected event')
         if scope_mode not in ('workload', 'source'):
@@ -55,17 +59,37 @@ class ReviewStore:
         scope = {key: source[key] for key in keys if key in source}
         if source.get('type') == 'kubernetes' and scope_mode == 'source':
             scope['pod'] = source['pod']
+        return {'pattern': pattern, 'scope': scope, 'match': match}
+
+    def _commit(self, updated):
+        previous = self.data
+        self.data = updated
+        try:
+            self._save()
+        except OSError:
+            self.data = previous
+            raise
+
+    def add(self, event, pattern, scope_mode='workload'):
+        return self.add_many([(event, pattern)], scope_mode)[0]
+
+    def add_many(self, entries, scope_mode='workload'):
+        # Validate every rule before saving any of them.
+        candidates = [self.expected_rule(event, pattern, scope_mode) for event, pattern in entries]
         with self.lock:
             self._load()
-            for rule in self.data['rules']:
-                if rule['pattern'] == pattern and rule['scope'] == scope:
-                    rule['enabled'] = True
-                    self._save()
-                    return copy.deepcopy(rule)
-            rule = {'id': secrets.token_hex(8), 'pattern': pattern, 'scope': scope, 'enabled': True}
-            self.data['rules'].append(rule)
-            self._save()
-            return copy.deepcopy(rule)
+            updated = copy.deepcopy(self.data)
+            saved = []
+            for candidate in candidates:
+                rule = next((r for r in updated['rules'] if r['pattern'] == candidate['pattern']
+                             and r['scope'] == candidate['scope'] and r.get('match', 'contains') == candidate['match']), None)
+                if rule is None:
+                    rule = {'id': secrets.token_hex(8), **candidate}
+                    updated['rules'].append(rule)
+                rule['enabled'] = True
+                saved.append(rule)
+            self._commit(updated)
+            return copy.deepcopy(saved)
 
     def set_enabled(self, rule_id, enabled):
         if type(enabled) is not bool:
@@ -80,15 +104,25 @@ class ReviewStore:
             raise ValueError('Expected-event rule not found')
 
     def acknowledge(self, key, event_id, enabled=True):
+        self.acknowledge_many(key, [event_id], enabled)
+
+    def acknowledge_many(self, key, event_ids, enabled=True):
         with self.lock:
             self._load()
-            ids = set(self.data['acknowledged'].get(key, []))
+            updated = copy.deepcopy(self.data)
+            ids = set(updated['acknowledged'].get(key, []))
             if enabled:
-                ids.add(event_id)
+                ids.update(event_ids)
             else:
-                ids.discard(event_id)
-            self.data['acknowledged'][key] = sorted(ids)
-            self._save()
+                ids.difference_update(event_ids)
+            updated['acknowledged'][key] = sorted(ids)
+            self._commit(updated)
+
+    @staticmethod
+    def matches(rule, text):
+        if rule.get('match', 'contains') == 'exact':
+            return text.strip() == rule['pattern']
+        return rule['pattern'] in text
 
     def apply(self, event, key=''):
         with self.lock:
@@ -98,7 +132,7 @@ class ReviewStore:
                     event.pop(name, None)
                 event.update(event.pop('original_judgment'))
             event.pop('review', None)
-            rule = next((r for r in self.data['rules'] if r.get('enabled') and r['pattern'] in event['text']
+            rule = next((r for r in self.data['rules'] if r.get('enabled') and self.matches(r, event['text'])
                          and all(event['source'].get(k) == v for k, v in r['scope'].items())), None)
             acknowledged = event['id'] in self.data['acknowledged'].get(key, [])
             if not rule and not acknowledged:

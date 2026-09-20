@@ -240,7 +240,7 @@ async function refresh() {
     state.csrf = next.csrf; state.job = next.job; state.reports = next.reports;
     $('provider').textContent = next.jev_available ? 'Jev key configured' : 'Offline available · no Jev key';
     const job = next.job;
-    $('job').classList.toggle('hidden', !job); $('job').classList.toggle('error', job?.status === 'error' || job?.phase === 'reconnecting');
+    $('job').classList.toggle('error', job?.status === 'error' || job?.phase === 'reconnecting');
     $('job').textContent = job ? `${job.status === 'running' ? '◌ ' : ''}${job.message}` : '';
     document.querySelectorAll('.new-scan').forEach(b => b.disabled = ['running','stopping'].includes(job?.status));
     $('view-live').classList.toggle('hidden', !job?.live);
@@ -398,10 +398,18 @@ $('ack-event').addEventListener('click',async()=>{
   catch(e){$('review-error').textContent=e.message;$('review-error').classList.remove('hidden');}
   finally{button.disabled=state.detailEvent.review?.status==='expected';}
 });
+function expectedPattern(e) {
+  if (e.text.trim().length < 8) return e.text.trim();
+  const lines = e.text.split('\n').map(line => line.trim());
+  // Structured messages often start with a brace or an ID. Prefer the field
+  // describing what happened, retaining its literal spelling for matching.
+  const field = lines.find(line => /^["']?(?:message|msg|event|reason)["']?\s*:\s*\S/i.test(line) && line.length >= 8);
+  const first = field || lines.find(line => line.length >= 8 && /[\p{L}\p{N}]/u.test(line)) || '';
+  const pattern = first.split(/\s+\{/)[0].replace(/^\d{4}-\d\d-\d\d[ T][\d:.]+(?:Z|[+-]\d\d:\d\d)?\s+/, '').replace(/^(?:info|warn|warning|error|debug|fatal)[:\s]+/i,'').trim();
+  return (pattern.length >= 8 ? pattern : first.trim()).slice(0,500);
+}
 $('expect-event').addEventListener('click',()=>{
-  const text=state.detailEvent.text;
-  let pattern=text.split('\n')[0].split(/\s+\{/)[0].replace(/^\d{4}-\d\d-\d\d[ T][\d:.]+(?:Z|[+-]\d\d:\d\d)?\s+/, '').replace(/^(?:info|warn|warning|error|debug|fatal)[:\s]+/i,'').trim();
-  $('expected-pattern').value=(pattern.length>=8?pattern:text.slice(0,500)).slice(0,500);
+  $('expected-pattern').value=expectedPattern(state.detailEvent);
   $('expected-scope').disabled=state.detailEvent.source?.type!=='kubernetes';
   $('expected-editor').classList.remove('hidden');$('expected-pattern').focus();
 });
@@ -418,7 +426,7 @@ async function renderRules() {
     if(!rules.expected.length)$('expected-rules').append(node('p','No expected-event rules yet. Open a log event and choose Mark as expected.','field-note'));
     for(const r of rules.expected){
       const card=node('div',undefined,'rule-card'),label=node('label',undefined,'rule-toggle'),toggle=document.createElement('input');toggle.type='checkbox';toggle.checked=r.enabled;
-      label.append(toggle,node('span',r.enabled?'Enabled':'Disabled'));card.append(label,node('pre',r.pattern),node('p',Object.entries(r.scope).filter(([k])=>k!=='type').map(([k,v])=>`${k}: ${v}`).join(' · '),'field-note'));
+      label.append(toggle,node('span',r.enabled?'Enabled':'Disabled'));card.append(label,node('p',r.match==='exact'?'Exact message (ignores surrounding whitespace)':'Contains literal text','field-note'),node('pre',r.pattern),node('p',Object.entries(r.scope).filter(([k])=>k!=='type').map(([k,v])=>`${k}: ${v}`).join(' · '),'field-note'));
       toggle.addEventListener('change',async()=>{toggle.disabled=true;try{await reviewAction({action:'toggle',rule_id:r.id,enabled:toggle.checked});await renderRules();if(state.watchingLive)await updateLive();else if(state.selected)await selectReport(state.selected);}catch(e){$('rules-error').textContent=e.message;$('rules-error').classList.remove('hidden');toggle.checked=!toggle.checked;}finally{toggle.disabled=false;}});
       $('expected-rules').append(card);
     }
@@ -454,7 +462,66 @@ function renderSelection() {
   $('select-page').checked=Boolean(state.visibleEvents.length) && selected===state.visibleEvents.length;
   $('select-page').indeterminate=selected>0 && selected<state.visibleEvents.length;
   $('select-page').disabled=!state.visibleEvents.length;
+  for (const id of ['ack-selected','expect-selected']) $(id).disabled=Boolean(state.reviewBusy) || !count;
 }
+function sameReviewSource(reference) {
+  return reference.live_id ? state.watchingLive && state.job?.id === reference.live_id : !state.watchingLive && state.selected === reference.report_id;
+}
+async function reloadReviewedSelection(reference, ids) {
+  if (!sameReviewSource(reference)) return;
+  const report = await api(reference.live_id ? '/api/live' : '/api/report?id='+encodeURIComponent(reference.report_id));
+  if (!sameReviewSource(reference)) return;
+  for (const id of ids) state.selection.delete(id);
+  state.report=report; renderReport();
+}
+function selectedReview() {
+  const events=[...state.selection.values()];
+  if (!events.length) throw new Error('Select events to review.');
+  const {event_id,...reference}=eventReference(events[0]);
+  return {events,reference};
+}
+$('ack-selected').addEventListener('click',async()=>{
+  if (state.reviewBusy) return;
+  const {events,reference}=selectedReview();
+  state.reviewBusy=true; renderSelection();
+  try {
+    await reviewAction({...reference,action:'acknowledge',events:events.map(e=>({event_id:e.id}))});
+    await reloadReviewedSelection(reference,events.map(e=>e.id));
+    if(sameReviewSource(reference)) $('selection-feedback').textContent=`Acknowledged ${events.length} selected events. Find them in the Acknowledged filter; expected rules still take precedence.`;
+  } catch(e) { if(sameReviewSource(reference)) $('selection-feedback').textContent=e.message; }
+  finally {state.reviewBusy=false;renderSelection();}
+});
+$('expect-selected').addEventListener('click',()=>{
+  state.bulkReview=selectedReview();
+  $('bulk-expected-items').replaceChildren();
+  $('bulk-expected-error').classList.add('hidden');
+  $('bulk-expected-scope').value='workload';
+  $('bulk-expected-scope').disabled=!state.bulkReview.events.some(e=>e.source?.type==='kubernetes');
+  for (const [i,e] of state.bulkReview.events.entries()) {
+    const card=node('div',undefined,'rule-card'), label=node('label',`Pattern ${i+1} · ${sourceName(e.source)}`), input=document.createElement('input');
+    input.type='text';input.required=true;input.minLength=1;input.maxLength=500;input.value=expectedPattern(e);input.dataset.eventId=e.id;
+    label.append(input);card.append(label,node('pre',e.text));$('bulk-expected-items').append(card);
+  }
+  $('bulk-expected-dialog').showModal();
+});
+$('close-bulk-expected').addEventListener('click',()=> $('bulk-expected-dialog').close());
+$('bulk-expected-form').addEventListener('submit',async event=>{
+  event.preventDefault();
+  if(state.reviewBusy) return;
+  const {events,reference}=state.bulkReview;
+  const entries=[...$('bulk-expected-items').querySelectorAll('input')].map(input=>({event_id:input.dataset.eventId,pattern:input.value}));
+  state.reviewBusy=true;$('save-bulk-expected').disabled=true;renderSelection();
+  $('bulk-expected-error').classList.add('hidden');
+  try {
+    await reviewAction({...reference,action:'expected',scope:$('bulk-expected-scope').value,events:entries});
+    $('bulk-expected-dialog').close();
+    await reloadReviewedSelection(reference,events.map(e=>e.id));
+    if(sameReviewSource(reference)) $('selection-feedback').textContent=`Marked ${events.length} selected events as expected. Matching future events skip AI analysis.`;
+  } catch(e) {
+    if($('bulk-expected-dialog').open){$('bulk-expected-error').textContent=e.message;$('bulk-expected-error').classList.remove('hidden');}
+    else if(sameReviewSource(reference)) $('selection-feedback').textContent=e.message;
+  } finally {state.reviewBusy=false;$('save-bulk-expected').disabled=false;renderSelection();}
+});
 function previewPrompt(text) {
   $('prompt-text').value=text; $('prompt-copy-status').textContent='';
   if(!$('prompt-dialog').open)$('prompt-dialog').showModal();

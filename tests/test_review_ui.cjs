@@ -1,0 +1,18 @@
+const fs = require('node:fs'), vm = require('node:vm'), assert = require('node:assert/strict');
+const source = fs.readFileSync('jevernetes/web/app.js', 'utf8');
+const helper = source.match(/^function expectedPattern\(e\) \{[\s\S]*?^\}/m);
+assert.ok(helper, 'Expected-pattern helper exists');
+const sandbox = {};
+vm.createContext(sandbox);
+vm.runInContext(helper[0], sandbox);
+const suggest = text => sandbox.expectedPattern({text});
+assert.equal(suggest('  }  '), '}');
+assert.equal(suggest('{'), '{');
+const object = "{\n  userId: 'demo-user-123',\n  event: 'Cache refreshed',\n  properties: {\n    region: 'example'\n  }\n}";
+assert.equal(suggest(object), "event: 'Cache refreshed',");
+assert.equal(suggest('{\n  "message": "Optional cache miss",\n  "id": 12345\n}'), '"message": "Optional cache miss",');
+assert.equal(suggest('2026-09-20 12:34:56 info: Optional cache miss {"id":123}'), 'Optional cache miss');
+assert.equal(suggest('{\n  operation completed\n}'), 'operation completed');
+assert.equal(suggest('x'.repeat(600)).length, 500);
+for (const text of [object, 'ERROR ordinary failure', '  }  ']) assert.ok(text.includes(suggest(text)));
+console.log('Expected patterns: exact short messages, structured event fields, timestamp removal, literal matching and size bounds passed');

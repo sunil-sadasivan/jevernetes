@@ -45,7 +45,7 @@ Collection uses your existing kubectl configuration and is read-only. All namesp
 - **Live tail:** follow incoming logs, filter by pod or text, and watch token usage and estimated cost.
 - **View in context:** inspect surrounding lines and fetch additional retained logs from Kubernetes.
 - **Copy investigation prompt:** select rows in Important or Needs review, then copy their evidence into Claude, Codex, or another agent.
-- **Acknowledge / Mark as expected:** dismiss a reviewed event or suppress future matches. Inspect and manage rules in **Rules & reviews**.
+- **Acknowledge / Mark as expected:** review one event or a selection, and suppress future expected matches. Inspect and manage rules in **Rules & reviews**.
 
 Dark mode is the default; light mode is one click away. Reports and review rules are saved locally in `.runs/`.
 

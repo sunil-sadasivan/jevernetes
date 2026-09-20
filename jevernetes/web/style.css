@@ -75,3 +75,5 @@
   .tabs{gap:14px}
   .mode{padding-bottom:6px}
 }
+
+#bulk-expected-dialog{width:min(900px,calc(100% - 32px))}#bulk-expected-items pre{max-height:120px;font-size:.75rem}#bulk-expected-items label{overflow-wrap:anywhere}#bulk-expected-items input{width:100%}
