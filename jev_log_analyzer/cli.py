@@ -36,7 +36,7 @@ def nonnegative_int(value):
 
 
 def parser():
-    root = argparse.ArgumentParser(description="Find operationally important log events with Jev")
+    root = argparse.ArgumentParser(description="Investigate Kubernetes logs and operationally important events with Jev")
     commands = root.add_subparsers(dest="command", required=True)
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--offline", action="store_true", help="Use local keyword rules; no Jev calls")

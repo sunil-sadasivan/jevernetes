@@ -11,7 +11,7 @@ include jevernetes jev-ernetes jev-log-analyzer
 global-exclude .review-rules.json
 include LICENSE NOTICE SECURITY.md CONTRIBUTING.md
 recursive-include tests *.cjs
-include SECURITY_REVIEW.md .gitattributes
+include SECURITY_REVIEW.md .gitattributes .gitignore
 recursive-include tools *.py
 recursive-include .github *.yml
 include requirements-dev.txt
