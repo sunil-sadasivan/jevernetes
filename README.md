@@ -1,5 +1,7 @@
 # jevernetes
 
+Kubernetes logs can feel like a haystack. Operators often don't know whether there are needles to find until it's too late. **Jevernetes helps surface the logs worth investigating.**
+
 Live Kubernetes log analysis in your terminal or a local dashboard, powered by [TypeSafe Jev](https://docs.typesafe.ai). Find events worth investigating, inspect their context, and hand selected logs to your coding agent.
 
 ![Live Kubernetes dashboard showing streaming logs, selecting two important events, and copying an investigation prompt for a coding agent](docs/images/live-demo.gif)
