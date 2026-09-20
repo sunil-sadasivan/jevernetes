@@ -1,0 +1,9 @@
+2026-09-20T12:00:00Z INFO health check returned 200
+2026-09-20T12:00:01Z ERROR payment attempt 1 timed out; retry succeeded on attempt 2; charge confirmed
+2026-09-20T12:00:02Z INFO nightly backup completed: records=0 bytes_written=0 expected_records=184000
+2026-09-20T12:00:03Z ERROR database connection pool exhausted; checkout requests returning 503
+2026-09-20T12:00:04Z INFO user login succeeded user_id=12
+2026-09-20T12:00:05Z INFO payment provider returned HTTP 200 body_bytes=0; payment outcome unknown
+2026-09-20T12:00:06Z ERROR request failed
+    at Checkout.submit(checkout.js:42)
+Caused by: ConnectionError: database unavailable

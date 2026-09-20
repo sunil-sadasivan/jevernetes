@@ -1,0 +1,18 @@
+include README.md VALIDATION.md
+include examples/mixed.log
+prune .runs
+prune reports
+prune build
+prune dist
+prune .venv
+prune .kube
+global-exclude __pycache__ *.py[cod] .DS_Store .env .env.* *.pem *.key kubeconfig kubeconfig.*
+include jevernetes jev-ernetes jev-log-analyzer
+global-exclude .review-rules.json
+include LICENSE NOTICE SECURITY.md CONTRIBUTING.md
+recursive-include tests *.cjs
+include SECURITY_REVIEW.md .gitattributes
+recursive-include tools *.py
+recursive-include .github *.yml
+include requirements-dev.txt
+prune .security-venv

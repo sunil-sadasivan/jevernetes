@@ -1,0 +1,4 @@
+# Development and security tooling only; the application has no Python runtime dependencies.
+bandit==1.9.4
+build==1.6.1
+pip-audit==2.10.1
