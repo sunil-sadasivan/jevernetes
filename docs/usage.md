@@ -186,3 +186,19 @@ Inspect `summary`, `important_groups`, `coverage`, and `events`. `complete_withi
 Jev mode sends **redacted log text and source metadata to TypeSafe** over HTTPS. Redaction covers common credential fields, bearer/basic authorization, JWTs and URL passwords, including nested JSON fields. It is best effort: arbitrary personal data or secrets embedded in unfamiliar formats may remain. Use `--offline` when logs must stay local. Saved reports contain log evidence, context/namespace/pod names and file paths; keep them outside version control. `.runs/` and `reports/` are ignored and excluded from source distributions. Only synthetic log fixtures are included with this project. Terminal output strips control bytes.
 
 The analyzer has no remediation tools, arbitrary command execution based on logs, or cluster write operations. Log text is treated as untrusted data in the prompts. Model classification is advisory and can miss issues or flag benign activity.
+
+## Interactive terminal tabs
+
+Add `--tui` for a full-screen terminal view with clickable **Important**, **Routine**, **Needs Review**, and **All** tabs:
+
+```sh
+python3 -m jevernetes k8s -f --tail 0 --offline --tui
+python3 -m jevernetes k8s -f --tail 100 --max-cost 0.25 --tui
+python3 -m jevernetes files examples/mixed.log --offline --tui
+```
+
+Click a tab, press **1–4**, or use **Tab / Shift+Tab** and **Left / Right**. Use **Up / Down**, **j / k**, the mouse wheel, **Page Up / Page Down**, or **Home / End** to move through instances. Click a row to select it, then **Enter** to inspect its full retained text; **Esc** returns to the list. **q** or **Ctrl+C** stops collection, finishes saving `--output` when configured, restores the terminal, and exits. A naturally stopped live session stays open for inspection until you quit.
+
+Tab counts cover the retained window. **Needs Review** includes uncertain, unknown, and dropped events; pending events remain visible in **All**. Local expected/acknowledged events appear under **Routine** with their review label. Offline rules leave unmatched logs uncertain, so the Routine tab may be empty in offline mode. Each occurrence is shown separately, including events whose Jev judgment was reused.
+
+This mode uses Python's standard-library curses support and requires an interactive terminal. Mouse support depends on the terminal; keyboard shortcuts remain available. `--tui` cannot be combined with `--json` or piped input/output. Omit it to keep the usual streaming output. Collection, redaction, grouping, budgets and saved-report formats are unchanged.

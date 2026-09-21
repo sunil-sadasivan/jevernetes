@@ -44,6 +44,7 @@ def parser():
     common.add_argument("--rules-file", type=Path, default=Path(".runs/.review-rules.json"), help="Local expected-event rules shared with the dashboard")
     common.add_argument("--output", type=Path, help="Save full JSON report with mode 0600")
     common.add_argument("--json", action="store_true", help="Emit full report to stdout")
+    common.add_argument("--tui", action="store_true", help="Interactive terminal with clickable Important, Routine, Needs Review and All tabs")
     common.add_argument("--model", default="jev-latest")
     common.add_argument("--batch-size", type=positive, default=8)
     common.add_argument("--workers", type=positive, default=4, help="Concurrent Jev requests (max 16)")
@@ -163,6 +164,9 @@ def analyze(args, notify=None):
 
 
 def run(args):
+    if args.tui:
+        from .tui import browse, validate_terminal
+        validate_terminal(args)
     if getattr(args, "live", False):
         from .live import LiveSession
         if args.workers > 16 or args.batch_size > 16 or args.max_streams > 256:
@@ -172,6 +176,9 @@ def run(args):
         if not re.fullmatch(r"(?:\d+(?:\.\d+)?[smh])+", args.since):
             raise ValueError("--since must be a duration such as 30s or 1h")
         session = LiveSession(args)
+        if args.tui:
+            report = browse(args, session=session)
+            return 2 if report['summary']['unknown'] or report['live']['dropped'] or report['live']['unfollowed_streams'] or report['summary']['coverage_gaps'] else 0
         tail_printer = TailPrinter(sys.stdout, sys.stderr)
         def publish(report):
             if args.json:
@@ -191,7 +198,10 @@ def run(args):
     if args.output:
         write_report(args.output, report)
         print(f"Saved {args.output}", file=sys.stderr)
-    print(json.dumps(report, ensure_ascii=False) if args.json else render(report, args.top))
+    if args.tui:
+        browse(args, report=report)
+    else:
+        print(json.dumps(report, ensure_ascii=False) if args.json else render(report, args.top))
     return 2 if report["summary"]["coverage_gaps"] or report["summary"]["unknown"] else 0
 
 

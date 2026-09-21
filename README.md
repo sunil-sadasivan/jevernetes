@@ -59,6 +59,9 @@ Dark mode is the default; light mode is one click away. Reports and review rules
 # Follow new logs using local keyword rules, without an API key.
 python3 -m jevernetes k8s -f --tail 0 --offline
 
+# Interactive terminal: click Important / Routine / Needs Review / All tabs.
+python3 -m jevernetes k8s -f --tail 0 --offline --tui
+
 # Live Jev analysis with an AI batch budget and estimated cost threshold.
 python3 -m jevernetes k8s -f --tail 100 --max-batches 5000 --max-cost 0.25
 
