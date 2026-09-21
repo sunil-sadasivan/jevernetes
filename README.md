@@ -56,6 +56,8 @@ Watch the [semantic log search demo](docs/images/search-demo.gif) or download th
 
 ## Terminal usage
 
+See [terminal tabs and semantic search in action](docs/images/terminal-search-demo.gif) ([MP4](docs/images/terminal-search-demo.mp4)). The demo uses the actual terminal renderer with synthetic logs and Jev results.
+
 ![CLI live tail showing arriving logs, redaction, and keyword labels](docs/images/cli-live-tail.gif)
 
 ```sh
