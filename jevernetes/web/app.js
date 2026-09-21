@@ -301,12 +301,15 @@ $('close-instances').addEventListener('click', () => $('instances-dialog').close
 $('instances-prev').addEventListener('click', () => {state.instances.page--; renderInstances();});
 $('instances-next').addEventListener('click', () => {state.instances.page++; renderInstances();});
 
-function switchView(coverage, tail = false) {
-  state.view = tail ? 'tail' : coverage ? 'coverage' : 'events';
-  $('events-view').classList.toggle('hidden', coverage || tail); $('coverage-view').classList.toggle('hidden', !coverage);
+function switchView(coverage, tail = false, search = false) {
+  state.view = search ? 'search' : tail ? 'tail' : coverage ? 'coverage' : 'events';
+  $('ask-view').classList.toggle('hidden', !search);
+  $('open-search').classList.toggle('active', search);
+  $('open-search').setAttribute('aria-pressed', String(search));
+  $('events-view').classList.toggle('hidden', coverage || tail || search); $('coverage-view').classList.toggle('hidden', !coverage);
   $('tail-view').classList.toggle('hidden', !tail);
-  $('events-tab').classList.toggle('active', !coverage && !tail); $('coverage-tab').classList.toggle('active', coverage); $('tail-tab').classList.toggle('active', tail);
-  $('events-tab').setAttribute('aria-pressed', String(!coverage && !tail)); $('coverage-tab').setAttribute('aria-pressed', String(coverage)); $('tail-tab').setAttribute('aria-pressed', String(tail));
+  $('events-tab').classList.toggle('active', !coverage && !tail && !search); $('coverage-tab').classList.toggle('active', coverage); $('tail-tab').classList.toggle('active', tail);
+  $('events-tab').setAttribute('aria-pressed', String(!coverage && !tail && !search)); $('coverage-tab').setAttribute('aria-pressed', String(coverage)); $('tail-tab').setAttribute('aria-pressed', String(tail));
   if (tail) renderTail();
 }
 

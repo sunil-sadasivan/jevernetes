@@ -16,6 +16,7 @@ from .live import LiveSession
 from .context import fetch_context
 from .reviews import ReviewStore
 from .events import BASELINE_RULES
+from .search import SearchCache, SearchRun, validate_options
 
 MAX_BODY = 16 * 1024 * 1024
 MAX_REPORT = 64 * 1024 * 1024
@@ -87,6 +88,8 @@ class Dashboard:
         self.report_lock = threading.RLock()
         self.live_session = None
         self.context_slots = threading.BoundedSemaphore(2)
+        self.search_cache = SearchCache()
+        self.search_run = None
         self.reviews = ReviewStore(self.root / ".review-rules.json")
 
     def report(self, name):
@@ -240,6 +243,16 @@ class Dashboard:
                 or any(not isinstance(value, str) or not value for value in ids)
                 or len(set(ids)) != len(ids)):
             raise ValueError(f"Select between 1 and {limit} distinct events")
+        report, key = self.source_report(payload)
+        # Resolve every ID before allowing any writes. Searches use their own
+        # current snapshot; review actions still require every selected event.
+        available = {e['id']: e for e in report.get('tail_events', [])}
+        available.update({e['id']: e for e in report.get('events', [])})
+        if any(value not in available for value in ids):
+            raise ValueError("A selected event is no longer retained; open a saved report containing it")
+        return [available[value] for value in ids], key
+
+    def source_report(self, payload):
         if payload.get("live_id") and payload.get("report_id"):
             raise ValueError("Choose one saved report or live session")
         if payload.get("live_id"):
@@ -250,12 +263,7 @@ class Dashboard:
             report = session.snapshot()
         else:
             report = self.report(payload.get("report_id"))
-        # Read one snapshot, and resolve every ID before allowing any writes.
-        available = {e['id']: e for e in report.get('tail_events', [])}
-        available.update({e['id']: e for e in report.get('events', [])})
-        if any(value not in available for value in ids):
-            raise ValueError("A selected event is no longer retained; open a saved report containing it")
-        return [available[value] for value in ids], payload["live_id"] + ".json" if payload.get("live_id") else payload["report_id"]
+        return report, payload["live_id"] + ".json" if payload.get("live_id") else payload["report_id"]
 
     def review(self, payload):
         if not isinstance(payload, dict):
@@ -294,6 +302,56 @@ class Dashboard:
             return fetch_context(event, payload.get("window_seconds", 120))
         finally:
             self.context_slots.release()
+
+    def start_search(self, payload):
+        if not isinstance(payload, dict):
+            raise ValueError('Choose a report and enter a search question')
+        query = payload.get('query')
+        mode, budget = payload.get('mode', 'jev'), payload.get('max_batches', 16)
+        validate_options(query, mode, budget)
+        scope, source = payload.get('scope', {}), payload.get('source', 'all')
+        if (not isinstance(scope, dict) or set(scope)-{'namespace','pod','container'} or
+                any(not isinstance(v,str) or len(v)>1000 for v in scope.values()) or
+                not isinstance(source,str) or len(source)>4096):
+            raise ValueError('Choose valid log source filters')
+        # Freeze a trusted server snapshot at submission, rather than resolving
+        # IDs that may have left the live buffer while the user was typing.
+        report, _ = self.source_report(payload)
+        available = {e['id']:e for e in report.get('tail_events', [])}
+        available.update({e['id']:e for e in report.get('events', [])})
+        def matches(event):
+            metadata = event['source']
+            name = '/'.join(metadata.get(k,'') for k in ('namespace','pod','container') if metadata.get(k)) if metadata.get('type')=='kubernetes' else metadata.get('path','Unknown source')
+            return all(not value or metadata.get(key)==value for key,value in scope.items()) and (source=='all' or source==name)
+        events = [event for event in available.values() if matches(event)]
+        if not events:
+            raise ValueError('No logs are currently retained in these source filters. Wait for new logs or choose another source.')
+        evidence = {**report, 'events':events, 'tail_events':[]}
+        with self.lock:
+            if self.search_run and self.search_run.status == 'running':
+                raise RuntimeError('A search is already running; stop it before starting another')
+            search = SearchRun(events, query, mode, budget, cache=self.search_cache)
+            self.search_run = search
+        threading.Thread(target=search.run, daemon=True).start()
+        return {'id':search.id, 'report':evidence}
+
+    def search_result(self, identity, offset=0):
+        if type(offset) is not int or not 0 <= offset <= 100000:
+            raise ValueError('Invalid search result offset')
+        with self.lock:
+            search = self.search_run
+        if not search or search.id != identity:
+            raise ValueError('Search expired; run the question again')
+        return search.snapshot(offset=offset)
+
+    def stop_search(self, payload):
+        if not isinstance(payload, dict):
+            raise ValueError('Choose a search to stop')
+        with self.lock:
+            if not self.search_run or self.search_run.id != payload.get('id'):
+                raise ValueError('Search expired')
+            self.search_run.stop()
+        return {'status':'stopping'}
 
     def stop_live(self):
         with self.lock:
@@ -341,12 +399,15 @@ def handler_for(app):
                     return self.send(200, {"baseline": BASELINE_RULES, "expected": app.reviews.snapshot()["rules"]})
                 if url.path == "/api/live":
                     return self.send(200, app.live_report())
+                if url.path == '/api/search':
+                    params = parse_qs(url.query)
+                    return self.send(200, app.search_result(params.get('id',[''])[0], int(params.get('offset',['0'])[0])))
                 if url.path == "/api/report":
                     name = parse_qs(url.query).get("id", [""])[0]
                     return self.send(200, app.report(name))
                 if url.path == "/favicon.svg":
                     return self.send(200, (WEB / "favicon.svg").read_bytes(), "image/svg+xml")
-                assets = {"/": ("index.html", "text/html; charset=utf-8"), "/app.js": ("app.js", "text/javascript; charset=utf-8"), "/context.js": ("context.js", "text/javascript; charset=utf-8"), "/prompt.js": ("prompt.js", "text/javascript; charset=utf-8"), "/style.css": ("style.css", "text/css; charset=utf-8")}
+                assets = {"/": ("index.html", "text/html; charset=utf-8"), "/app.js": ("app.js", "text/javascript; charset=utf-8"), "/search.js": ("search.js", "text/javascript; charset=utf-8"), "/context.js": ("context.js", "text/javascript; charset=utf-8"), "/prompt.js": ("prompt.js", "text/javascript; charset=utf-8"), "/style.css": ("style.css", "text/css; charset=utf-8")}
                 if url.path in assets:
                     name, kind = assets[url.path]
                     return self.send(200, (WEB / name).read_bytes(), kind)
@@ -359,13 +420,20 @@ def handler_for(app):
             if (not self.allowed() or self.headers.get("X-Jev-Token") != app.token or
                     (origin is not None and origin != "http://" + self.headers.get("Host", ""))):
                 return self.send(403, {"error": "Request not authorized"})
-            if self.path not in ("/api/analyze", "/api/live/stop", "/api/context", "/api/review"):
+            if self.path not in ("/api/analyze", "/api/live/stop", "/api/context", "/api/review", '/api/search', '/api/search/stop'):
                 return self.send(404, {"error": "Not found"})
             try:
                 length = int(self.headers.get("Content-Length", "0"))
                 if self.headers.get("Content-Type") != "application/json" or not 0 < length <= MAX_BODY:
                     return self.send(413, {"error": "Expected JSON, at most 16 MiB"})
                 payload = json.loads(self.rfile.read(length))
+                if self.path in ('/api/search', '/api/search/stop'):
+                    try:
+                        if self.path == '/api/search/stop':
+                            return self.send(200, app.stop_search(payload))
+                        return self.send(202, app.start_search(payload))
+                    except ValueError as error:
+                        return self.send(400, {'error':str(error)})
                 if self.path in ("/api/context", "/api/review"):
                     try:
                         return self.send(200, app.context(payload) if self.path == "/api/context" else app.review(payload))
@@ -397,6 +465,8 @@ def serve(root, port):
     try:
         server.serve_forever()
     finally:
+        if server.app.search_run:
+            server.app.search_run.stop()
         if server.app.live_session:
             server.app.live_session.stop("Dashboard stopped")
             server.app.live_session.done.wait(40)

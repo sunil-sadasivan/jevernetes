@@ -1,6 +1,7 @@
 import copy
 import curses
 import io
+import json
 import threading
 import unittest
 from unittest.mock import patch
@@ -32,6 +33,7 @@ class Screen:
     def keypad(self, value): pass
     def timeout(self, value): pass
     def getch(self): return next(self.keys, ord('q'))
+    def get_wch(self): return self.getch()
 
 
 class TuiTests(unittest.TestCase):
@@ -52,6 +54,7 @@ class TuiTests(unittest.TestCase):
         for index, y, left, right, _ in browser.tabs[:]:
             self.assertTrue(browser.key(curses.KEY_MOUSE,curses,(0,left+1,y,0,curses.BUTTON1_PRESSED)))
             self.assertEqual(browser.tab,index)
+        browser.key(27,curses)  # Search tab opens its question editor.
         browser.key(ord('1'),curses)
         browser.key(9,curses)
         self.assertEqual(browser.tab,1)
@@ -110,6 +113,85 @@ class TuiTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'interactive terminal'):
                 run(args)
             session.assert_not_called()
+
+    def test_search_editor_unicode_modes_and_clicking_back_to_filters(self):
+        browser,screen=Browser(),Screen()
+        browser.draw(screen,fixture(),curses)
+        browser.key('/',curses)
+        for char in 'requests café':browser.key(char,curses)
+        browser.key('\x7f',curses)
+        self.assertEqual(browser.search_input,'requests caf')
+        browser.key('é',curses)
+        browser.key(curses.KEY_HOME,curses)
+        browser.key('界',curses)
+        self.assertEqual(browser.search_input,'界requests café')
+        browser.key('\t',curses)
+        self.assertEqual(browser.search_mode,'literal')
+        browser.key(2,curses)
+        self.assertEqual(browser.search_budget,64)
+        browser.draw(screen,fixture(),curses)
+        self.assertIn('redacted',' '.join(screen.lines.values()))
+        _,y,left,_,_=browser.tabs[1]
+        browser.key(curses.KEY_MOUSE,curses,(0,left+1,y,0,curses.BUTTON1_PRESSED))
+        self.assertEqual(browser.tab,1)
+        self.assertIsNone(browser.search_input)
+
+    def test_terminal_local_search_and_all_instances_survive_live_eviction(self):
+        report=fixture();report['events'][0]['text']='GET / client=192.0.2.1 status=200'
+        report['events'][1]['text']='GET / client=192.0.2.10'
+        report['events'].append(dict(report['events'][0],id='second',line_start=5,line_end=5))
+        browser,screen=Browser(),Screen()
+        browser.draw(screen,report,curses)
+        browser.key('f',curses)
+        for char in 'client=192.0.2.1 status':browser.key(char,curses)
+        browser.key('\n',curses);browser.search_worker.join(2)
+        self.assertEqual(browser.search_run.snapshot()['matching_instances'],2)
+        self.assertEqual(browser.search_run.snapshot()['usage']['request_attempts'],0)
+        browser.draw(screen,{'events':[]},curses)
+        self.assertEqual(len(browser.rows),1)
+        browser.key('i',curses);browser.draw(screen,{'events':[]},curses)
+        self.assertEqual(len(browser.rows),2)
+        browser.key(curses.KEY_DOWN,curses);browser.key('\n',curses)
+        self.assertEqual(browser.detail['id'],'second')
+        browser.key(27,curses);self.assertIsNone(browser.detail)
+        browser.key(27,curses);self.assertIsNone(browser.search_instances)
+        browser.draw(screen,{'events':[]},curses)
+        self.assertEqual(len(browser.rows),1)
+
+    @patch('jevernetes.search.api_key',return_value='synthetic')
+    def test_terminal_semantic_search_cache_and_relevance_rendering(self,_):
+        report=fixture()
+        def search(client,events,query):
+            client.usage.begin();client.usage.record(json.dumps({'usage':{'input_tokens':100}}))
+            return [{'relevance':'match' if e['importance']=='routine' else 'unrelated','confidence':.95} for e in events]
+        browser,screen=Browser(),Screen()
+        browser.draw(screen,report,curses)
+        with patch('jevernetes.jev.Jev.search',search):
+            browser.key('/',curses)
+            self.assertEqual(browser.search_mode,'jev')
+            for char in 'database requests':browser.key(char,curses)
+            browser.key(10,curses);browser.search_worker.join(2)
+            browser.draw(screen,report,curses)
+            self.assertEqual(browser.rows[0]['importance'],'routine')
+            self.assertIn('95% relevance',' '.join(screen.lines.values()))
+            browser.key('/',curses);browser.key(10,curses);browser.search_worker.join(2)
+        self.assertEqual(browser.search_run.snapshot()['cache_hits'],4)
+        self.assertEqual(browser.search_run.snapshot()['usage']['request_attempts'],0)
+
+    def test_terminal_quit_cancels_inflight_search(self):
+        args=parser().parse_args(['files','--tui','--offline','synthetic.log'])
+        searches=[]
+        def search(run):
+            searches.append(run)
+            run.stop_event.wait(2)
+            run.status='cancelled'
+        with patch('jevernetes.tui.validate_terminal',return_value=curses), \
+             patch('jevernetes.search.SearchRun.run',search), \
+             patch('curses.wrapper',side_effect=lambda fn:fn(Screen(keys=['/','d','b','\n','q']))), \
+             patch('curses.curs_set'),patch('curses.mouseinterval'),patch('curses.mousemask'):
+            browse(args,report=fixture())
+        self.assertEqual(len(searches),1)
+        self.assertTrue(searches[0].stop_event.is_set())
 
     def test_snapshot_and_live_shutdown_restore_terminal_and_return_report(self):
         args=parser().parse_args(['files','--tui','--offline','synthetic.log'])

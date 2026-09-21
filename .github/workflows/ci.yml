@@ -23,10 +23,12 @@ jobs:
           node-version: '22'
       - run: python -m unittest discover -s tests -v
       - run: node --check jevernetes/web/app.js
+      - run: node --check jevernetes/web/search.js
       - run: node tests/test_context_ui.cjs
       - run: node tests/test_prompt_ui.cjs
       - run: node tests/test_review_ui.cjs
       - run: node tests/test_grouping_ui.cjs
+      - run: node tests/test_search_ui.cjs
       - run: python tools/check_release.py
       - if: matrix.python == '3.13'
         run: |
