@@ -332,6 +332,8 @@ def handler_for(app):
                 if url.path == "/api/report":
                     name = parse_qs(url.query).get("id", [""])[0]
                     return self.send(200, app.report(name))
+                if url.path == "/favicon.svg":
+                    return self.send(200, (WEB / "favicon.svg").read_bytes(), "image/svg+xml")
                 assets = {"/": ("index.html", "text/html; charset=utf-8"), "/app.js": ("app.js", "text/javascript; charset=utf-8"), "/context.js": ("context.js", "text/javascript; charset=utf-8"), "/prompt.js": ("prompt.js", "text/javascript; charset=utf-8"), "/style.css": ("style.css", "text/css; charset=utf-8")}
                 if url.path in assets:
                     name, kind = assets[url.path]

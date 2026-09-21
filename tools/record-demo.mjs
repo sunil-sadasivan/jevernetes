@@ -20,13 +20,15 @@ const samples = [
   ['api', 'routine', 'info', 'request', 'GET /catalog 200 duration=18ms'],
   ['api', 'important', 'error', 'database', 'Database pool exhausted: active=20 max=20 waiting=48'],
   ['api', 'important', 'error', 'request', 'GET /orders 503: timed out waiting for a database connection'],
-  ['worker', 'uncertain', 'warning', 'performance', 'Queue latency elevated: p95=2400ms threshold=2000ms'],
+  ['worker', 'uncertain', 'info', 'data', 'Optional cache entry not found during warmup'],
   ['api', 'routine', 'info', 'request', 'GET /health 200 duration=2ms'],
   ['worker', 'routine', 'info', 'job', 'Scheduled cleanup completed: removed=12 expired entries'],
   ['api', 'routine', 'info', 'request', 'GET /catalog 200 duration=21ms'],
   ['worker', 'routine', 'info', 'job', 'Job completed queue=notifications duration=37ms'],
+  ['worker', 'uncertain', 'info', 'data', '}'],
 ];
 let count = 3;
+const reviews = new Map();
 function report() {
   const events = samples.slice(0, count).map(([service, importance, severity, category, text], i) => ({
     id: `demo-${i}`, text, importance, severity, category,
@@ -37,6 +39,13 @@ function report() {
       pod: `${service}-7b9d-demo`, container: service, previous: false},
     baseline: {important: severity === 'error', signals: severity === 'error' ? ['error'] : []},
   }));
+  for (const event of events) {
+    if (reviews.has(event.id)) {
+      event.original_judgment = {importance: event.importance, severity: event.severity, category: event.category};
+      event.review = {status: reviews.get(event.id)};
+      event.importance = 'routine';
+    }
+  }
   const requests = Math.ceil(count / 2), tokens = requests * 640;
   return {
     created_at: '2026-01-15T12:00:00Z', mode: 'jev', scope: {context: 'demo-cluster', since: '30s'},
@@ -56,7 +65,7 @@ function report() {
 }
 const assets = {'/': ['index.html', 'text/html'], '/style.css': ['style.css', 'text/css'],
   '/app.js': ['app.js', 'text/javascript'], '/context.js': ['context.js', 'text/javascript'],
-  '/prompt.js': ['prompt.js', 'text/javascript']};
+  '/prompt.js': ['prompt.js', 'text/javascript'], '/favicon.svg': ['favicon.svg', 'image/svg+xml']};
 const server = createServer(async (req, res) => {
   try {
     const path = new URL(req.url, 'http://localhost').pathname;
@@ -65,6 +74,21 @@ const server = createServer(async (req, res) => {
       res.end(JSON.stringify(path === '/api/live' ? report() : {csrf: 'synthetic-demo',
         jev_available: true, reports: [], job: {id: 'demo-live', live: true,
           status: 'running', message: 'Live analysis · following new Kubernetes logs'}}));
+    } else if (path === '/api/review' && req.method === 'POST') {
+      let body = '';
+      for await (const chunk of req) body += chunk;
+      const payload = JSON.parse(body);
+      assert.equal(payload.live_id, 'demo-live');
+      assert(['acknowledge', 'expected'].includes(payload.action));
+      assert.equal(payload.events.length, 2);
+      for (const entry of payload.events) {
+        const event = report().events.find(e => e.id === entry.event_id);
+        assert(event);
+        if (payload.action === 'expected') assert(event.text.includes(entry.pattern));
+        reviews.set(entry.event_id, payload.action === 'expected' ? 'expected' : 'acknowledged');
+      }
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({status: 'saved'}));
     } else if (assets[path]) {
       res.setHeader('Content-Type', assets[path][1]);
       res.end(await readFile(join(root, 'jevernetes/web', assets[path][0])));
@@ -127,6 +151,8 @@ try {
     await pause(100);
   }
   assert.equal(await evaluate("document.querySelectorAll('.tail-row').length"), 3);
+  assert.equal(await evaluate("document.querySelector('link[rel=icon]').getAttribute('href')"), '/favicon.svg');
+  assert.equal(await evaluate("fetch('/favicon.svg').then(r=>r.headers.get('Content-Type'))"), 'image/svg+xml');
   await evaluate(`{
     const style = document.createElement('style');
     style.textContent = 'body{padding-bottom:320px}#demo-caption{position:fixed;inset:auto 0 0;z-index:2147483647;background:#17131ff5;border-top:1px solid #6c548b;padding:18px 28px;display:flex;align-items:center;justify-content:space-between;font:600 20px/1.4 system-ui;color:#f1f2f5;pointer-events:none}#demo-caption small{font-size:12px;color:#b8a0ff;letter-spacing:1px}#demo-pointer{position:fixed;width:30px;height:30px;border:3px solid #d4c3ff;background:#b8a0ff44;border-radius:50%;z-index:2147483647;pointer-events:none;display:none}';
@@ -185,7 +211,27 @@ try {
   await frame('05  Selected evidence includes pod, timestamp, and judgment.', 2.5);
   await click('#close-prompt');
   await hidePointer();
-  await frame('From live logs to a focused agent handoff.  jevernetes', 2.5);
+  await click('#ack-selected');
+  for (let i = 0; i < 50 && await evaluate('Boolean(state.reviewBusy)'); i++) await pause(100);
+  assert.equal(await evaluate("state.report.events.filter(e=>e.review?.status==='acknowledged').length"), 2);
+  await hidePointer();
+  await frame('06  Acknowledge reviewed events together.', 2);
+  await click('[data-filter="review"]');
+  await click('#select-page');
+  assert.equal(await evaluate('state.selection.size'), 2);
+  await frame('07  Select expected activity in Needs review.', 1.8);
+  await click('#expect-selected');
+  await hidePointer();
+  assert.equal(await evaluate("document.querySelectorAll('#bulk-expected-items input').length"), 2);
+  assert.equal(await evaluate("document.querySelectorAll('#bulk-expected-items input')[1].value"), '}');
+  await frame('07  Review scoped rules, including standalone log fragments.', 3);
+  await click('#save-bulk-expected');
+  for (let i = 0; i < 50 && await evaluate('Boolean(state.reviewBusy)'); i++) await pause(100);
+  assert.equal(await evaluate("state.report.events.filter(e=>e.review?.status==='expected').length"), 2);
+  await hidePointer();
+  await click('#tail-tab');
+  await hidePointer();
+  await frame('Live logs. Focused investigations. Less repeat noise.  jevernetes', 3);
   await writeFile(join(temp, 'frames.txt'), frames.map(f => `file '${f.name}'\nduration ${f.duration}\n`).join('') + `file '${frames.at(-1).name}'\n`);
   // Preserve text from every captured frame for privacy review without OCR guessing.
   await mkdir(dirname(output), {recursive: true});

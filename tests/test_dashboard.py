@@ -127,7 +127,7 @@ class HttpTests(unittest.TestCase):
                 return response.code, response.headers, response.read()
 
     def test_static_assets_and_security_headers(self):
-        for path in ["/", "/app.js", "/context.js", "/prompt.js", "/style.css"]:
+        for path in ["/", "/app.js", "/context.js", "/prompt.js", "/style.css", "/favicon.svg"]:
             status, headers, body = self.request(path)
             self.assertEqual(status, 200)
             self.assertGreater(len(body), 100)

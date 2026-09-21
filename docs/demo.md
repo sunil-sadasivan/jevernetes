@@ -1,6 +1,6 @@
 # Dashboard demo recording
 
-[`images/live-demo.gif`](images/live-demo.gif) shows the real dashboard rendering a synthetic Kubernetes session: incoming logs and usage counters, filtering important events, selecting two related errors, copying an investigation prompt, and previewing its evidence.
+[`images/live-demo.gif`](images/live-demo.gif) shows the compact dashboard: live logs and usage counters, selecting related errors, copying an agent investigation prompt, bulk acknowledgment, and saving expected-event rules, including standalone log fragments.
 
 All cluster names, pod names, timestamps, messages, classifications, and usage values are fixtures. The recording does not use Kubernetes, saved reports, or an API key. No requests are sent to Jev or a coding agent. Copying uses the browser clipboard, and the recorder verifies that it contains the two selected errors and excludes an unselected routine event.
 

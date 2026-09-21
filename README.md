@@ -4,9 +4,9 @@ Kubernetes logs can feel like a haystack. Operators often don't know whether the
 
 Live Kubernetes log analysis in your terminal or a local dashboard, powered by [TypeSafe Jev](https://docs.typesafe.ai). Find events worth investigating, inspect their context, and hand selected logs to your coding agent.
 
-![Live Kubernetes dashboard showing streaming logs, selecting two important events, and copying an investigation prompt for a coding agent](docs/images/live-demo.gif)
+![Live Kubernetes dashboard showing streaming logs, copying selected errors to a coding agent, and reviewing events in bulk](docs/images/live-demo.gif)
 
-Live tail → select important events → copy a prompt for Claude, Codex, or another coding agent.
+Live tail → select errors → copy an agent prompt → acknowledge or mark expected.
 
 ## Quick start
 

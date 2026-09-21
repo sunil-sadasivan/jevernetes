@@ -24,4 +24,4 @@ jevernetes = "jevernetes.cli:main"
 include = ["jevernetes*"]
 
 [tool.setuptools.package-data]
-jevernetes = ["web/*.html", "web/*.css", "web/*.js"]
+jevernetes = ["web/*.html", "web/*.css", "web/*.js", "web/*.svg"]
