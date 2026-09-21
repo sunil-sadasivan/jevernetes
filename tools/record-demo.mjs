@@ -9,9 +9,10 @@ import {join, resolve, dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
+import {launchDemoBrowser} from './demo-browser.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const output = join(root, 'docs/images/live-demo.gif');
+const output = process.env.DEMO_OUTPUT || join(root, 'docs/images/live-demo.gif');
 const temp = await mkdtemp(join(tmpdir(), 'jevernetes-demo-'));
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const samples = [
@@ -65,7 +66,7 @@ function report() {
 }
 const assets = {'/': ['index.html', 'text/html'], '/style.css': ['style.css', 'text/css'],
   '/app.js': ['app.js', 'text/javascript'], '/context.js': ['context.js', 'text/javascript'],
-  '/prompt.js': ['prompt.js', 'text/javascript'], '/favicon.svg': ['favicon.svg', 'image/svg+xml']};
+  '/prompt.js': ['prompt.js', 'text/javascript'], '/search.js': ['search.js', 'text/javascript'], '/favicon.svg': ['favicon.svg', 'image/svg+xml']};
 const server = createServer(async (req, res) => {
   try {
     const path = new URL(req.url, 'http://localhost').pathname;
@@ -95,49 +96,18 @@ const server = createServer(async (req, res) => {
     } else { res.writeHead(404); res.end(); }
   } catch { res.writeHead(500); res.end(); }
 });
-let chrome, socket;
+let browser;
 try {
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   const origin = `http://127.0.0.1:${server.address().port}`;
-  chrome = spawn(process.env.CHROME_BIN || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', [
-    '--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check',
-    '--disable-background-networking', '--disable-component-update', '--disable-sync',
-    '--remote-debugging-port=0', `--user-data-dir=${join(temp, 'profile')}`, 'about:blank',
-  ], {stdio: ['ignore', 'ignore', 'pipe']});
-  let chromeError;
-  chrome.on('error', e => { chromeError = e; });
-  chrome.stderr.resume();
-  let port;
-  for (let i = 0; i < 100; i++) {
-    if (chromeError) throw chromeError;
-    try { port = (await readFile(join(temp, 'profile/DevToolsActivePort'), 'utf8')).split('\n')[0]; break; }
-    catch { await pause(100); }
-  }
-  assert(port, 'Chrome did not start');
-  const tabs = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
-  socket = new WebSocket(tabs.find(t => t.type === 'page').webSocketDebuggerUrl);
-  await once(socket, 'open');
-  let seq = 0;
-  const pending = new Map();
-  socket.addEventListener('message', ({data}) => {
-    const message = JSON.parse(data), entry = pending.get(message.id);
-    if (entry) { pending.delete(message.id); message.error ? entry.reject(new Error(JSON.stringify(message.error))) : entry.resolve(message.result); }
-  });
-  const cdp = (method, params = {}) => new Promise((resolve, reject) => {
-    const id = ++seq; pending.set(id, {resolve, reject}); socket.send(JSON.stringify({id, method, params}));
-  });
-  const evaluate = async expression => {
-    const result = await cdp('Runtime.evaluate', {expression, awaitPromise: true, returnByValue: true});
-    if (result.exceptionDetails) throw new Error(JSON.stringify(result.exceptionDetails));
-    return result.result.value;
-  };
+  browser = await launchDemoBrowser(join(temp, 'profile'));
+  const {cdp, evaluate, call} = browser;
   await cdp('Page.enable');
   await cdp('Emulation.setDeviceMetricsOverride', {width: 1440, height: 1080, deviceScaleFactor: 1, mobile: false});
   await cdp('Emulation.setTimezoneOverride', {timezoneId: 'UTC'});
   await cdp('Browser.grantPermissions', {origin, permissions: ['clipboardReadWrite', 'clipboardSanitizedWrite']});
   // Prevent external requests even if a future dashboard asset gains one.
-  socket.addEventListener('message', ({data}) => {
-    const message = JSON.parse(data);
+  browser.onEvent(message => {
     if (message.method === 'Fetch.requestPaused') {
       const {requestId, request} = message.params;
       void cdp(request.url.startsWith(origin + '/') ? 'Fetch.continueRequest' : 'Fetch.failRequest',
@@ -164,7 +134,7 @@ try {
   }`);
   const frames = [], texts = [];
   async function frame(label, duration = 1) {
-    await evaluate(`{const caption=document.getElementById('demo-caption');(document.querySelector('dialog[open]')||document.body).append(caption);caption.querySelector('span').textContent=${JSON.stringify(label)};}`);
+    await call(label => {const caption=document.getElementById('demo-caption');(document.querySelector('dialog[open]')||document.body).append(caption);caption.querySelector('span').textContent=label;}, label);
     await pause(80);
     texts.push(await evaluate('document.body.innerText'));
     const {data} = await cdp('Page.captureScreenshot', {format: 'png', captureBeyondViewport: false});
@@ -173,11 +143,11 @@ try {
     frames.push({name, duration});
   }
   async function click(selector) {
-    const p = await evaluate(`(() => {const e=document.querySelector(${JSON.stringify(selector)});e.scrollIntoView({block:'nearest'});const r=e.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()`);
-    await evaluate(`Object.assign(document.getElementById('demo-pointer').style,{display:'block',left:'${p.x-15}px',top:'${p.y-15}px'})`);
+    const p = await call(selector => {const e=document.querySelector(selector);e.scrollIntoView({block:'nearest'});const r=e.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};}, selector);
+    await call(({x,y}) => Object.assign(document.getElementById('demo-pointer').style,{display:'block',left:(x-15)+'px',top:(y-15)+'px'}), p);
     await cdp('Input.dispatchMouseEvent', {type: 'mousePressed', ...p, button: 'left', clickCount: 1});
     await cdp('Input.dispatchMouseEvent', {type: 'mouseReleased', ...p, button: 'left', clickCount: 1});
-    await evaluate(`{const r=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();Object.assign(document.getElementById('demo-pointer').style,{left:(r.x+r.width/2-15)+'px',top:(r.y+r.height/2-15)+'px'});}`);
+    await call(selector => {const r=document.querySelector(selector).getBoundingClientRect();Object.assign(document.getElementById('demo-pointer').style,{left:(r.x+r.width/2-15)+'px',top:(r.y+r.height/2-15)+'px'});}, selector);
   }
   const hidePointer = () => evaluate("document.getElementById('demo-pointer').style.display='none'");
   await frame('01  Follow Kubernetes logs. Watch usage as events arrive.', 2);
@@ -243,8 +213,7 @@ try {
   assert.equal((await once(ffmpeg, 'exit'))[0], 0, 'ffmpeg failed');
   console.log(`Created ${output}\nReview frames and visible-text.json in ${temp}`);
 } finally {
-  socket?.close(); chrome?.kill(); server.close();
+  await browser?.close(); server.close();
   // Keep screenshots for visual/privacy review; discard the isolated browser profile.
-  if (chrome && chrome.exitCode === null) await Promise.race([once(chrome, 'exit'), pause(3000)]);
   await rm(join(temp, 'profile'), {recursive: true, force: true, maxRetries: 3});
 }

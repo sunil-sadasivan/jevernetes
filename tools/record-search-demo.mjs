@@ -8,8 +8,9 @@ import {tmpdir} from 'node:os';
 import {fileURLToPath} from 'node:url';
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
+import {launchDemoBrowser} from './demo-browser.mjs';
 const root=resolve(dirname(fileURLToPath(import.meta.url)),'..');
-const output=join(root,'docs/images');
+const output=process.env.DEMO_OUTPUT_DIR||join(root,'docs/images');
 const temp=await mkdtemp(join(tmpdir(),'jevernetes-search-social-'));
 const pause=ms=>new Promise(r=>setTimeout(r,ms));
 const samples=[
@@ -68,19 +69,15 @@ const server=createServer(async(req,res)=>{
   res.writeHead(404);res.end();
  }catch(e){console.error(e.message);res.writeHead(500);res.end();}
 });
-let chrome,socket;
+let browser;
 try{
  server.listen(0,'127.0.0.1');await once(server,'listening');const origin=`http://127.0.0.1:${server.address().port}`;
- chrome=spawn(process.env.CHROME_BIN||'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',['--headless=new','--disable-gpu','--no-first-run','--no-default-browser-check','--disable-background-networking','--disable-component-update','--disable-sync','--remote-debugging-port=0',`--user-data-dir=${join(temp,'profile')}`,'about:blank'],{stdio:['ignore','ignore','ignore']});
- let port;for(let i=0;i<100;i++){try{port=(await readFile(join(temp,'profile/DevToolsActivePort'),'utf8')).split('\n')[0];break;}catch{await pause(100);}}assert(port);
- const tabs=await(await fetch(`http://127.0.0.1:${port}/json/list`)).json();socket=new WebSocket(tabs.find(t=>t.type==='page').webSocketDebuggerUrl);await once(socket,'open');
- let sequence=0;const pending=new Map(),errors=[];
- socket.addEventListener('message',({data})=>{const m=JSON.parse(data),entry=pending.get(m.id);if(entry){pending.delete(m.id);m.error?entry.reject(new Error(JSON.stringify(m.error))):entry.resolve(m.result);}if(m.method==='Runtime.exceptionThrown')errors.push(m.params.exceptionDetails);});
- const cdp=(method,params={})=>new Promise((resolve,reject)=>{pending.set(++sequence,{resolve,reject});socket.send(JSON.stringify({id:sequence,method,params}));});
- const evaluate=async expression=>{const r=await cdp('Runtime.evaluate',{expression,awaitPromise:true,returnByValue:true});if(r.exceptionDetails)throw new Error(JSON.stringify(r.exceptionDetails));return r.result.value;};
+ browser=await launchDemoBrowser(join(temp,'profile'));
+ const {cdp,evaluate,call}=browser;const errors=[];
+ browser.onEvent(m=>{if(m.method==='Runtime.exceptionThrown')errors.push(m.params.exceptionDetails);});
  const until=async expression=>{for(let i=0;i<100;i++){if(await evaluate(expression))return;await pause(100);}throw new Error('Timed out: '+expression);};
  await cdp('Runtime.enable');await cdp('Page.enable');await cdp('Emulation.setDeviceMetricsOverride',{width:1280,height:800,deviceScaleFactor:1,mobile:false});await cdp('Emulation.setTimezoneOverride',{timezoneId:'UTC'});
- socket.addEventListener('message',({data})=>{const m=JSON.parse(data);if(m.method==='Fetch.requestPaused'){const{requestId,request}=m.params;void cdp(request.url.startsWith(origin+'/')?'Fetch.continueRequest':'Fetch.failRequest',{requestId,...(request.url.startsWith(origin+'/')?{}:{errorReason:'BlockedByClient'})});}});
+ browser.onEvent(m=>{if(m.method==='Fetch.requestPaused'){const{requestId,request}=m.params;void cdp(request.url.startsWith(origin+'/')?'Fetch.continueRequest':'Fetch.failRequest',{requestId,...(request.url.startsWith(origin+'/')?{}:{errorReason:'BlockedByClient'})});}});
  await cdp('Fetch.enable',{patterns:[{urlPattern:'*'}]});await cdp('Page.navigate',{url:origin});await until("document.querySelectorAll('.tail-row').length>0");
  // Recording-only framing: focus the actual viewer, with clear demo disclosure.
  await evaluate(`{
@@ -91,12 +88,12 @@ try{
  }`);
  const frames=[],texts=[];
  async function frame(label,duration=1){
-  await evaluate(`{const c=document.getElementById('social-caption');(document.querySelector('dialog[open]')||document.body).append(c);c.querySelector('span').textContent=${JSON.stringify(label)};}`);await pause(50);
+  await call(label=>{const c=document.getElementById('social-caption');(document.querySelector('dialog[open]')||document.body).append(c);c.querySelector('span').textContent=label;},label);await pause(50);
   const{data}=await cdp('Page.captureScreenshot',{format:'png'});const name=`frame-${String(frames.length).padStart(3,'0')}.png`;await writeFile(join(temp,name),Buffer.from(data,'base64'));frames.push({name,duration});texts.push(await evaluate('document.body.innerText'));
  }
  async function point(selector,click=false){
-  const p=await evaluate(`(()=>{const e=document.querySelector(${JSON.stringify(selector)});const r=e.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`);
-  await evaluate(`{const p=document.getElementById('social-pointer');(document.querySelector('dialog[open]')||document.body).append(p);Object.assign(p.style,{display:'block',left:'${p.x-11}px',top:'${p.y-11}px'});}`);
+  const p=await call(selector=>{const e=document.querySelector(selector);const r=e.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2};},selector);
+  await call(({x,y})=>{const p=document.getElementById('social-pointer');(document.querySelector('dialog[open]')||document.body).append(p);Object.assign(p.style,{display:'block',left:(x-11)+'px',top:(y-11)+'px'});},p);
   await cdp('Input.dispatchMouseEvent',{type:'mouseMoved',...p});
   if(click){await cdp('Input.dispatchMouseEvent',{type:'mousePressed',...p,button:'left',clickCount:1});await cdp('Input.dispatchMouseEvent',{type:'mouseReleased',...p,button:'left',clickCount:1});}
  }
@@ -132,5 +129,5 @@ try{
  await writeFile(join(output,'search-demo-preview.png'),await readFile(join(temp,frames.find((f,i)=>texts[i].includes('Matching logs. Confidence. Original timestamps.')).name)));
  console.log(JSON.stringify({gif:join(output,'search-demo.gif'),mp4:join(output,'search-demo.mp4'),frames:temp,seconds:frames.reduce((n,f)=>n+f.duration,0)}));
 }finally{
- socket?.close();chrome?.kill();server.close();if(chrome&&chrome.exitCode===null)await Promise.race([once(chrome,'exit'),pause(3000)]);await rm(join(temp,'profile'),{recursive:true,force:true,maxRetries:3});
+ await browser?.close();server.close();await rm(join(temp,'profile'),{recursive:true,force:true,maxRetries:3});
 }

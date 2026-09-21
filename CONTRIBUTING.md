@@ -17,6 +17,8 @@ All tests use synthetic inputs or mocks. Do not add real application logs, perso
 
 To regenerate the shareable search demo, run `node tools/record-search-demo.mjs` with Node 22+, Chrome and ffmpeg installed. It records the actual dashboard against synthetic API responses, blocks external browser requests, and exports a GIF, MP4 and preview image under `docs/images/`. The recording labels its logs, results and usage as illustrative.
 
+Browser recorders use Chrome's private debugging pipes and pass dynamic values as structured function arguments. Run `node tests/test_demo_browser.mjs` with Chrome installed to check that caption/selector text cannot become executable code.
+
 Build and inspect release artifacts in a virtual environment:
 
 ```sh
