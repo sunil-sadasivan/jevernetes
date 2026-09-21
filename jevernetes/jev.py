@@ -11,6 +11,7 @@ import urllib.error
 import urllib.request
 
 from .usage import UsageMeter
+from .grouping import group_id, reusable
 
 IMPORTANCE = {
     "important": "Investigate: current failure, customer impact, silent data loss, resource exhaustion, dangerous change or meaningful security risk.",
@@ -129,7 +130,12 @@ class Jev:
         raise ValueError("Jev retry budget exhausted")
 
 
-def classify(events, client, batch_size=8, workers=4, max_requests=500, progress=None):
+def classify(events, client, batch_size=8, workers=4, max_requests=500, progress=None, grouping=True):
+    all_events, members = events, {}
+    if grouping:
+        for event in events:
+            members.setdefault(group_id(event), []).append(event)
+        events = [group[0] for group in members.values()]
     batches = [events[i:i + batch_size] for i in range(0, len(events), batch_size)]
     eligible = batches[:max_requests]
     for batch in batches[max_requests:]:
@@ -156,8 +162,17 @@ def classify(events, client, batch_size=8, workers=4, max_requests=500, progress
                 except (ValueError, OSError) as error:
                     for event in batch:
                         event.update(importance="unknown", analysis_error=str(error))
-                completed += len(batch)
+                completed += sum(len(members[group_id(e)]) if grouping else 1 for e in batch)
                 if progress:
-                    progress(completed, len(events))
+                    progress(completed, len(all_events))
                 if next_batch := next(iterator, None):
                     pending[pool.submit(client.judge, next_batch)] = next_batch
+    if grouping:
+        for group in members.values():
+            representative = group[0]
+            judgment = {key: representative[key] for key in (
+                'importance', 'severity', 'category', 'importance_confidence',
+                'severity_confidence', 'category_confidence', 'analysis_error') if key in representative}
+            for event in group[1:]:
+                event.update(judgment, analysis_reused=reusable(judgment),
+                             analysis_representative_id=representative['id'])

@@ -7,6 +7,8 @@ python3 -m unittest discover -s tests -v
 node --check jevernetes/web/app.js
 node tests/test_context_ui.cjs
 node tests/test_prompt_ui.cjs
+node tests/test_review_ui.cjs
+node tests/test_grouping_ui.cjs
 ```
 
 All tests use synthetic inputs or mocks. Do not add real application logs, personal data, access keys, cluster names or kubeconfig files to fixtures, issues, screenshots, or pull requests. Keep runtime reports and review rules out of version control. Security reports belong in the private reporting channel described in SECURITY.md.

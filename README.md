@@ -43,6 +43,8 @@ Collection uses your existing kubectl configuration and is read-only. All namesp
 ## Investigate in the dashboard
 
 - **Live tail:** follow incoming logs, filter by pod or text, and watch token usage and estimated cost.
+- **Confidence:** highlight and filter confidence levels, with highest-confidence judgments surfaced first and browser preferences remembered.
+- **Log groups:** repeated messages reuse Jev judgments. Select groups to review all matching instances, or open a group to inspect individual occurrences.
 - **View in context:** inspect surrounding lines and fetch additional retained logs from Kubernetes.
 - **Copy investigation prompt:** select rows in Important or Needs review, then copy their evidence into Claude, Codex, or another agent.
 - **Acknowledge / Mark as expected:** review one event or a selection, and suppress future expected matches. Inspect and manage rules in **Rules & reviews**.

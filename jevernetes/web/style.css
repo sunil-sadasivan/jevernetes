@@ -77,3 +77,12 @@
 }
 
 #bulk-expected-dialog{width:min(900px,calc(100% - 32px))}#bulk-expected-items pre{max-height:120px;font-size:.75rem}#bulk-expected-items label{overflow-wrap:anywhere}#bulk-expected-items input{width:100%}
+
+.instances-list{display:grid;gap:12px;max-height:55vh;overflow:auto}.instance-row{display:block;text-align:left;width:100%;padding:14px;border:1px solid var(--border);border-radius:8px;background:transparent;color:inherit}.instance-row>span{display:block}.instance-row pre{white-space:pre-wrap;overflow-wrap:anywhere;margin:8px 0 0;max-height:180px;overflow:auto}
+
+.confidence-controls{display:flex;align-items:end;gap:12px;flex-wrap:wrap;margin:12px 0}.confidence-controls label{display:flex;flex-direction:column;gap:5px;font-size:.75rem;color:var(--muted)}.confidence-controls select{padding:7px 10px;font-size:.8125rem}.confidence-controls .field-note{flex:1;min-width:180px;margin:0;font-size:.75rem;color:var(--muted)}
+.confidence-tag{display:flex;align-items:center;width:fit-content;max-width:100%;margin-top:8px;padding:4px 7px;border-radius:4px;font-size:.75rem;line-height:1.4;text-transform:capitalize;color:var(--muted);background:var(--rail);border:1px solid var(--border)}
+.confidence-tag.confidence-high{color:#d8c4ff;background:#302344;border-color:#685083}.confidence-tag.confidence-medium{color:#b9d9ff;background:#1e3043;border-color:#3e6084}.confidence-tag.confidence-low{color:#ffdc96;background:#392f1e;border-color:#7f6533}.confidence-tag.confidence-mixed{color:var(--text);border-style:dashed}
+tr.confidence-row-high>td:first-child,.tail-row.confidence-row-high,.instance-row.confidence-row-high{box-shadow:inset 3px 0 #b88ded}tr.confidence-row-low>td:first-child,.tail-row.confidence-row-low,.instance-row.confidence-row-low{box-shadow:inset 3px 0 #d5a64f}
+.tail-row .confidence-tag{font-size:.625rem;white-space:normal}.instances-list .instance-row>.confidence-tag{display:flex}
+[data-theme=light] .confidence-tag.confidence-high{color:#583687;background:#efe6ff;border-color:#b29acc}[data-theme=light] .confidence-tag.confidence-medium{color:#254e78;background:#e7f1ff;border-color:#9bb4ce}[data-theme=light] .confidence-tag.confidence-low{color:#715013;background:#fff2d4;border-color:#ccb273}

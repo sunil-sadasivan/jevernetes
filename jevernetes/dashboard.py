@@ -31,6 +31,9 @@ def scan_args(payload, paths=None):
     if type(payload.get("offline", False)) is not bool:
         raise ValueError("Invalid analysis mode")
     args.offline = payload.get("offline", False)
+    if type(payload.get("grouping", True)) is not bool:
+        raise ValueError("Invalid grouping mode")
+    args.no_grouping = not payload.get("grouping", True)
     if type(payload.get("live", False)) is not bool:
         raise ValueError("Invalid live mode")
     args.live = payload.get("live", False)
@@ -224,7 +227,7 @@ class Dashboard:
             session = self.live_session
         if session is None:
             raise ValueError("No live session")
-        return session.snapshot(event_limit=1000)
+        return session.snapshot()
 
     def selected_event(self, payload):
         if not isinstance(payload, dict):
@@ -232,11 +235,11 @@ class Dashboard:
         events, key = self.selected_events(payload, [payload.get("event_id")])
         return events[0], key
 
-    def selected_events(self, payload, ids):
-        if (not isinstance(ids, list) or not 1 <= len(ids) <= 50
+    def selected_events(self, payload, ids, limit=50):
+        if (not isinstance(ids, list) or not 1 <= len(ids) <= limit
                 or any(not isinstance(value, str) or not value for value in ids)
                 or len(set(ids)) != len(ids)):
-            raise ValueError("Select between 1 and 50 distinct events")
+            raise ValueError(f"Select between 1 and {limit} distinct events")
         if payload.get("live_id") and payload.get("report_id"):
             raise ValueError("Choose one saved report or live session")
         if payload.get("live_id"):
@@ -262,10 +265,19 @@ class Dashboard:
             self.reviews.set_enabled(payload.get("rule_id"), payload.get("enabled"))
         elif action in ("acknowledge", "unacknowledge", "expected"):
             entries = payload.get("events", [payload])
-            if (not isinstance(entries, list) or not 1 <= len(entries) <= 50
+            limit = 50 if action == "expected" else 100000
+            if (not isinstance(entries, list) or not 1 <= len(entries) <= limit
                     or any(not isinstance(item, dict) for item in entries)):
                 raise ValueError("Select events to review")
-            events, key = self.selected_events(payload, [item.get("event_id") for item in entries])
+            ids = [item.get("event_id") for item in entries]
+            if action == "expected" and "selected_event_ids" in payload:
+                selected, key = self.selected_events(payload, payload['selected_event_ids'], limit=100000)
+                available = {event['id']: event for event in selected}
+                if any(not isinstance(value, str) or value not in available for value in ids) or len(set(ids)) != len(ids):
+                    raise ValueError("Choose distinct rule examples from the selected instances")
+                events = [available[value] for value in ids]
+            else:
+                events, key = self.selected_events(payload, ids, limit=limit)
             if action == "expected":
                 self.reviews.add_many([(event, item.get("pattern")) for event, item in zip(events, entries)], payload.get("scope", "workload"))
             else:

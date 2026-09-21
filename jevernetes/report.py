@@ -1,6 +1,5 @@
 import collections
 import datetime
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -8,18 +7,19 @@ import re
 import tempfile
 
 from .events import ANSI
+from .grouping import group_id
 
 
 def build_report(events, coverage, scope, mode, requests, elapsed):
     counts = collections.Counter(e["importance"] for e in events)
     grouped = {}
     for event in events:
+        event['group_id'] = group_id(event)
         if event["importance"] != "important":
             continue
         # Exact text grouping avoids merging unrelated causes or erasing numbers.
         source = event["source"]
-        service = (source.get("namespace", ""), source.get("pod", source.get("path", "")), source.get("container", ""))
-        fingerprint = hashlib.sha256(json.dumps([service, event["text"]]).encode()).hexdigest()[:20]
+        fingerprint = event['group_id']
         if fingerprint not in grouped:
             grouped[fingerprint] = {"id": fingerprint, "source": source, "text": event["text"],
                                     "severity": event.get("severity", "unknown"), "category": event.get("category", "unknown"), "count": 0, "event_ids": []}
@@ -33,6 +33,7 @@ def build_report(events, coverage, scope, mode, requests, elapsed):
             "summary": {"events": len(events), "lines": sum(e["line_count"] for e in events),
                         **{k: counts[k] for k in ("important", "routine", "uncertain", "unknown")},
                         "streams": len(coverage), "coverage_gaps": gaps, "api_requests": requests,
+                        "reused_events": sum(bool(e.get('analysis_reused')) for e in events),
                         "elapsed_seconds": round(elapsed, 2),
                         "complete_within_window": gaps == 0 and counts["unknown"] == 0},
             "important_groups": groups, "coverage": coverage, "events": events}
