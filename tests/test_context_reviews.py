@@ -254,11 +254,37 @@ class DashboardReviewTests(unittest.TestCase):
             self.assertTrue(all(r['scope']['namespace']=='demo' for r in rules))
             self.assertEqual(rules[1]['match'],'exact')
 
+    def test_large_group_selection_reviews_every_instance_atomically(self):
+        with tempfile.TemporaryDirectory() as temp:
+            app = Dashboard(temp)
+            data = [{**event(), 'id':f'instance-{i}'} for i in range(85)]
+            write_report(Path(temp)/'group.json', build_report(data, [], {}, 'jev', 1, 1))
+            payload = {'report_id':'group.json', 'events':[{'event_id':e['id']} for e in data]}
+            with patch.object(app.reviews, '_save', wraps=app.reviews._save) as save:
+                app.review({**payload, 'action':'acknowledge'})
+                self.assertEqual(save.call_count, 1)
+            reviewed = app.report('group.json')
+            self.assertTrue(all(e['review']['status'] == 'acknowledged' for e in reviewed['events']))
+            app.review({**payload, 'action':'unacknowledge'})
+            self.assertTrue(all('review' not in e for e in app.report('group.json')['events']))
+            with self.assertRaises(ValueError):
+                app.review({**payload, 'action':'acknowledge', 'events':payload['events']+[{'event_id':'missing'}]})
+            self.assertFalse(app.reviews.snapshot()['acknowledged']['group.json'])
+            expected = {'report_id':'group.json', 'action':'expected',
+                        'events':[{'event_id':data[0]['id'], 'pattern':data[0]['text']}],
+                        'selected_event_ids':[e['id'] for e in data]}
+            with self.assertRaises(ValueError):
+                app.review({**expected, 'selected_event_ids':expected['selected_event_ids']+['missing']})
+            self.assertFalse(app.reviews.snapshot()['rules'])
+            app.review(expected)
+            self.assertEqual(len(app.reviews.snapshot()['rules']), 1)
+            self.assertTrue(all(e['review']['status'] == 'expected' for e in app.report('group.json')['events']))
+
     def test_bulk_request_limits_and_ambiguous_sources(self):
         with tempfile.TemporaryDirectory() as temp:
             app=Dashboard(temp)
             for entries in ([],None,'invalid',[None],[{'event_id':False}],
-                            [{'event_id':str(i)} for i in range(51)],
+                            [{'event_id':str(i)} for i in range(100001)],
                             [{'event_id':'same'},{'event_id':'same'}]):
                 with self.assertRaises(ValueError):
                     app.review({'action':'acknowledge','report_id':'one.json','events':entries})

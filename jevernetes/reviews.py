@@ -134,7 +134,10 @@ class ReviewStore:
             event.pop('review', None)
             rule = next((r for r in self.data['rules'] if r.get('enabled') and self.matches(r, event['text'])
                          and all(event['source'].get(k) == v for k, v in r['scope'].items())), None)
-            acknowledged = event['id'] in self.data['acknowledged'].get(key, [])
+            if getattr(self, '_acknowledged_data', None) is not self.data:
+                self._acknowledged_data = self.data
+                self._acknowledged_sets = {name: set(ids) for name, ids in self.data['acknowledged'].items()}
+            acknowledged = event['id'] in self._acknowledged_sets.get(key, set())
             if not rule and not acknowledged:
                 return False
             event['original_judgment'] = {k: event[k] for k in JUDGMENT_KEYS if k in event}

@@ -40,6 +40,7 @@ def parser():
     commands = root.add_subparsers(dest="command", required=True)
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--offline", action="store_true", help="Use local keyword rules; no Jev calls")
+    common.add_argument("--no-grouping", action="store_true", help="Send every event to Jev instead of reusing exact source/message judgments")
     common.add_argument("--rules-file", type=Path, default=Path(".runs/.review-rules.json"), help="Local expected-event rules shared with the dashboard")
     common.add_argument("--output", type=Path, help="Save full JSON report with mode 0600")
     common.add_argument("--json", action="store_true", help="Emit full report to stdout")
@@ -154,7 +155,7 @@ def analyze(args, notify=None):
                 last_progress = now
 
         emit(f"Analyzing {len(events)} events with {args.model} (redacted text sent to TypeSafe)…")
-        classify(pending, client, args.batch_size, args.workers, args.max_batches, progress)
+        classify(pending, client, args.batch_size, args.workers, args.max_batches, progress, grouping=not args.no_grouping)
     report = build_report(events, coverage, scope, "offline-rules" if args.offline else "jev", client.requests if client else 0, time.monotonic() - started)
     if client:
         report["usage"] = client.usage.snapshot()

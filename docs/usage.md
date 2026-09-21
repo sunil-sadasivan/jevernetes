@@ -118,15 +118,33 @@ python3 -m venv .venv
 
 ## Investigate events in context
 
-Open any event in **Events** or **Live tail**, then choose **View in context**. The selected event stays pinned and highlighted while you inspect surrounding lines, including routine and unclassified events. Filter by namespace, pod, container or message text. The same source filters are available in the main events list and live tail.
+Open a group in **Events**, choose an instance, then choose **View in context**. You can also open an event directly from **Live tail** or switch the Events display to **Instances**. The selected event stays pinned and highlighted while you inspect surrounding lines, including routine and unclassified events. Filter by namespace, pod, container or message text. The same source filters are available in the main events list and live tail.
 
 The initial context is a frozen view of collected events. Kubernetes windows range from 30 seconds to 15 minutes on either side; files and events without timestamps use surrounding line numbers. **Fetch from Kubernetes** reads additional retained logs for the selected event's container using its recorded context. Other pods in the context view use already-collected events. Fetching does not send logs to Jev or add AI charges. It is bounded to 1 MiB and 2,000 parsed events, displaying up to the nearest 500 events. Pod replacement, unavailable prior instances, rotation, truncation and missing logs are reported. Uploaded files are not reread after analysis; their context comes from the retained report.
+
+## Group repeated messages
+
+By default, identical redacted messages from the exact same source share a Jev judgment. Parsed timestamps and line positions are kept on each occurrence; numbers, request IDs, stack traces, embedded timestamps and source metadata (including pod identity and restart count when available) must still match. Changed or truncated messages are analyzed separately.
+
+Snapshots send one representative per group before applying the batch budget. Live streams share in-flight requests and cache successful judgments for five minutes, with at most `--retain-events` cached groups. Failed judgments are not cached for later batches. Reuse is limited to the current analysis/session, and local acknowledgments or expected rules never become cached Jev judgments. Uncheck **Reuse Jev judgments for repeated messages** in New analysis, or pass `--no-grouping`, to send every event independently.
+
+The **Groups** display shows counts within the current filters. Open a group for a paginated list of all its collected instances, including occurrences with different review decisions or renewed judgments. Each retains its timestamp, text, source, context and individual review actions. Group checkboxes select every matching instance; the header checkbox selects all instances in the visible groups. Switch to **Instances** to select individual occurrences. Partial selections show a mixed checkbox, and new live arrivals are not added to an existing selection automatically. The event totals count occurrences; **judgments reused** counts occurrences that avoided sending another event to Jev, not saved HTTP requests or estimated token savings.
+
+Live instance lists cover the retained window (2,000 events by default); evicted events are not archived. The dialog freezes that window while you inspect it. Session totals and reuse counters cover the whole session, so they can exceed the visible instance counts.
+
+## Surface events by confidence
+
+Events default to **Highest confidence** first. Use **Confidence** to show High (90–100%), Medium (70–<90%), Low (below 70%), or No AI confidence, and **Surface first** to switch to lowest confidence, most repeated, or collection order. Your confidence filter and ordering are remembered in this browser. All confidence levels remain visible by default; unscored events sort after scored events in either confidence order.
+
+Confidence badges and row accents appear in Groups, Instances, and the live tail. Groups show a range across their matching instances; mixed levels are labeled explicitly. Highest-first uses the group's highest score, and lowest-first uses its lowest score. Confidence filtering happens per instance before grouping, so group counts and selection include only matching occurrences. Opening the group still shows all retained instances.
+
+These levels use Jev's importance-judgment confidence, not severity or category confidence. Local reviews, offline rules, pending events and failed analyses have **No AI confidence**. Live tail stays in arrival order. Confidence is a model output, not an independently calibrated probability.
 
 ## Hand selected events to a coding agent
 
 In **Important**, **Needs review**, or any Events filter, use the row checkboxes to select log events. **Select page** selects the visible page; selections remain available across pages and filters within the report. **Copy investigation prompt** creates a prompt you can paste into Codex or another coding agent. It includes only the selected events, recorded source metadata, timestamps, judgments, baseline signals and full retained event text. **Preview** lets you inspect it first, and manual copying is available if the browser blocks clipboard access.
 
-The prompt asks the agent to investigate, correlate evidence, propose a minimal fix and test appropriate code changes. It treats logs as untrusted data and asks for explicit authorization before deployments or infrastructure changes. Copying is local and makes no AI requests. Select up to 50 events, within a 256 KiB prompt limit; oversized selections produce an error rather than silently truncating evidence. Selections are snapshots of events at selection time and reset when switching reports. Review the prompt for personal or sensitive data before sharing it.
+The prompt asks the agent to investigate, correlate evidence, propose a minimal fix and test appropriate code changes. It treats logs as untrusted data and asks for explicit authorization before deployments or infrastructure changes. Copying is local and makes no AI requests. Prompts combine identical selected messages, preserving each selected occurrence’s ID, timestamp, line range and confidence. Include up to 50 distinct messages within a 256 KiB prompt limit; oversized selections produce an error rather than silently truncating evidence. Selections are snapshots of events at selection time and reset when switching reports. Review the prompt for personal or sensitive data before sharing it.
 
 ## Review expected events and inspect rules
 
@@ -135,7 +153,7 @@ From an event's detail dialog:
 - **Acknowledge** removes that event from the important queue. It applies only to that event in that report or live session, and can be undone.
 - **Mark as expected** opens an editable literal message pattern. Choose a stable substring without timestamps or request-specific values. The default Kubernetes scope is the same cluster, namespace and container across pod replacements; exact-pod scope is also available. File rules use the exact source path/name.
 
-To review several events together, select their checkboxes and choose **Acknowledge selected** or **Mark as expected…**. Selections carry across filters and pages (up to 50 events). The expected-rule preview lets you edit each pattern before saving the batch; each rule retains its event's source scope. If any event is no longer available or any pattern is invalid, nothing in the batch is saved.
+To review several events together, select their checkboxes and choose **Acknowledge selected** or **Mark as expected…**. Selections carry across filters, pages and display modes (up to 100,000 instances). Acknowledgment applies to every selected instance in one atomic update. Expected-rule previews combine identical messages into one rule per group, with up to 50 rules per operation. The expected-rule preview lets you edit each pattern before saving the batch; each rule retains its event's source scope. If any event is no longer available or any pattern is invalid, nothing in the batch is saved.
 
 Patterns shorter than eight characters, including standalone `{` or `}`, match only the entire message, ignoring surrounding whitespace. Longer patterns match literal substrings. For multiline objects, suggestions prefer a message or event field; a brace alone cannot suppress a larger object. **Rules & reviews** shows each rule's matching behavior.
 
@@ -147,7 +165,7 @@ Open **Rules & reviews** in the sidebar to inspect or disable expected-event rul
 
 Jev receives three typed Choice questions for each event: importance (`important`, `routine`, `uncertain`), severity, and category. Each answer has a model confidence. Low-confidence routine answers and truncated events become uncertain. API failures, missing/invalid answers and events beyond the AI budget become `unknown`; they never become routine by default. These confidence values are model outputs, not independently calibrated probabilities.
 
-By default, up to 8 events are batched into each request, with 4 concurrent requests and a 500-batch budget (4,000 events). In snapshot mode, all collected events remain in the report even when the budget runs out. `--max-batches`, `--batch-size`, `--workers`, and `--max-events` control cost and load. HTTP 429 and transient server errors use a shared cooldown, with at most 3 attempts per batch. Requests have a 30-second timeout. Re-running a snapshot reclassifies its events; there is no persistent cross-session cache. Live mode has the retention and stop behavior described above.
+By default, up to 8 group representatives are batched into each request, with 4 concurrent requests and a 500-batch budget (up to 4,000 unique groups per snapshot). With grouping disabled, that budget covers individual events. In snapshot mode, all collected events remain in the report even when the budget runs out. `--max-batches`, `--batch-size`, `--workers`, and `--max-events` control cost and load. HTTP 429 and transient server errors use a shared cooldown, with at most 3 attempts per batch. Requests have a 30-second timeout. Re-running a snapshot reclassifies its groups; there is no persistent cross-session cache. Live mode has the retention and stop behavior described above.
 
 `--offline` is explicitly a keyword baseline, not semantic analysis: matching events are important, unmatched events are uncertain. It does not claim ordinary-looking lines are safe.
 

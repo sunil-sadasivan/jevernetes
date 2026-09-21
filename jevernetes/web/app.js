@@ -11,6 +11,59 @@ function showError(message) { $('error').textContent = message; $('error').class
 async function api(path, options) { const res = await fetch(path, options); const data = await res.json(); if (!res.ok) throw new Error(data.error || 'Request failed'); return data; }
 function reportName(r) { return r.scope?.context || (r.scope?.files?.length === 1 ? r.scope.files[0].split('/').pop() : `${r.scope?.files?.length || 0} log files`); }
 
+function confidenceValue(event) {
+  const value = event.importance_confidence;
+  return !event.review && !event.analysis_error && !['pending','dropped','unknown'].includes(event.importance) &&
+    typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1 ? value : null;
+}
+function confidenceBand(value) {
+  return value === null ? 'unscored' : value >= .9 ? 'high' : value >= .7 ? 'medium' : 'low';
+}
+function matchesConfidence(event, filter) {
+  return !filter || filter === 'all' || confidenceBand(confidenceValue(event)) === filter;
+}
+function confidenceSummary(events) {
+  const values = events.map(confidenceValue).filter(value => value !== null);
+  if (!values.length) return {band:'unscored', label:'No AI confidence', min:null, max:null};
+  let min = 1, max = 0;
+  for (const value of values) { min=Math.min(min,value); max=Math.max(max,value); }
+  const bands = new Set(values.map(confidenceBand)), missing = values.length < events.length;
+  const band = bands.size === 1 && !missing ? confidenceBand(min) : 'mixed';
+  // Do not round a value across a confidence-band boundary in its label.
+  const percent = value => Math.floor(value*1000)/10+'%';
+  const range = min === max ? percent(max) : `${percent(min)}–${percent(max)}`;
+  return {band, min, max, label:`${human(band)} · ${range}${missing ? ' + unscored' : ''}`};
+}
+function confidenceBadge(summary) {
+  const badge = node('span', summary.label, 'confidence-tag confidence-'+summary.band);
+  badge.title='Jev confidence in its importance judgment. High ≥90%; medium 70–<90%; low <70%. Group labels show the range across matching instances.';
+  return badge;
+}
+function orderConfidenceRows(rows, order) {
+  const scored = rows.map((row,index) => ({...row, confidence:confidenceSummary(row.instances), index}));
+  if (order === 'collection') return scored;
+  return scored.sort((a,b) => {
+    if (order !== 'frequency') {
+      if (a.confidence.max === null || b.confidence.max === null) {
+        if (a.confidence.max !== b.confidence.max) return a.confidence.max === null ? 1 : -1;
+      } else {
+        const difference = order === 'low' ? a.confidence.min-b.confidence.min : b.confidence.max-a.confidence.max;
+        if (difference) return difference;
+      }
+    }
+    return b.instances.length-a.instances.length || a.index-b.index;
+  });
+}
+function loadConfidencePreferences() {
+  let saved;
+  try { saved=JSON.parse(localStorage.getItem('jevernetes-confidence') || '{}'); } catch {}
+  $('confidence-filter').value=['all','high','medium','low','unscored'].includes(saved?.filter) ? saved.filter : 'all';
+  $('confidence-order').value=['high','low','frequency','collection'].includes(saved?.order) ? saved.order : 'high';
+}
+function saveConfidencePreferences() {
+  try { localStorage.setItem('jevernetes-confidence',JSON.stringify({filter:$('confidence-filter').value,order:$('confidence-order').value})); } catch {}
+}
+
 function renderHistory() {
   $('history-count').textContent = state.reports.length;
   $('history').replaceChildren();
@@ -58,7 +111,7 @@ function renderReport() {
   $('stat-important').textContent = fmt(s.important); $('stat-routine').textContent = fmt(s.routine);
   $('stat-review').textContent = fmt(s.uncertain + s.unknown); $('stat-total').textContent = fmt(s.events);
   $('review-note').textContent = `${fmt(s.uncertain)} uncertain · ${fmt(s.unknown)} unknown`;
-  $('total-note').textContent = `${fmt(s.lines)} lines · ${fmt(s.api_requests)} AI requests`;
+  $('total-note').textContent = `${fmt(s.lines)} lines · ${fmt(s.api_requests)} AI requests · ${fmt(s.reused_events)} judgments reused`;
   $('download').classList.remove('hidden'); $('download').href = '/api/report?id=' + encodeURIComponent(state.selected);
   if (state.watchingLive) { $('download').href = '/api/live'; $('report-title').textContent = 'Live Kubernetes analysis'; }
   renderUsage(r);
@@ -97,9 +150,12 @@ function renderTail() {
   const rows = matches.slice(-300), container = $('tail-lines'), oldScroll = container.scrollTop;
   container.replaceChildren();
   for (const e of rows) {
-    const row = node('button', undefined, 'tail-row');
+    const confidence = confidenceSummary([e]);
+    const row = node('button', undefined, 'tail-row confidence-row-'+confidence.band);
     const status = ['pending','dropped','important','routine','uncertain','unknown'].includes(e.importance) ? e.importance : 'unknown';
-    row.append(node('span', e.timestamp?.replace(/^.*T/, '').replace(/Z$/, '') || '—', 'tail-time'), node('span', reviewLabel(e), 'badge '+ status), node('span', sourceName(e.source), 'tail-source'), node('span', e.text, 'tail-text'));
+    const judgment = node('span');
+    judgment.append(node('span', reviewLabel(e), 'badge '+ status), confidenceBadge(confidence));
+    row.append(node('span', e.timestamp?.replace(/^.*T/, '').replace(/Z$/, '') || '—', 'tail-time'), judgment, node('span', sourceName(e.source), 'tail-source'), node('span', e.text, 'tail-text'));
     row.setAttribute('aria-label', 'Inspect ' + status + ' log: ' + e.text.slice(0,100));
     row.addEventListener('click', () => detail(e)); container.append(row);
   }
@@ -147,23 +203,30 @@ async function updateLive() {
 function renderEvents() {
   if (!state.report) return;
   const search = $('search').value.toLowerCase().trim(), importance = $('importance').value, source = $('source-filter').value;
-  const filtered = state.report.events.filter(e => LogContext.matches(e, scopeValues("events")) && (importance === 'all' || (importance === 'review' ? ['uncertain','unknown'].includes(e.importance) : (['expected','acknowledged'].includes(importance) ? e.review?.status === importance : e.importance === importance))) && (source === 'all' || sourceName(e.source) === source) && (!search || [e.text, sourceName(e.source), e.category, e.severity].join(' ').toLowerCase().includes(search)));
-  const pages = Math.max(1, Math.ceil(filtered.length / state.pageSize));
+  const filtered = state.report.events.filter(e => matchesConfidence(e,$('confidence-filter').value) && LogContext.matches(e, scopeValues("events")) && (importance === 'all' || (importance === 'review' ? ['uncertain','unknown'].includes(e.importance) : (['expected','acknowledged'].includes(importance) ? e.review?.status === importance : e.importance === importance))) && (source === 'all' || sourceName(e.source) === source) && (!search || [e.text, sourceName(e.source), e.category, e.severity].join(' ').toLowerCase().includes(search)));
+  const grouped = $('event-display').value === 'groups';
+  const rows = orderConfidenceRows(grouped ? groupEvents(filtered) : filtered.map(e => ({event:e, instances:[e]})), $('confidence-order').value);
+  const pages = Math.max(1, Math.ceil(rows.length / state.pageSize));
   state.page = Math.min(state.page, pages - 1);
   $('event-rows').replaceChildren();
-  state.visibleEvents = filtered.slice(state.page * state.pageSize, (state.page + 1) * state.pageSize);
-  for (const e of state.visibleEvents) {
-    const tr = node('tr'), judgment = node('td');
+  const visibleRows = rows.slice(state.page * state.pageSize, (state.page + 1) * state.pageSize);
+  state.visibleEvents = visibleRows.flatMap(row => row.instances);
+  for (const {event:e, instances, confidence} of visibleRows) {
+    const tr = node('tr', undefined, 'confidence-row-'+confidence.band), judgment = node('td');
     const selectionCell = node('td'), checkbox = document.createElement('input');
-    checkbox.type='checkbox'; checkbox.checked=state.selection.has(e.id);
-    checkbox.setAttribute('aria-label','Select event: '+e.text.slice(0,100));
-    checkbox.addEventListener('change',()=>{selectEvent(e,checkbox.checked);renderEvents();});
+    const selected = instances.filter(item => state.selection.has(item.id)).length;
+    checkbox.type='checkbox'; checkbox.checked=selected === instances.length;
+    checkbox.indeterminate=selected > 0 && selected < instances.length;
+    checkbox.setAttribute('aria-label',grouped ? `Select all ${instances.length} matching instances: ${e.text.slice(0,100)}` : 'Select event: '+e.text.slice(0,100));
+    checkbox.addEventListener('change',()=>{selectEvents(instances,checkbox.checked);renderEvents();});
     selectionCell.append(checkbox);
     judgment.append(node('span', reviewLabel(e), 'badge ' + (['important','routine','uncertain','unknown'].includes(e.importance) ? e.importance : 'unknown')));
-    judgment.append(node('span', e.review ? 'Local review override' : e.importance_confidence == null ? 'Local rules / unknown' : `${Math.round(e.importance_confidence * 100)}% confidence`, 'confidence'));
+    judgment.append(confidenceBadge(confidence));
+    if (e.review) judgment.append(node('span','Local review override','confidence'));
     const message = node('td'), open = node('button', undefined, 'event-button');
     open.append(node('span', e.text, 'event-text'), node('span', `${human(e.severity)} · ${human(e.category)} · line ${e.line_start}${e.line_end !== e.line_start ? '–' + e.line_end : ''}`, 'event-sub'));
-    open.setAttribute('aria-label', 'Inspect event: ' + e.text.slice(0, 100)); open.addEventListener('click', () => detail(e)); message.append(open);
+    open.setAttribute('aria-label', (grouped ? 'View instances: ' : 'Inspect event: ') + e.text.slice(0, 100)); open.addEventListener('click', () => grouped ? openInstances(e) : detail(e)); message.append(open);
+    if (grouped) message.append(node('span', `${fmt(instances.length)} matching instance${instances.length === 1 ? '' : 's'} · View all instances →`, 'event-sub'));
     const sourceCell = node('td'); sourceCell.append(node('span', sourceName(e.source), 'source-name')); if (e.source?.previous) sourceCell.append(node('span', 'previous instance', 'event-sub'));
     const baseline = node('td'); const differs = ['important','routine'].includes(e.importance) && e.baseline?.important !== (e.importance === 'important');
     baseline.append(node('span', e.baseline?.important ? 'Flagged' : 'Not flagged', 'baseline' + (differs ? ' difference' : ''))); if (differs) baseline.append(node('span', 'Disagrees', 'event-sub'));
@@ -171,23 +234,72 @@ function renderEvents() {
   }
   renderSelection();
   $('no-results').classList.toggle('hidden', filtered.length > 0);
-  $('event-count').textContent = `${fmt(filtered.length)} matching events of ${fmt(state.report.events.length)}`;
+  $('event-count').textContent = `${grouped ? fmt(rows.length)+' groups · ' : ''}${fmt(filtered.length)} matching instances of ${fmt(state.report.events.length)}${grouped ? ' · Group checkboxes select all matching instances.' : ''}`;
   $('page-number').textContent = `${state.page + 1} / ${pages}`; $('prev').disabled = state.page === 0; $('next').disabled = state.page === pages - 1;
 }
 
-function detail(e) {
-  state.detailEvent = e; state.detailReference = eventReference(e); state.detailReport = state.report;
+function detail(e, report = state.report, reference = eventReference(e)) {
+  state.detailEvent = e; state.detailReference = reference; state.detailReport = report;
   $('detail-title').textContent = human(e.category) + ' · ' + human(e.severity);
   $('detail-badges').replaceChildren(node('span', reviewLabel(e), 'badge ' + e.importance), node('span', e.truncated ? 'Truncated · review required' : `${e.line_count} log line${e.line_count === 1 ? '' : 's'}`, 'badge'));
   $('detail-meta').replaceChildren();
-  const metadata = {Source: sourceName(e.source), Time: e.timestamp || 'Not available', Lines: `${e.line_start}–${e.line_end}`, Confidence: e.importance_confidence == null ? 'Not available' : `${Math.round(e.importance_confidence * 100)}%`, Baseline: e.baseline?.signals?.join(', ') || 'No keyword match'};
+  const metadata = {Source: sourceName(e.source), Time: e.timestamp || 'Not available', Lines: `${e.line_start}–${e.line_end}`, Confidence: confidenceSummary([e]).label, Baseline: e.baseline?.signals?.join(', ') || 'No keyword match'};
   if (e.source?.previous) metadata.Instance = 'Previous container';
+  if (e.analysis_reused) metadata.Analysis = 'Reused Jev judgment from an identical message and source';
   for (const [key,value] of Object.entries(metadata)) $('detail-meta').append(node('dt', key), node('dd', value));
   $('detail-log').textContent = e.text;
-  $('detail-explanation').textContent = e.analysis_error || (e.importance === 'pending' ? 'This log has arrived and is waiting for classification.' : state.report.mode === 'jev' ? 'Jev classified this event from its meaning and source. Confidence is a model output, not an independently calibrated probability.' : 'Offline rules match severity levels and keywords. Unmatched events remain uncertain.');
+  $('detail-explanation').textContent = e.analysis_error || (e.importance === 'pending' ? 'This log has arrived and is waiting for classification.' : report.mode === 'jev' ? `${e.analysis_reused ? 'Reused a Jev judgment for identical redacted text and source.' : 'Jev classified this event from its meaning and source.'} Confidence is a model output, not an independently calibrated probability.` : 'Offline rules match severity levels and keywords. Unmatched events remain uncertain.');
   renderReview(e);
   if (!$('detail-dialog').open) $('detail-dialog').showModal();
 }
+
+function eventGroupKey(e) {
+  // Older saved reports may not yet carry server-generated group IDs.
+  return e.group_id || JSON.stringify([Object.entries(e.source || {}).sort(([a],[b]) => a.localeCompare(b)), e.text, Boolean(e.truncated), e.truncated ? e.id : null]);
+}
+function groupEvents(events) {
+  const groups = new Map();
+  for (const e of events) {
+    // Local reviews and renewed judgments remain distinguishable in the list.
+    const key = JSON.stringify([eventGroupKey(e), e.importance, e.review?.status, e.severity, e.category]);
+    if (!groups.has(key)) groups.set(key, {event:e, instances:[]});
+    groups.get(key).instances.push(e);
+  }
+  return [...groups.values()];
+}
+function openInstances(e, report = state.report, reference = eventReference(e)) {
+  const events = LogContext.collected(report).filter(item => eventGroupKey(item) === eventGroupKey(e));
+  state.instances = {events, report, reference, page:0};
+  $('instances-source').textContent = sourceName(e.source);
+  $('instances-note').textContent = `${fmt(events.length)} instances with identical redacted text and source. ${report.live ? 'All retained instances are shown; older events may have left the live buffer.' : 'All collected instances are shown.'} This view is frozen while you inspect it.`;
+  renderInstances();
+  if (!$('instances-dialog').open) $('instances-dialog').showModal();
+}
+function renderInstances() {
+  const group = state.instances, size = 40, pages = Math.max(1, Math.ceil(group.events.length / size));
+  $('instances-list').replaceChildren();
+  for (const e of group.events.slice(group.page*size, (group.page+1)*size)) {
+    const confidence = confidenceSummary([e]);
+    const row = node('button', undefined, 'instance-row confidence-row-'+confidence.band);
+    row.append(node('strong', e.timestamp || `Lines ${e.line_start}–${e.line_end}`), confidenceBadge(confidence), node('span', `${reviewLabel(e)} · ${e.analysis_reused ? 'Jev judgment reused' : 'Original instance'} · lines ${e.line_start}–${e.line_end}`, 'field-note'), node('pre', e.text));
+    row.addEventListener('click', () => {
+      $('instances-dialog').close();
+      detail(e, group.report, {...group.reference, event_id:e.id});
+    });
+    $('instances-list').append(row);
+  }
+  $('instances-page').textContent = `${group.page+1} / ${pages}`;
+  $('instances-prev').disabled = group.page === 0;
+  $('instances-next').disabled = group.page+1 >= pages;
+}
+$('event-display').addEventListener('change', () => {state.page=0; renderEvents();});
+$('view-instances').addEventListener('click', () => {
+  $('detail-dialog').close();
+  openInstances(state.detailEvent, state.detailReport, state.detailReference);
+});
+$('close-instances').addEventListener('click', () => $('instances-dialog').close());
+$('instances-prev').addEventListener('click', () => {state.instances.page--; renderInstances();});
+$('instances-next').addEventListener('click', () => {state.instances.page++; renderInstances();});
 
 function switchView(coverage, tail = false) {
   state.view = tail ? 'tail' : coverage ? 'coverage' : 'events';
@@ -218,7 +330,7 @@ function readFile(file) { return new Promise((resolve,reject) => { const reader 
 $('scan-form').addEventListener('submit', async event => {
   event.preventDefault(); const form = event.currentTarget, data = new FormData(form); $('submit-scan').disabled = true; $('form-error').classList.add('hidden');
   try {
-    const payload = {kind:data.get('kind'), offline:data.get('analysis_mode') === 'offline', max_batches:Number(form.elements.max_batches.value)};
+    const payload = {kind:data.get('kind'), offline:data.get('analysis_mode') === 'offline', max_batches:Number(form.elements.max_batches.value), grouping:form.elements.grouping.checked};
     payload.live = payload.kind === 'kubernetes' && form.elements.live.checked;
     if (payload.live) { payload.max_cost = Number(form.elements.max_cost.value); payload.max_streams = Number(form.elements.max_streams.value); }
     if (payload.kind === 'files') {
@@ -265,7 +377,8 @@ document.querySelectorAll('[data-filter]').forEach(b => b.addEventListener('clic
 for (const id of ['search','importance','source-filter']) $(id).addEventListener('input', () => { state.page = 0; renderEvents(); });
 $('events-tab').addEventListener('click', () => switchView(false)); $('coverage-tab').addEventListener('click', () => switchView(true));
 $('prev').addEventListener('click', () => { state.page--; renderEvents(); }); $('next').addEventListener('click', () => { state.page++; renderEvents(); });
-$('reset-filters').addEventListener('click', () => { $('search').value = ''; $('importance').value = 'all'; $('source-filter').value = 'all'; syncScope('events',LogContext.collected(state.report),true); state.page = 0; renderEvents(); });
+$('reset-filters').addEventListener('click', () => { $('search').value = ''; $('importance').value = 'all'; $('source-filter').value = 'all'; $('confidence-filter').value='all'; saveConfidencePreferences(); syncScope('events',LogContext.collected(state.report),true); state.page = 0; renderEvents(); });
+for (const id of ['confidence-filter','confidence-order']) $(id).addEventListener('change', () => {state.page=0;saveConfidencePreferences();renderEvents();});
 $('view-live').addEventListener('click', () => { openTail(); updateLive().catch(e => showError(e.message)); });
 $('tail-tab').addEventListener('click', () => switchView(false, true));
 $('tail-pause').addEventListener('click', () => { state.tailPaused = !state.tailPaused; if (state.tailPaused) state.frozenTail = state.report?.tail_events || []; $('tail-pause').textContent = state.tailPaused ? 'Resume display' : 'Pause display'; renderTail(); });
@@ -390,7 +503,7 @@ async function updateReviewedDetail() {
   const report = await api(reference.live_id ? '/api/live' : '/api/report?id='+encodeURIComponent(reference.report_id));
   if ((reference.live_id && state.watchingLive && state.job?.id === reference.live_id) || (!reference.live_id && state.selected === reference.report_id)) { state.report=report; renderReport(); }
   const updated=LogContext.collected(report).find(e=>e.id===id);
-  if (updated) { const saved=state.detailReference; detail(updated); state.detailReference=saved; }
+  if (updated) detail(updated, report, reference);
 }
 $('ack-event').addEventListener('click',async()=>{
   const button=$('ack-event'); button.disabled=true;
@@ -449,15 +562,20 @@ function clearSelection() {
   state.selection.clear(); state.visibleEvents=[];
   $('selection-feedback').textContent='';renderSelection();
 }
-function selectEvent(e,selected) {
-  if (!selected) {state.selection.delete(e.id);return;}
-  if(state.selection.size>=InvestigationPrompt.maxEvents && !state.selection.has(e.id)) {$('selection-feedback').textContent=`Select at most ${InvestigationPrompt.maxEvents} events.`;return;}
-  state.selection.set(e.id,JSON.parse(JSON.stringify(e)));
+function selectEvents(events,selected) {
+  if (!selected) {for (const e of events) state.selection.delete(e.id);return;}
+  const added = events.filter(e => !state.selection.has(e.id));
+  if (state.selection.size + added.length > 100000) {
+    $('selection-feedback').textContent='Select at most 100,000 instances. This selection was not changed.';
+    return;
+  }
+  for (const e of added) state.selection.set(e.id,JSON.parse(JSON.stringify(e)));
+  $('selection-feedback').textContent='';
 }
 function renderSelection() {
   const count=state.selection.size;
   $('selection-bar').classList.toggle('hidden',!count);
-  $('selection-count').textContent=`${count} selected (including other pages or filters)`;
+  $('selection-count').textContent=`${fmt(count)} instances selected (including other pages or filters)`;
   const selected=state.visibleEvents.filter(e=>state.selection.has(e.id)).length;
   $('select-page').checked=Boolean(state.visibleEvents.length) && selected===state.visibleEvents.length;
   $('select-page').indeterminate=selected>0 && selected<state.visibleEvents.length;
@@ -493,12 +611,17 @@ $('ack-selected').addEventListener('click',async()=>{
 });
 $('expect-selected').addEventListener('click',()=>{
   state.bulkReview=selectedReview();
+  state.bulkReview.groups=groupEvents(state.bulkReview.events);
+  if (state.bulkReview.groups.length > 50) {
+    $('selection-feedback').textContent='Select at most 50 distinct messages to create expected rules at once. All instances remain selected.';
+    return;
+  }
   $('bulk-expected-items').replaceChildren();
   $('bulk-expected-error').classList.add('hidden');
   $('bulk-expected-scope').value='workload';
   $('bulk-expected-scope').disabled=!state.bulkReview.events.some(e=>e.source?.type==='kubernetes');
-  for (const [i,e] of state.bulkReview.events.entries()) {
-    const card=node('div',undefined,'rule-card'), label=node('label',`Pattern ${i+1} · ${sourceName(e.source)}`), input=document.createElement('input');
+  for (const [i,{event:e,instances}] of state.bulkReview.groups.entries()) {
+    const card=node('div',undefined,'rule-card'), label=node('label',`Pattern ${i+1} · ${instances.length} selected instances · ${sourceName(e.source)}`), input=document.createElement('input');
     input.type='text';input.required=true;input.minLength=1;input.maxLength=500;input.value=expectedPattern(e);input.dataset.eventId=e.id;
     label.append(input);card.append(label,node('pre',e.text));$('bulk-expected-items').append(card);
   }
@@ -513,7 +636,7 @@ $('bulk-expected-form').addEventListener('submit',async event=>{
   state.reviewBusy=true;$('save-bulk-expected').disabled=true;renderSelection();
   $('bulk-expected-error').classList.add('hidden');
   try {
-    await reviewAction({...reference,action:'expected',scope:$('bulk-expected-scope').value,events:entries});
+    await reviewAction({...reference,action:'expected',scope:$('bulk-expected-scope').value,events:entries,selected_event_ids:events.map(e=>e.id)});
     $('bulk-expected-dialog').close();
     await reloadReviewedSelection(reference,events.map(e=>e.id));
     if(sameReviewSource(reference)) $('selection-feedback').textContent=`Marked ${events.length} selected events as expected. Matching future events skip AI analysis.`;
@@ -537,12 +660,15 @@ async function copyPrompt(text) {
     $('prompt-copy-status').textContent='Clipboard access is unavailable. Press Ctrl+C or Cmd+C to copy the selected prompt.';
   }
 }
-function selectedPrompt() {return InvestigationPrompt.build([...state.selection.values()]);}
-$('select-page').addEventListener('change',()=>{for(const e of state.visibleEvents)selectEvent(e,$('select-page').checked);renderEvents();});
+function selectedPrompt() {
+  return InvestigationPrompt.build(groupEvents([...state.selection.values()]).map(({event,instances}) => ({...event, instances})));
+}
+$('select-page').addEventListener('change',()=>{selectEvents(state.visibleEvents,$('select-page').checked);renderEvents();});
 $('clear-selection').addEventListener('click',()=>{clearSelection();renderEvents();});
 $('preview-prompt').addEventListener('click',()=>{try{previewPrompt(selectedPrompt());}catch(e){$('selection-feedback').textContent=e.message;}});
 $('copy-prompt').addEventListener('click',()=>{try{copyPrompt(selectedPrompt());}catch(e){$('selection-feedback').textContent=e.message;}});
 $('copy-preview').addEventListener('click',()=>copyPrompt($('prompt-text').value));
 $('close-prompt').addEventListener('click',()=>$('prompt-dialog').close());
 
+loadConfidencePreferences();
 refresh(); setInterval(refresh, 1000);

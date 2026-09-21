@@ -14,6 +14,7 @@ import uuid
 
 from .events import StreamRedactor, CONTINUATION, MAX_EVENT, MAX_LINE, TIMESTAMP, baseline, redact
 from .jev import Jev, api_key
+from .grouping import GroupedJudge, group_id
 from .kubernetes import kubectl
 from .report import build_report, write_report
 from .usage import UsageMeter
@@ -132,6 +133,18 @@ class LiveSession:
         self.discovery_attempts = 0
         self.next_discovery_at = None
         self.last_inventory_success = None
+        self.grouped_judge = GroupedJudge(self.judge_batch, limit=args.retain_events)
+        self.reused = 0
+
+    def judge_batch(self, batch):
+        with self.lock:
+            if self.stop_event.is_set():
+                raise ValueError("Stopped before classification")
+            if self.batches >= self.args.max_batches:
+                self.stop("AI batch budget reached")
+                raise ValueError("AI batch budget reached")
+            self.batches += 1
+        return self.client.judge(batch)
 
     def status_info(self):
         with self.lock:
@@ -152,6 +165,7 @@ class LiveSession:
         with self.lock:
             self.received += 1
             event["sequence"] = self.received
+            event['group_id'] = group_id(event)
             if len(self.tail) == self.tail.maxlen:
                 self.tail_index.pop(self.tail[0]["id"], None)
             pending = {**event, "importance": "pending"}
@@ -172,6 +186,7 @@ class LiveSession:
                 event["baseline"] = baseline(event)
                 self.reviews.apply(event, self.review_key)
                 self.counts[event["importance"]] += 1
+                self.reused += bool(event.get("analysis_reused"))
                 self.lines += event["line_count"]
                 self.recent.append(event)
                 if event["id"] in self.tail_index:
@@ -202,11 +217,6 @@ class LiveSession:
             with self.lock:
                 if self.stop_event.is_set():
                     error = "Stopped before classification"
-                elif not self.args.offline and self.batches >= self.args.max_batches:
-                    error = "AI batch budget reached"
-                    self.stop(error)
-                elif not self.args.offline:
-                    self.batches += 1
             if error:
                 for event in batch:
                     event.update(importance="unknown", analysis_error=error)
@@ -215,7 +225,8 @@ class LiveSession:
                     event.update(importance="important" if baseline(event)["important"] else "uncertain", severity="unknown", category="unknown")
             else:
                 try:
-                    results = self.client.judge(batch)
+                    judge = self.judge_batch if self.args.no_grouping else self.grouped_judge
+                    results = judge(batch)
                     for event, result in zip(batch, results, strict=True):
                         event.update(result)
                         if event["truncated"] or (event["importance"] == "routine" and event["importance_confidence"] < .7):
@@ -383,7 +394,8 @@ class LiveSession:
             report["created_at"] = self.created_at
             report["summary"].update({key: self.counts[key] for key in ("important", "routine", "uncertain", "unknown")})
             report["summary"].update(events=sum(self.counts.values()), lines=self.lines,
-                                      streams=len(self.streams), complete_within_window=False)
+                                      streams=len(self.streams), complete_within_window=False,
+                                      reused_events=self.reused)
             report["usage"] = usage
             report["tail_events"] = [dict(event) for event in tail_events]
             report["live"] = {"status": self.status, "message": self.message, "received": self.received,
