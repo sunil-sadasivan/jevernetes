@@ -53,8 +53,6 @@ Dark mode is the default; light mode is one click away. Reports and review rules
 
 ![CLI live tail showing arriving logs, redaction, and keyword labels](docs/images/cli-live-tail.gif)
 
-Synthetic logs from a fake cluster, streamed through the real CLI with offline keyword rules. [Regenerate the demo](docs/demo.md#cli-demo-recording).
-
 ```sh
 # Follow new logs using local keyword rules, without an API key.
 python3 -m jevernetes k8s -f --tail 0 --offline
