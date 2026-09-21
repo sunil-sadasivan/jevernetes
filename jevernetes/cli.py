@@ -44,7 +44,7 @@ def parser():
     common.add_argument("--rules-file", type=Path, default=Path(".runs/.review-rules.json"), help="Local expected-event rules shared with the dashboard")
     common.add_argument("--output", type=Path, help="Save full JSON report with mode 0600")
     common.add_argument("--json", action="store_true", help="Emit full report to stdout")
-    common.add_argument("--tui", action="store_true", help="Interactive terminal with clickable Important, Routine, Needs Review and All tabs")
+    common.add_argument("--tui", action="store_true", help="Interactive terminal with clickable filters and log search (/ ask, f find)")
     common.add_argument("--model", default="jev-latest")
     common.add_argument("--batch-size", type=positive, default=8)
     common.add_argument("--workers", type=positive, default=4, help="Concurrent Jev requests (max 16)")

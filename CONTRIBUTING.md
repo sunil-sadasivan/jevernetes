@@ -5,13 +5,17 @@ Use Python 3.11 or newer. Runtime dependencies are limited to the Python standar
 ```sh
 python3 -m unittest discover -s tests -v
 node --check jevernetes/web/app.js
+node --check jevernetes/web/search.js
 node tests/test_context_ui.cjs
 node tests/test_prompt_ui.cjs
 node tests/test_review_ui.cjs
 node tests/test_grouping_ui.cjs
+node tests/test_search_ui.cjs
 ```
 
 All tests use synthetic inputs or mocks. Do not add real application logs, personal data, access keys, cluster names or kubeconfig files to fixtures, issues, screenshots, or pull requests. Keep runtime reports and review rules out of version control. Security reports belong in the private reporting channel described in SECURITY.md.
+
+To regenerate the shareable search demo, run `node tools/record-search-demo.mjs` with Node 22+, Chrome and ffmpeg installed. It records the actual dashboard against synthetic API responses, blocks external browser requests, and exports a GIF, MP4 and preview image under `docs/images/`. The recording labels its logs, results and usage as illustrative.
 
 Build and inspect release artifacts in a virtual environment:
 

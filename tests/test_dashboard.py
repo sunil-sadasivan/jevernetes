@@ -127,7 +127,7 @@ class HttpTests(unittest.TestCase):
                 return response.code, response.headers, response.read()
 
     def test_static_assets_and_security_headers(self):
-        for path in ["/", "/app.js", "/context.js", "/prompt.js", "/style.css", "/favicon.svg"]:
+        for path in ["/", "/app.js", "/context.js", "/prompt.js", "/search.js", "/style.css", "/favicon.svg"]:
             status, headers, body = self.request(path)
             self.assertEqual(status, 200)
             self.assertGreater(len(body), 100)
@@ -139,6 +139,8 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(self.request("/api/analyze", {"kind": "files"})[0], 403)
         self.assertEqual(self.request("/api/context", {"event_id": "fake"})[0], 403)
         self.assertEqual(self.request("/api/review", {"action": "expected"})[0], 403)
+        self.assertEqual(self.request("/api/search", {"query": "db issues"})[0], 403)
+        self.assertEqual(self.request("/api/search/stop", {"id": "fake"})[0], 403)
         state = json.loads(self.request("/api/state")[2])
         self.assertEqual(self.request("/api/analyze", {}, {"X-Jev-Token": state["csrf"], "Origin": "https://evil.example", "Content-Type": "application/json"})[0], 403)
 
@@ -159,6 +161,21 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(json.loads(body)["summary"]["important"], 1)
         event = json.loads(body)["events"][0]
         headers = {"X-Jev-Token": state["csrf"], "Content-Type": "application/json"}
+        status, _, body = self.request("/api/search", {"report_id": state["job"]["report_id"], "event_ids": [event["id"]], "query": "failed", "mode": "literal"}, headers)
+        self.assertEqual(status, 202)
+        search_id = json.loads(body)["id"]
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            status, _, body = self.request("/api/search?id=" + search_id)
+            result = json.loads(body)
+            if result["status"] != "running":
+                break
+            time.sleep(.01)
+        self.assertEqual(status, 200)
+        self.assertEqual(result["matched_groups"], 1)
+        self.assertEqual(result["usage"]["request_attempts"], 0)
+        self.assertEqual(result["results"][0]["event_id"], event["id"])
+        self.assertEqual(self.request("/api/search?id=" + search_id + "&offset=-1")[0], 404)
         status, _, _ = self.request("/api/review", {"action": "acknowledge", "report_id": state["job"]["report_id"], "event_id": event["id"]}, headers)
         self.assertEqual(status, 200)
         reviewed = json.loads(self.request("/api/report?id=" + state["job"]["report_id"])[2])
@@ -172,7 +189,7 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(len(json.loads(body)["baseline"]), 3)
         headers = {"X-Jev-Token": self.server.app.token, "Content-Type": "application/json"}
-        for path in ("/api/context", "/api/review"):
+        for path in ("/api/context", "/api/review", "/api/search", "/api/search/stop"):
             self.assertEqual(self.request(path, {}, headers)[0], 400)
 
 

@@ -2,7 +2,7 @@
 
 Kubernetes logs can feel like a haystack. Operators often don't know whether there are needles to find until it's too late. **Jevernetes helps surface the logs worth investigating.**
 
-Live Kubernetes log analysis in your terminal or a local dashboard, powered by [TypeSafe Jev](https://docs.typesafe.ai). Find events worth investigating, inspect their context, and hand selected logs to your coding agent.
+Live Kubernetes log analysis in your terminal or a local dashboard, powered by [TypeSafe Jev](https://docs.typesafe.ai). Ask questions to find matching logs, inspect their context, and hand selected evidence to your coding agent.
 
 ![Live Kubernetes dashboard showing streaming logs, copying selected errors to a coding agent, and reviewing events in bulk](docs/images/live-demo.gif)
 
@@ -45,11 +45,14 @@ Collection uses your existing kubectl configuration and is read-only. All namesp
 - **Live tail:** follow incoming logs, filter by pod or text, and watch token usage and estimated cost.
 - **Confidence:** highlight and filter confidence levels, with highest-confidence judgments surfaced first and browser preferences remembered.
 - **Log groups:** repeated messages reuse Jev judgments. Select groups to review all matching instances, or open a group to inspect individual occurrences.
+- **Ask Jev / Find logs:** ask questions such as “major issue with db,” or find requests involving an IP address. Jev semantic search finds matching groups, with every instance available to inspect.
 - **View in context:** inspect surrounding lines and fetch additional retained logs from Kubernetes.
 - **Copy investigation prompt:** select rows in Important or Needs review, then copy their evidence into Claude, Codex, or another agent.
 - **Acknowledge / Mark as expected:** review one event or a selection, and suppress future expected matches. Inspect and manage rules in **Rules & reviews**.
 
 Dark mode is the default; light mode is one click away. Reports and review rules are saved locally in `.runs/`.
+
+Watch the [semantic log search demo](docs/images/search-demo.gif) or download the [MP4](docs/images/search-demo.mp4). The demo uses synthetic logs and illustrative results.
 
 ## Terminal usage
 
@@ -59,7 +62,7 @@ Dark mode is the default; light mode is one click away. Reports and review rules
 # Follow new logs using local keyword rules, without an API key.
 python3 -m jevernetes k8s -f --tail 0 --offline
 
-# Interactive terminal: click Important / Routine / Needs Review / All tabs.
+# Interactive terminal: clickable filters; / asks Jev, f finds exact text.
 python3 -m jevernetes k8s -f --tail 0 --offline --tui
 
 # Live Jev analysis with an AI batch budget and estimated cost threshold.
