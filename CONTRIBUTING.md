@@ -19,6 +19,8 @@ To regenerate the shareable search demo, run `node tools/record-search-demo.mjs`
 
 Browser recorders use Chrome's private debugging pipes and pass dynamic values as structured function arguments. Run `node tests/test_demo_browser.mjs` with Chrome installed to check that caption/selector text cannot become executable code.
 
+Run `python3 tools/record-terminal-search.py` to export the terminal GIF, MP4 and preview. It drives the production terminal renderer and input handlers with synthetic data, blocks provider requests, and asserts grouping, instance inspection and cache reuse. It requires ffmpeg with drawtext and a monospace font; set `DEMO_FONT` outside macOS.
+
 Build and inspect release artifacts in a virtual environment:
 
 ```sh
