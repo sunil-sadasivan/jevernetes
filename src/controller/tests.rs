@@ -37,6 +37,66 @@ fn controller(dir: &tempfile::TempDir) -> Controller {
 }
 
 #[tokio::test]
+async fn paused_collection_keeps_inspection_and_delivery_until_shutdown() {
+    let dir = tempfile::tempdir().unwrap();
+    let c = controller(&dir);
+    c.apply(&event("synthetic notification", 1)).await.unwrap();
+    let shutdown = CancellationToken::new();
+    let collection = shutdown.child_token();
+    collection.cancel();
+    assert!(!shutdown.is_cancelled());
+    let hold = tokio::spawn({
+        let c = c.clone();
+        let shutdown = shutdown.clone();
+        async move { c.hold_after_stop(&shutdown).await }
+    });
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while c.ready.load(Ordering::Acquire) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(inspect::serve(listener, c.clone(), shutdown.clone()));
+    let status: inspect::Snapshot = reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .unwrap()
+        .get(format!("http://{addr}/v1/status"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(!status.ready);
+    assert_eq!(status.metrics["collection_stopped"], 1);
+    assert_eq!(status.outbox_pending, 1);
+    assert!(!hold.is_finished());
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let delivery = tokio::spawn({
+        let c = c.clone();
+        let stop = shutdown.clone();
+        let entered = entered.clone();
+        async move { c.deliver(Arc::new(StalledSink { entered }), stop).await }
+    });
+    tokio::time::timeout(Duration::from_secs(1), entered.notified())
+        .await
+        .unwrap();
+    shutdown.cancel();
+    tokio::time::timeout(Duration::from_secs(1), async {
+        hold.await.unwrap();
+        server.await.unwrap();
+        delivery.await.unwrap();
+    })
+    .await
+    .unwrap();
+    assert_eq!(c.db(|s| s.counts()).await.unwrap(), (1, 0));
+}
+
+#[tokio::test]
 async fn inspection_is_bounded_read_only_and_preserves_sanitized_evidence() {
     let dir = tempfile::tempdir().unwrap();
     let c = controller(&dir);

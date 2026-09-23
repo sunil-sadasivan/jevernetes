@@ -136,6 +136,7 @@
                 "imagePullPolicy": "IfNotPresent",
                 "args": [
                   "controller",
+                  "--hold-after-stop",
                   "--namespace",
                   "jevernetes",
                   "--state",

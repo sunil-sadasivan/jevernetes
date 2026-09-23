@@ -125,6 +125,9 @@ enum SinkKind {
 }
 #[derive(clap::Args)]
 struct ControllerArgs {
+    /// Keep health, inspection and pending delivery alive after collection stops until SIGTERM.
+    #[arg(long)]
+    hold_after_stop: bool,
     /// Enable read-only incident inspection on 127.0.0.1:PORT, through Kubernetes port-forwarding.
     #[arg(long, value_parser=clap::value_parser!(u16).range(1..))]
     inspect_port: Option<u16>,
@@ -230,9 +233,10 @@ async fn run_controller(cli: &Cli, args: &ControllerArgs) -> Result<i32, &'stati
     } else {
         None
     };
-    let stop = CancellationToken::new();
+    let shutdown = CancellationToken::new();
+    let stop = shutdown.child_token();
     let worker_stop = CancellationToken::new();
-    let signals = signal(stop.clone())?;
+    let signals = signal(shutdown.clone())?;
     let fault_monitor = tokio::spawn({
         let c = controller.clone();
         let stop = stop.clone();
@@ -314,6 +318,12 @@ async fn run_controller(cli: &Cli, args: &ControllerArgs) -> Result<i32, &'stati
             (producer.await, analyzed)
         }
     };
+    if args.hold_after_stop && !shutdown.is_cancelled() {
+        eprintln!(
+            "[controller] collection paused; readiness false; inspection and delivery remain available until shutdown"
+        );
+        controller.hold_after_stop(&shutdown).await;
+    }
     worker_stop.cancel();
     let _ = delivery.await;
     let _ = health_task.await;

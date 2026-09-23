@@ -228,6 +228,9 @@ pub fn render(value: &Value, details: bool) -> Result<String, &'static str> {
             s.sampled_at
         )
         .unwrap();
+        if s.metrics["collection_stopped"] == 1 {
+            out.push_str("Collection paused; inspection and pending delivery remain active. Investigate limits before restarting.\n");
+        }
         writeln!(
             out,
             "Logs: {} received | {} streams | queue {} | {} dropped | {} coverage gaps",

@@ -18,6 +18,7 @@ pub struct Coverage {
 }
 #[derive(Default, Serialize)]
 pub struct Metrics {
+    pub collection_stopped: u64,
     pub verdict_hits: u64,
     pub verdict_misses: u64,
     pub verdict_expirations: u64,
