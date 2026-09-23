@@ -3,9 +3,9 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "jevernetes"
+name = "jevernetes-legacy"
 version = "0.1.0"
-description = "Live Kubernetes log analysis and incident investigation with Jev"
+description = "Legacy Jevernetes dashboard, TUI, search, review and context companion"
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
@@ -18,7 +18,7 @@ Repository = "https://github.com/sunil-sadasivan/jevernetes"
 Issues = "https://github.com/sunil-sadasivan/jevernetes/issues"
 
 [project.scripts]
-jevernetes = "jevernetes.cli:main"
+jevernetes-legacy = "jevernetes.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["jevernetes*"]

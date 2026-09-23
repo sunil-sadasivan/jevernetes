@@ -16,3 +16,6 @@ recursive-include .github *.yml
 include requirements-dev.txt
 prune .security-venv
 include docs/usage.md
+
+prune target
+include docs/legacy-usage.md docs/legacy-dashboard.md docs/migration.md docs/architecture.md

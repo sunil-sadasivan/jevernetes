@@ -1,4 +1,25 @@
-# Validation
+# Rust validation
+
+Required checks (CI uses Rust 1.94):
+
+```sh
+cargo fmt --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --all-features
+cargo build --release --locked
+python3 tests/rust/tui_pty.py target/release/jevernetes
+printf 'ERROR synthetic failure\nINFO ready\n' | target/release/jevernetes files - --offline --json
+```
+
+Rust tests use synthetic inputs and loopback HTTP fixtures, never live Kubernetes or Jev credentials. They cover byte/event bounds, multiline/redaction, typed choices/confidence, safe HTTP failures/retries, usage, exact reuse/expiry, reconnect multiplicity and cursor bounds, queue drops, retention and CLI reports/permissions. See docs/architecture.md for benchmarks and authorized cluster validation still needed. Legacy validation below describes the retained companion only.
+
+Native TUI coverage includes pending-to-final analysis updates, bounded immutable views, stable selection during eviction, tab and mouse navigation, Unicode editing/rendering, control-sequence suppression, frozen local/semantic search, group occurrences, conservative relevance, separate search budgets/metering, cache identity/expiry, and invalid terminal/stdin/JSON combinations. The PTY smoke drives the actual release binary through local search and multiline details, then verifies normal quit, Ctrl+C while editing, SIGTERM, terminal restoration, and private final reports. It uses Python only as the test driver; the Rust runtime has no Python dependency.
+
+Verified locally for the native TUI: formatting, Clippy with warnings denied, 45 Rust tests, a locked release build, all three PTY scenarios on macOS, 117 legacy Python tests, and all five JavaScript helper suites plus syntax checks. Provider and Kubernetes tests use synthetic loopback fixtures; no live cluster or provider calls were made.
+
+Verified for this migration: Rust formatting and Clippy with warnings denied, 26 Rust tests, release build, 117 legacy Python tests, all five JavaScript helper suites, and an offline release-binary smoke with six synthetic events. The smoke checked JSON equivalence, stable distinct occurrence IDs, multiline grouping, password/PEM suppression, zero provider requests, and mode 0600. Loopback HTTP tests exercise the real Kubernetes client against synthetic list/watch/get/log responses and the real Jev client against synthetic provider responses. No live cluster or provider calls were made. The optional legacy wheel/sdist build was not run locally because the `build` module was absent; the existing CI packaging job remains enabled.
+
+# Legacy validation
 
 Run the automated checks from the project directory:
 

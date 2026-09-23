@@ -21,3 +21,4 @@ kubeconfig.*
 
 .review-rules.json
 .security-venv/
+/target/

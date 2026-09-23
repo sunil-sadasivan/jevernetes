@@ -1,6 +1,16 @@
 # Contributing
 
-Use Python 3.11 or newer. Runtime dependencies are limited to the Python standard library; Kubernetes collection additionally requires a configured `kubectl`. Node.js is used only for the small browser-logic tests.
+The default runtime is Rust. Use Rust 1.94 for the verified toolchain:
+
+```sh
+cargo fmt --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --all-features
+cargo build --release --locked
+python3 tests/rust/tui_pty.py target/release/jevernetes
+```
+
+Keep `Cargo.lock` tracked and build output in ignored `target/`. See docs/architecture.md and docs/migration.md for boundaries and deferred parity. The legacy companion still needs Python 3.11+ and `kubectl`; Node.js is used for browser-logic tests. Preserve its regression checks while migrating workflows:
 
 ```sh
 python3 -m unittest discover -s tests -v
@@ -34,7 +44,7 @@ Keep collection read-only, model outputs advisory, context fetches bounded, and 
 
 ## Security automation
 
-Dependabot checks GitHub Actions and Python development/build requirements weekly. The Security workflow runs on pushes, pull requests, a weekly schedule, and manual dispatch:
+Dependabot checks Cargo, GitHub Actions and Python development/build requirements weekly. The Security workflow runs on pushes, pull requests, a weekly schedule, and manual dispatch:
 
 - TruffleHog scans Git history/diffs with full checkout history and fails on unsuppressed findings or scan errors. Credential verification is disabled, so potential secrets are not sent to external verification endpoints. A single inline ignore applies to the explicitly synthetic PostgreSQL password-redaction fixture; no detector or test file is excluded.
 - Bandit fails on medium/high Python findings with at least medium confidence. Reviewed low findings are recorded in SECURITY_REVIEW.md.

@@ -6,6 +6,12 @@ Use [GitHub private vulnerability reporting](https://github.com/sunil-sadasivan/
 
 Security fixes target the current release and main branch. This is an early-stage local tool, not a security monitoring system or a replacement for human incident review.
 
+## Rust runtime scope
+
+The default runtime is the Rust CLI. It has no HTTP dashboard listener and uses kube-rs API get/list/watch/log requests rather than kubectl. Required permissions are read-only pods get/list/watch and pods/log get. Kubeconfig authentication plugins remain trusted executable configuration. The Python loopback dashboard and all controls below remain applicable to the explicitly legacy companion.
+
+Rust reports use schema 2 and private atomic writes. Queue drops, reconnects, bounded replay uncertainty and truncated collection are visible; no durable or exactly-once guarantee is made. See docs/architecture.md for Rust resource/trust boundaries and docs/migration.md for deferred workflows. The initial security review predates Rust and is not a Rust audit.
+
 ## Trust model
 
 - The dashboard binds to `127.0.0.1` only. It validates Host and mutation Origin headers and requires a random per-process token for mutations. CSP and text-only rendering reduce browser injection risk. It is not a multi-user authenticated service: other processes/users with access to the same host can reach its loopback API. Do not expose it through a public proxy or tunnel.
