@@ -39,6 +39,17 @@ See [controller operation and exact limits](docs/controller.md), the [Kustomize 
 and the [probabilistic control-plane thesis and roadmap](docs/probabilistic-control-plane.md).
 Templates contain placeholder images and Secret references; no deployment is implied.
 
+With `--inspect-port 9091` enabled in the controller pod, connect from your laptop:
+
+```sh
+jevernetes remote --context YOUR_CONTEXT --namespace jevernetes --watch
+jevernetes remote --context YOUR_CONTEXT --namespace jevernetes --incident INCIDENT_ID
+```
+
+The CLI shows stats, recent incidents and retained notification details over Kubernetes
+port-forwarding. It uses your kubeconfig and makes no classification requests. See
+[remote inspection](docs/controller.md#inspect-a-remote-controller-from-the-cli) for access requirements.
+
 ## Compatibility
 
 The **Python companion is legacy** and remains available for the dashboard, interactive TUI, semantic search, review overrides, context fetching, and investigation-prompt export:

@@ -146,6 +146,8 @@
                   "webhook",
                   "--listen",
                   "0.0.0.0:9090",
+                  "--inspect-port",
+                  "9091",
                   "--selector",
                   "app!=jevernetes"
                 ],

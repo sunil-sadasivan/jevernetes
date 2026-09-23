@@ -69,3 +69,16 @@ The unauthenticated metrics/health endpoint exposes aggregate counters only; res
 network access. One writer/replica owns a local persistent volume. See
 [controller limits and maintenance](docs/controller.md) for retention, crash windows,
 clock assumptions, safe backup/requeue practices and incomplete-coverage semantics.
+
+Optional `--inspect-port` enables read-only operational details on pod loopback only,
+separate from health/metrics. The deployment base enables port 9091 without a Service
+port. `jevernetes remote` reaches it through a Kubernetes-authenticated WebSocket
+port-forward and opens no local listening socket. Operator access to pods/portforward
+is sensitive and should be scoped to controller pods/namespaces; same-pod processes
+and exec-capable identities can also access loopback. Do not use host networking.
+Inspection returns bounded incident counters and the existing redacted notification
+payload; it does not read credentials, change state or trigger provider requests.
+Inspection output and exported JSON remain sensitive operational data. Redaction is
+best effort. Limits are 1 KiB request, 256 KiB response and one active request; busy
+state yields a read error rather than stopping ingestion. The public metrics endpoint
+does not expose these incident routes.
