@@ -2,7 +2,7 @@
 use crate::{
     events::{Framer, Line, Parser, Source, hash},
     report::gap,
-    runtime::{Sender, ingest},
+    runtime::{Sender, ingest_with_read_timeout},
 };
 use chrono::{DateTime, Utc};
 use futures::StreamExt;
@@ -217,26 +217,26 @@ pub async fn snapshot(
                 sender.metrics.lock().expect("metrics lock").streams_started += 1;
                 // Client-side byte cap preserves the ability to detect excess input.
                 let lp = params(&options, &target, false);
-                let read = tokio::time::timeout(Duration::from_secs(30), async {
-                    let reader = api.log_stream(&target.pod, &lp).await.map_err(|_| ())?;
-                    ingest(
-                        reader.compat(),
-                        target.source.clone(),
-                        options.max_bytes,
-                        &sender,
-                        &stop,
-                    )
-                    .await;
-                    Ok::<_, ()>(())
-                });
                 let result = tokio::select! {
                     _ = stop.cancelled() => {
                         gap(&sender.metrics, &target.source, "limited", "Snapshot stopped during log read");
                         return;
                     }
-                    result = read => result,
+                    result = tokio::time::timeout(Duration::from_secs(30), api.log_stream(&target.pod, &lp)) => result,
                 };
-                if !matches!(result, Ok(Ok(()))) {
+                if let Ok(Ok(reader)) = result {
+                    // Ingest owns cancellation and flushing. Do not cancel its queue waits
+                    // from an outer transport timeout (or a second cancellation select).
+                    ingest_with_read_timeout(
+                        reader.compat(),
+                        target.source.clone(),
+                        options.max_bytes,
+                        &sender,
+                        &stop,
+                        Some(Duration::from_secs(30)),
+                    )
+                    .await;
+                } else {
                     gap(
                         &sender.metrics,
                         &target.source,
@@ -362,8 +362,13 @@ async fn follow(
             continue;
         }
         let mut lp = params(&options, &target, true);
-        if let Some(stamp) = &cursor.timestamp {
-            lp.since_time = stamp.parse().ok();
+        if let Some(stamp) = cursor.at {
+            // kube-core rounds sinceTime to the nearest second. Floor only the
+            // request so subsecond evidence is replayed; keep the precise cursor.
+            lp.since_time = stamp
+                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+                .parse()
+                .ok();
             lp.since_seconds = None;
             lp.tail_lines = None;
         }
@@ -687,13 +692,14 @@ mod tests {
         let pod = crate::test_support::pod();
         let parsed: Pod = serde_json::from_value(pod.clone()).unwrap();
         let target = targets(&parsed, "synthetic", true, false).remove(0);
-        let old = "2026-09-20T12:00:00Z repeated\n";
-        let new = "2026-09-20T12:00:01Z next\n";
+        let old = "2026-09-20T12:00:00.750Z repeated\n";
+        let earlier = "2026-09-20T12:00:00.500Z already seen\n";
+        let new = "2026-09-20T12:00:00.800Z next\n";
         let (url, server) = crate::test_support::http(vec![
             (200, pod.to_string()),
             (200, format!("{old}{old}")),
             (200, pod.to_string()),
-            (200, format!("{old}{old}{old}{new}")),
+            (200, format!("{earlier}{old}{old}{old}{new}")),
         ])
         .await;
         let (sender, mut rx) = sender();
@@ -719,10 +725,92 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(events.iter().filter(|e| e.text == "repeated").count(), 3);
-        assert_eq!(metrics.lock().unwrap().duplicates, 2);
-        assert!(requests[3].contains("sinceTime="));
+        assert_eq!(events.iter().filter(|e| e.text == "next").count(), 1);
+        assert_eq!(metrics.lock().unwrap().duplicates, 3);
+        assert!(
+            requests[3].contains("sinceTime=2026-09-20T12%3A00%3A00Z"),
+            "{}",
+            requests[3]
+        );
         assert!(!requests[3].contains("sinceSeconds="));
         assert!(!requests[3].contains("tailLines="));
+    }
+    #[tokio::test]
+    async fn snapshot_backpressure_does_not_expire_transport_deadline() {
+        snapshot_with_full_queue(false).await;
+    }
+    #[tokio::test]
+    async fn snapshot_cancellation_accounts_for_buffered_evidence() {
+        snapshot_with_full_queue(true).await;
+    }
+    async fn snapshot_with_full_queue(cancel: bool) {
+        let pod = crate::test_support::pod();
+        let list = serde_json::json!({"apiVersion":"v1", "kind":"PodList",
+            "metadata":{}, "items":[pod.clone()]})
+        .to_string();
+        let (url, server) = crate::test_support::http(vec![
+            (200, list),
+            (200, pod.to_string()),
+            (200, "one\ntwo\nthree\n".into()),
+        ])
+        .await;
+        let (mut sender, _) = sender();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        sender.tx = tx;
+        let metrics = sender.metrics.clone();
+        let stop = CancellationToken::new();
+        let task = tokio::spawn(snapshot(
+            client(url),
+            "synthetic".into(),
+            options(),
+            sender,
+            stop.clone(),
+        ));
+        server.await.unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while rx.is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        if cancel {
+            stop.cancel();
+            tokio::time::timeout(Duration::from_secs(1), task)
+                .await
+                .unwrap()
+                .unwrap();
+            let m = metrics.lock().unwrap();
+            assert_eq!(m.received, 3);
+            assert_eq!(m.dropped, 2);
+            assert!(
+                m.coverage
+                    .iter()
+                    .any(|c| c.warnings.iter().any(|w| w.contains("queued evidence")))
+            );
+            return;
+        }
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(31)).await;
+        tokio::task::yield_now().await;
+        assert!(
+            !task.is_finished(),
+            "healthy queue pressure must not cancel collection"
+        );
+        tokio::time::resume();
+        let mut texts = Vec::new();
+        while let Some(event) = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .unwrap()
+        {
+            texts.push(event.text);
+        }
+        task.await.unwrap();
+        assert_eq!(texts, ["one", "two", "three"]);
+        let m = metrics.lock().unwrap();
+        assert_eq!(m.dropped, 0);
+        assert_eq!(m.queue_high_water, 1);
+        assert!(m.coverage.iter().all(|c| c.status != "error"));
     }
     #[tokio::test]
     async fn watch_discovery_starts_bounded_streams_and_cancels() {

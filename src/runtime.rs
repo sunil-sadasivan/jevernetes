@@ -32,9 +32,29 @@ impl Sender {
         m.queue_high_water = m.queue_high_water.max(m.queue_depth);
     }
     pub async fn send(&self, event: Event, stop: &CancellationToken) -> bool {
-        tokio::select! { biased; _=stop.cancelled()=>false, result=self.tx.reserve()=>{
-            if let Ok(permit)=result {permit.send(event);let mut m=self.metrics.lock().expect("metrics lock");m.received+=1;m.queue_depth=self.tx.max_capacity()-self.tx.capacity();m.queue_high_water=m.queue_high_water.max(m.queue_depth);true}else{false}
-        }}
+        let permit = tokio::select! {
+            biased;
+            _ = stop.cancelled() => None,
+            result = self.tx.reserve() => result.ok(),
+        };
+        let sent = if let Some(permit) = permit {
+            permit.send(event);
+            true
+        } else {
+            gap(
+                &self.metrics,
+                &event.source,
+                "limited",
+                "Collection stopped before queued evidence could be delivered",
+            );
+            false
+        };
+        let mut m = self.metrics.lock().expect("metrics lock");
+        m.received += 1;
+        m.dropped += u64::from(!sent);
+        m.queue_depth = self.tx.max_capacity() - self.tx.capacity();
+        m.queue_high_water = m.queue_high_water.max(m.queue_depth);
+        sent
     }
 }
 pub struct AnalyzeOptions {
@@ -184,58 +204,116 @@ pub async fn analyze(
 }
 /// Snapshot/file reader: finite decompressed input, backpressure instead of dropping.
 pub async fn ingest<R: AsyncRead + Unpin>(
-    mut reader: R,
+    reader: R,
     source: Source,
     max_bytes: u64,
     sender: &Sender,
     stop: &CancellationToken,
 ) {
+    ingest_with_read_timeout(reader, source, max_bytes, sender, stop, None).await;
+}
+
+async fn read_chunk<R: AsyncRead + Unpin>(
+    reader: &mut R,
+    buffer: &mut [u8],
+    timeout: Option<Duration>,
+) -> std::io::Result<usize> {
+    match timeout {
+        Some(timeout) => tokio::time::timeout(timeout, reader.read(buffer))
+            .await
+            .unwrap_or_else(|_| Err(std::io::ErrorKind::TimedOut.into())),
+        None => reader.read(buffer).await,
+    }
+}
+
+/// Only time spent reading counts toward this deadline, never queue backpressure.
+pub(crate) async fn ingest_with_read_timeout<R: AsyncRead + Unpin>(
+    mut reader: R,
+    source: Source,
+    max_bytes: u64,
+    sender: &Sender,
+    stop: &CancellationToken,
+    read_timeout: Option<Duration>,
+) {
     let mut parser = Parser::new(source.clone());
     let mut framer = Framer::default();
     let mut read = 0;
     let mut buffer = [0; 8192];
+    let mut interrupted = false;
+    let mut incomplete = false;
     loop {
         let want = ((max_bytes - read).min(buffer.len() as u64)) as usize;
-        if want == 0 {
-            let mut probe = [0];
-            let more = tokio::select! {_=stop.cancelled()=>false,r=reader.read(&mut probe)=>!matches!(r,Ok(0))};
-            if more {
-                gap(
-                    &sender.metrics,
-                    &source,
-                    "limited",
-                    "Decompressed input byte limit reached",
-                );
+        // At the cap, probe one byte for excess input using the same stop/deadline path.
+        let n = tokio::select! {
+            biased;
+            _ = stop.cancelled() => {
+                gap(&sender.metrics, &source, "limited", "Collection stopped before end of input");
+                interrupted = true;
+                break;
             }
+            _ = sender.tx.closed() => {
+                gap(&sender.metrics, &source, "limited", "Analysis stopped before end of input");
+                interrupted = true;
+                break;
+            }
+            result = read_chunk(&mut reader, &mut buffer[..want.max(1)], read_timeout) => match result {
+                Ok(n) => n,
+                Err(error) => {
+                    let warning = if error.kind() == std::io::ErrorKind::TimedOut {
+                        "Input read timed out"
+                    } else {
+                        "Input read failed"
+                    };
+                    gap(&sender.metrics, &source, "error", warning);
+                    incomplete = true;
+                    break;
+                }
+            }
+        };
+        if n == 0 {
             break;
         }
-        let n = tokio::select! {_=stop.cancelled()=>{gap(&sender.metrics,&source,"limited","Collection stopped before end of input");break;},r=reader.read(&mut buffer[..want])=>match r{Ok(n)=>n,Err(_)=>{gap(&sender.metrics,&source,"error","Input read failed");break;}}};
-        if n == 0 {
+        if want == 0 {
+            gap(
+                &sender.metrics,
+                &source,
+                "limited",
+                "Decompressed input byte limit reached",
+            );
+            incomplete = true;
             break;
         }
         read += n as u64;
         for line in framer.push(&buffer[..n]) {
-            if let Some(event) = parser.feed(line)
-                && !sender.send(event, stop).await
-            {
-                return;
+            if let Some(event) = parser.feed(line) {
+                if interrupted {
+                    sender.emit(event);
+                } else {
+                    interrupted = !sender.send(event, stop).await;
+                }
             }
+        }
+        // Finish only the bounded chunk already read; never wait for capacity after stopping.
+        if interrupted {
+            break;
         }
     }
     if let Some(mut line) = framer.finish() {
-        line.truncated |= read == max_bytes || stop.is_cancelled();
+        line.truncated |= interrupted || incomplete;
         if let Some(event) = parser.feed(line) {
-            if stop.is_cancelled() {
+            if interrupted {
                 sender.emit(event);
             } else {
-                let _ = sender.send(event, stop).await;
+                interrupted = !sender.send(event, stop).await;
             }
         }
     }
     if let Some(mut event) = parser.flush() {
-        if stop.is_cancelled() {
+        if interrupted || incomplete {
             event.truncated = true;
             event.group_id = crate::grouping::group_id(&event);
+        }
+        if interrupted {
             sender.emit(event);
         } else {
             let _ = sender.send(event, stop).await;
@@ -247,6 +325,136 @@ mod tests {
     use super::*;
     use crate::report::Metrics;
     use std::sync::{Arc, Mutex};
+    async fn interrupted_ingest<R: AsyncRead + Unpin>(reader: R, close: bool, expected: u64) {
+        let metrics = Arc::new(Mutex::new(Metrics::default()));
+        let (tx, mut rx) = mpsc::channel(1);
+        let sender = Sender {
+            tx,
+            metrics: metrics.clone(),
+        };
+        let stop = CancellationToken::new();
+        let mut ingest = Box::pin(ingest(reader, Source::new(), 1000, &sender, &stop));
+        assert!(futures::poll!(&mut ingest).is_pending());
+        assert_eq!(rx.len(), 1);
+        if close {
+            rx.close();
+        } else {
+            stop.cancel();
+        }
+        tokio::time::timeout(Duration::from_secs(1), ingest)
+            .await
+            .unwrap();
+        let mut report = Report::new(10);
+        while let Ok(mut event) = rx.try_recv() {
+            event.judgment.importance = Importance::Uncertain;
+            report.record(event);
+        }
+        assert_eq!(report.total, 1);
+        let value = report.value(
+            &metrics,
+            &crate::jev::Usage::new(0.0, 0.0),
+            serde_json::json!({}),
+            true,
+            false,
+            0.0,
+        );
+        assert_eq!(value["summary"]["complete_within_window"], false);
+        let m = metrics.lock().unwrap();
+        assert_eq!(m.received, expected);
+        assert_eq!(m.dropped, expected - 1);
+        assert!(
+            m.coverage
+                .iter()
+                .any(|c| c.status == "limited" && !c.warnings.is_empty())
+        );
+        assert_eq!(m.queue_high_water, 1);
+    }
+    #[tokio::test]
+    async fn one_slot_cancellation_accounts_for_current_and_buffered_evidence() {
+        interrupted_ingest(&b"one\ntwo\nthree\nfour\nfive"[..], false, 5).await;
+    }
+    #[tokio::test]
+    async fn one_slot_closed_consumer_accounts_for_current_and_buffered_evidence() {
+        interrupted_ingest(&b"one\ntwo\nthree\nfour\nfive"[..], true, 5).await;
+    }
+    #[tokio::test]
+    async fn cancellation_during_final_flush_records_loss() {
+        interrupted_ingest(&b"one\ntwo\n"[..], false, 2).await;
+        interrupted_ingest(&b"one\ntwo"[..], false, 2).await;
+    }
+    #[tokio::test]
+    async fn gzip_and_open_stdin_cancellation_account_for_buffered_evidence() {
+        use tokio::io::AsyncWriteExt;
+        let input = b"one\ntwo\nthree\nfour\nfive";
+        let mut encoder = async_compression::tokio::write::GzipEncoder::new(Vec::new());
+        encoder.write_all(input).await.unwrap();
+        encoder.shutdown().await.unwrap();
+        let compressed = encoder.into_inner();
+        let decoder = async_compression::tokio::bufread::GzipDecoder::new(&compressed[..]);
+        interrupted_ingest(decoder, false, 5).await;
+        // An open pipe models stdin without EOF; shutdown must not wait for its writer.
+        let (mut writer, reader) = tokio::io::duplex(128);
+        writer.write_all(input).await.unwrap();
+        interrupted_ingest(reader, false, 5).await;
+    }
+    #[tokio::test(start_paused = true)]
+    async fn read_deadline_flushes_partial_evidence_including_at_byte_cap() {
+        use tokio::io::AsyncWriteExt;
+        for max_bytes in [1000, 13] {
+            let (mut writer, reader) = tokio::io::duplex(128);
+            writer.write_all(b"one\n  partial").await.unwrap();
+            let (tx, mut rx) = mpsc::channel(1);
+            let sender = Sender {
+                tx,
+                metrics: Arc::new(Mutex::new(Metrics::default())),
+            };
+            let stop = CancellationToken::new();
+            let mut task = Box::pin(ingest_with_read_timeout(
+                reader,
+                Source::new(),
+                max_bytes,
+                &sender,
+                &stop,
+                Some(Duration::from_secs(30)),
+            ));
+            assert!(futures::poll!(&mut task).is_pending());
+            tokio::time::advance(Duration::from_secs(31)).await;
+            tokio::time::timeout(Duration::from_secs(1), task)
+                .await
+                .unwrap();
+            let event = rx.try_recv().unwrap();
+            assert_eq!(event.text, "one\n  partial");
+            assert!(event.truncated);
+            let m = sender.metrics.lock().unwrap();
+            assert_eq!(m.dropped, 0);
+            assert!(
+                m.coverage
+                    .iter()
+                    .any(|c| c.status == "error"
+                        && c.warnings.iter().any(|w| w.contains("timed out")))
+            );
+        }
+    }
+    #[tokio::test]
+    async fn cancellation_at_byte_cap_records_a_gap_and_flushes() {
+        use tokio::io::AsyncWriteExt;
+        let (mut writer, reader) = tokio::io::duplex(128);
+        writer.write_all(b"one\n").await.unwrap();
+        let (tx, mut rx) = mpsc::channel(1);
+        let sender = Sender {
+            tx,
+            metrics: Arc::new(Mutex::new(Metrics::default())),
+        };
+        let stop = CancellationToken::new();
+        let mut task = Box::pin(ingest(reader, Source::new(), 4, &sender, &stop));
+        assert!(futures::poll!(&mut task).is_pending());
+        stop.cancel();
+        tokio::time::timeout(Duration::from_secs(1), task)
+            .await
+            .unwrap();
+        assert!(rx.try_recv().unwrap().truncated);
+        assert!(sender.metrics.lock().unwrap().coverage_gaps > 0);
+    }
     #[tokio::test]
     async fn queue_bounds_drops_and_byte_limits() {
         let metrics = Arc::new(Mutex::new(Metrics::default()));
