@@ -8,7 +8,7 @@ Rust `jevernetes` is the default for ingestion, classification and reports. The 
 | Timestamps, continuation stacks, redaction, stable IDs | Implemented | IDs intentionally differ from Python and are stable only for identical parsed occurrence inputs; live quiet flush may split delayed traces |
 | Typed importance/severity/category + confidence | Implemented, with `fraud` | No semantic-search relevance API in Rust |
 | Strict validation, safe errors, HTTP budgets/usage | Implemented | One provider lane; no `--workers`; default rates are legacy assumptions |
-| Exact source grouping, successful judgment reuse | Implemented | Bounded five-minute cache in files and live; no persistent cache; large snapshots may reclassify evicted groups |
+| Exact source grouping, successful judgment reuse | Implemented | Bounded session cache in files/k8s; explicit controller mode adds versioned SQLite TTL reuse; large snapshots may reclassify evicted groups |
 | Offline rules | Implemented | No saved expected/acknowledged overrides applied by Rust |
 | Kubernetes current/previous regular/init/ephemeral snapshots | Implemented through kube-rs | Sequential reads; conservative partial coverage even on successful API responses |
 | Long-running discovery/follow/reconnect | Implemented through paginated watch/log API | Bounded active targets; omitted targets reconsidered on updates/5-minute resync; no durable cursor, exactly-once or replica coordination |
@@ -27,4 +27,4 @@ Unsupported flags fail explicitly in Rust. No `--tui`, dashboard, review, search
 2. Port relevance search and its frozen evidence windows, occurrence metadata, TTL cache, separate budget/usage, cancellation and unevaluated-evidence behavior. Port reversible reviews and private atomic rules storage without changing literal source scoping. Port bounded context fetch with replacement/restart checks and investigation prompt evidence limits. Use the existing search/review/context tests as acceptance fixtures, plus adapter tests against Rust.
 3. Port/replace terminal rendering and the loopback HTTP/API implementation, preserving browser Host/Origin/token/CSP controls, safe text rendering, private files and all keyboard/search interactions. Run UI and signal/cleanup regression suites. Provide a documented report/rule migration path, then remove the remaining Python package, Python packaging/dependencies and obsolete CI jobs in a separately reviewed change.
 
-The next sequential deliverable may introduce durable probabilistic controller state; it must not claim these UI/workflow gaps have disappeared. No broader product-opportunity document is included here.
+The second stacked deliverable adds [durable probabilistic controller state and notification](controller.md) and the [control-plane product/opportunity design](probabilistic-control-plane.md). These additions do not close the legacy UI/workflow gaps.

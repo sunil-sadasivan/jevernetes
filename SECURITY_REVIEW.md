@@ -34,3 +34,28 @@ Dependabot, TruffleHog, Bandit, pip-audit and CodeQL are configured for ongoing 
 ## Rust migration scope (2026-09-23)
 
 The initial findings above apply to the legacy Python release. The Rust migration adds typed System One validation (including fraud), bounded incremental parsing/private-key suppression, redirect rejection, controlled errors, bounded session caches/queues/cursors, API-based read-only Kubernetes collection and private atomic report writes. Synthetic regression coverage is recorded in VALIDATION.md. The migration has not received an independent security audit, live-cluster penetration test, performance qualification or provider-backed semantic accuracy evaluation. The Python/browser security jobs remain enabled; Cargo updates and Rust lint/test/build checks are added. A dedicated Rust dependency advisory audit and authenticated proxy/exec-plugin deployment review remain future security validation work.
+
+## Probabilistic controller scope (2026-09-23)
+
+The second Rust deliverable adds SQLite state, deterministic advisory policy, transactional
+outbox delivery, HTTPS/stdout sinks and aggregate health/metrics endpoints. It extends beyond
+the initial legacy loopback-only deployment scope. Local review checked exact contract-scoped
+reuse, rejection of unsafe cache entries, transaction rollback and capacity failure, writer
+locking, retry/dead-letter limits, redacted/allowlisted payloads, sensitive headers, redirect
+rejection, bounds, read-only namespaced RBAC and non-root container settings. Synthetic tests
+cover these paths; this is not an independent audit, a live deployment, or proof of semantic
+detection accuracy. The state volume, webhook destination and metrics network exposure require
+operator controls described in [controller operations](docs/controller.md). No real credentials,
+private endpoints, deployed image tags or runtime state are included in the artifacts.
+
+## Controller independent-review fixes (2026-09-23)
+
+Focused regressions reproduced report/state path collisions, Review-to-Notify cooldown
+suppression after reopen, and real stdout backpressure starving a single-worker Tokio
+blocking pool. Fixes reject database/sidecar path aliases before state or cluster access,
+persist the last enqueued decision in schema 2 with transactional schema-1 migration, and
+isolate stdout in a single bounded dedicated writer. Injected blocked-write/flush tests
+cover cancellation, repeated retries, state progress, dead letters and runtime shutdown.
+Migration tests cover pruned payloads, already-suppressed replay, rollback and unsupported
+versions. Path validation assumes private directories without hostile concurrent mutation.
+No live cluster, credentials, deployment or external notification destination was used.

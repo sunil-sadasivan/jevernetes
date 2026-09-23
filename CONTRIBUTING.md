@@ -51,3 +51,14 @@ Dependabot checks Cargo, GitHub Actions and Python development/build requirement
 - CodeQL runs security-extended analysis for Python and JavaScript, publishing findings in GitHub code scanning.
 
 Actions are pinned by commit. TruffleHog's scanner image version is also pinned; update its `version` input alongside its action pin. Only CodeQL's upload job receives `security-events: write`. Pull requests use `pull_request`, never `pull_request_target`; checkout credentials are not persisted. Do not broadly suppress detectors to make scans pass.
+
+## Controller changes
+
+Read [controller semantics](docs/controller.md) before changing keys, policy or outbox state.
+Bump the decision contract for semantic changes not captured by prompt hashing; add an explicit
+migration before changing SQLite schema 1. Never reuse failed/unknown/truncated judgments as
+routine, refresh TTL on a cache hit, hold state locks across I/O, or drop pending/dead outbox rows
+to satisfy capacity. Tests inject timestamps and jitter for deterministic replay/retry checks.
+Run the synthetic controller smoke and `python3 tools/check_controller_artifacts.py`; if
+installed, `kubectl kustomize deploy/base` performs offline rendering without cluster access.
+Container image selection/build and cluster validation are separate operator tasks.

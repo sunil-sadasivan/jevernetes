@@ -20,6 +20,12 @@ jobs:
       - run: cargo clippy --locked --all-targets --all-features -- -D warnings
       - run: cargo test --locked --all-features
       - run: cargo build --locked --release
+      - name: Offline controller smoke (synthetic webhook only)
+        run: cargo test --locked --all-features controller::tests::offline_controller_smoke_and_shutdown
+      - name: Controller artifact static checks
+        run: |
+          python3 tools/check_controller_artifacts.py
+          if command -v kubectl >/dev/null; then kubectl kustomize deploy/base > /tmp/controller-manifests.yaml; fi
       - name: Offline synthetic CLI smoke
         run: |
           printf 'ERROR synthetic failure\nINFO ready\n' | target/release/jevernetes files - --offline --json > /tmp/jevernetes-smoke.json

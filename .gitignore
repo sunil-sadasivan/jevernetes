@@ -22,3 +22,11 @@ kubeconfig.*
 .review-rules.json
 .security-venv/
 /target/
+
+# Controller runtime state and SQLite sidecars
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.db.lock
+*.sqlite.lock
