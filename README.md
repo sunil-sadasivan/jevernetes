@@ -1,6 +1,6 @@
 # Jevernetes
 
-**Jevernetes uses Rust to collect and analyze Kubernetes logs.** The `jevernetes` binary provides bounded streaming ingestion, local offline rules, typed [Jev](https://docs.typesafe.ai) analysis, and JSON reports. Collection is read-only and judgments are advisory.
+**Jevernetes uses Rust to collect and analyze Kubernetes logs.** The `jevernetes` binary provides bounded streaming ingestion, local offline rules, typed [Jev](https://docs.typesafe.ai) analysis, an interactive terminal UI, and JSON reports. Collection is read-only and judgments are advisory.
 
 ## Quick start
 
@@ -21,15 +21,18 @@ To install the default binary:
 cargo install --path . --locked
 jevernetes k8s --offline --namespace example --since 1h --output .runs/snapshot.json
 jevernetes k8s -f --offline --tail 0 --max-streams 64 --output .runs/live.json
+jevernetes k8s -f --tail 0 --tui
 ```
 
 Kubernetes access uses the Rust Kubernetes client with your trusted kubeconfig, or service-account configuration with `--in-cluster`. No `kubectl` or Python is needed for the Rust runtime. Offline file analysis makes no network requests. Online analysis requires `TYPESAFE_API_KEY`, `TYPESAFEAI_API_KEY`, or `TYPESAFE_API_KEY_FILE`; omit `--offline` to enable it. Never put credentials into command-line arguments or git.
 
 Live mode reports queue pressure and coverage gaps on stderr, batches analysis, and saves a final report on SIGINT/SIGTERM or a configured duration/budget stop. Reports contain a bounded retained window, cumulative counters, and usage estimates. Kubernetes reports conservatively report restricted history; exit code 2 means partial coverage, not a crash.
 
+Use `--tui` for clickable Important, Routine, Needs Review, All, and Search tabs. Press `/` to ask Jev, `f` to find exact text, Enter for event details, and `q` to stop and exit. Completed collection stays open for browsing and saves its report on exit. Search freezes the retained window and has separate usage and budgets. Add `--offline` for local rules and exact search without API calls. See [terminal usage](docs/usage.md#interactive-terminal).
+
 ## Compatibility
 
-The **Python companion is legacy** and remains available for the dashboard, interactive TUI, semantic search, review overrides, context fetching, and investigation-prompt export:
+The **Python companion is legacy** and remains available for the dashboard, review overrides, context fetching, investigation-prompt export, and its older terminal UI:
 
 ```sh
 python3 -m jevernetes dashboard

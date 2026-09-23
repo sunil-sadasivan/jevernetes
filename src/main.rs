@@ -3,8 +3,10 @@ use jevernetes::{
     events::{MAX_INPUT, Source, console},
     jev::{Jev, Usage},
     kubernetes::{self, Options},
+    progress::Progress,
     report::{Metrics, gap, write_report},
     runtime::{self, AnalyzeOptions, Sender},
+    tui,
 };
 use serde_json::json;
 use std::{
@@ -45,7 +47,7 @@ fn since(s: &str) -> Result<i64, String> {
     name = "jevernetes",
     version,
     about = "Bounded read-only log analysis; Rust runtime",
-    after_help = "Dashboard, TUI, search, reviews and context remain in the explicitly legacy Python companion. See docs/migration.md."
+    after_help = "Use --tui for interactive tabs, event details and exact/Jev search. Dashboard, reviews and extra context remain in the legacy Python companion."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -54,6 +56,9 @@ struct Cli {
     offline: bool,
     #[arg(long, global = true)]
     json: bool,
+    /// Interactive terminal with filters, event details and exact/Jev search.
+    #[arg(long, global = true, conflicts_with = "json")]
+    tui: bool,
     #[arg(long, global = true)]
     output: Option<PathBuf>,
     #[arg(long, global = true)]
@@ -113,7 +118,10 @@ enum Command {
         duration: u64,
     },
 }
-fn signal(stop: CancellationToken) -> Result<tokio::task::JoinHandle<()>, &'static str> {
+fn signal(
+    stop: CancellationToken,
+    interrupted: CancellationToken,
+) -> Result<tokio::task::JoinHandle<()>, &'static str> {
     // Install handlers before starting collection, not on a later task poll.
     #[cfg(unix)]
     {
@@ -124,6 +132,7 @@ fn signal(stop: CancellationToken) -> Result<tokio::task::JoinHandle<()>, &'stat
                 .map_err(|_| "Cannot install SIGINT handler")?;
         Ok(tokio::spawn(async move {
             tokio::select! { _ = term.recv() => (), _ = interrupt.recv() => () }
+            interrupted.cancel();
             stop.cancel();
         }))
     }
@@ -131,6 +140,7 @@ fn signal(stop: CancellationToken) -> Result<tokio::task::JoinHandle<()>, &'stat
     {
         Ok(tokio::spawn(async move {
             let _ = tokio::signal::ctrl_c().await;
+            interrupted.cancel();
             stop.cancel();
         }))
     }
@@ -164,6 +174,11 @@ fn key() -> Result<String, &'static str> {
     )
 }
 async fn run(cli: Cli) -> Result<i32, &'static str> {
+    if cli.tui {
+        tui::validate(
+            matches!(&cli.command, Command::Files { paths, .. } if paths.iter().any(|p| p == "-")),
+        )?;
+    }
     let started = Instant::now();
     let metrics = Arc::new(Mutex::new(Metrics::default()));
     let stop = CancellationToken::new();
@@ -191,7 +206,13 @@ async fn run(cli: Cli) -> Result<i32, &'static str> {
         },
         max_events: cli.max_events as u64,
         live,
-        print_events: live && !cli.json,
+        print_events: live && !cli.json && !cli.tui,
+    };
+    let progress = cli.tui.then(|| Progress::new(opts.retain, usage.clone()));
+    let search_client = if cli.tui {
+        client.as_ref().map(Jev::search_client)
+    } else {
+        None
     };
     let mut scope = json!({"kind":"files"});
     let mut interrupted = false;
@@ -226,14 +247,32 @@ async fn run(cli: Cli) -> Result<i32, &'static str> {
     } else {
         None
     };
-    let signals = signal(stop.clone())?;
-    let consumer = tokio::spawn(runtime::analyze(
+    let screen = if cli.tui {
+        Some(tui::Screen::enter()?)
+    } else {
+        None
+    };
+    let interrupt = CancellationToken::new();
+    let signals = signal(stop.clone(), interrupt.clone())?;
+    let consumer = tokio::spawn(runtime::analyze_observed(
         rx,
         metrics.clone(),
         client,
         opts,
         stop.clone(),
+        progress.clone(),
     ));
+    let ui = screen.map(|screen| {
+        tokio::spawn(tui::browse(
+            screen,
+            progress.as_ref().expect("TUI progress").clone(),
+            metrics.clone(),
+            search_client,
+            cli.offline,
+            stop.clone(),
+            interrupt.clone(),
+        ))
+    });
     let producer_stop = stop.clone();
     let producer_metrics = metrics.clone();
     let producer = tokio::spawn(async move {
@@ -326,7 +365,7 @@ async fn run(cli: Cli) -> Result<i32, &'static str> {
     let status_stop = stop.clone();
     let status_metrics = metrics.clone();
     let status = tokio::spawn(async move {
-        if live {
+        if live && !cli.tui {
             loop {
                 tokio::select! {_=status_stop.cancelled()=>break,_=tokio::time::sleep(Duration::from_secs(10))=>{let m=status_metrics.lock().expect("metrics lock");eprintln!("[tail] streams={} queue={} high_water={} dropped={} reconnects={} gaps={}",m.active_streams,m.queue_depth,m.queue_high_water,m.dropped,m.reconnects,m.coverage_gaps);}}
             }
@@ -336,12 +375,29 @@ async fn run(cli: Cli) -> Result<i32, &'static str> {
         gap(&metrics, &Source::new(), "error", "Collector task failed");
         stop.cancel();
     }
-    let (report, client) = consumer.await.map_err(|_| "Analysis task failed")?;
-    if signals.is_finished() {
-        interrupted = true;
-    }
-    signals.abort();
+    let result = consumer.await;
     status.abort();
+    if let Some(progress) = &progress {
+        progress
+            .lock()
+            .expect("progress lock")
+            .finish(if result.is_err() {
+                "Failed"
+            } else {
+                "Complete"
+            });
+    }
+    if result.is_err() {
+        stop.cancel();
+        interrupt.cancel();
+    }
+    let ui_result = match ui {
+        Some(ui) => ui.await.unwrap_or(Err("Terminal UI task failed")),
+        None => Ok(false),
+    };
+    interrupted |= interrupt.is_cancelled() || matches!(ui_result, Ok(true));
+    signals.abort();
+    let (report, client) = result.map_err(|_| "Analysis task failed")?;
     let usage = client.map(|c| c.usage).unwrap_or(usage);
     let value = report.value(
         &metrics,
@@ -354,6 +410,7 @@ async fn run(cli: Cli) -> Result<i32, &'static str> {
     if let Some(path) = cli.output {
         write_report(&path, &value)?;
     }
+    ui_result?;
     if cli.json {
         println!(
             "{}",

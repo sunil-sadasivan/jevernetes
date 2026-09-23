@@ -28,7 +28,37 @@ One async analysis lane batches up to `--batch-size` events (default 8, maximum 
 
 `--queue-size` defaults to 1,024. Files and snapshots wait for capacity. Live streams keep draining; full queues drop analysis events and increment cumulative `dropped` and queue high-water counters. Dropped payloads are not retained. `unfollowed_observations` counts omitted-target observations (not distinct currently omitted containers). Status is printed every ten seconds; detailed metrics appear in the final report. `--max-streams` defaults to 64. Omitted streams produce coverage gaps and are reconsidered on pod updates or a five-minute paginated resync. Narrow namespace/selector scope before increasing limits for large clusters. `--retain-events` defaults to 2,000 live events; evictions are counted. Coverage history retains 500 records plus cumulative gap/omission counts. Reconnect cursors retain up to 4,096 distinct fingerprints at the latest timestamp; overflow favors possible duplicates and increments `dedup_overflows`.
 
-SIGINT/SIGTERM cancels discovery, requests and reconnect waits, joins producers, drains queued events (unrequested online work becomes unknown), then writes the final report. `--duration` stops Kubernetes collection after the specified seconds. Reports are written at shutdown, not continuously checkpointed. `--json` reserves stdout for the final JSON report; live progress remains on stderr. Human output is intentionally simple and has no pending-row UI.
+SIGINT/SIGTERM cancels discovery, requests and reconnect waits, joins producers, drains queued events (unrequested online work becomes unknown), then writes the final report. `--duration` stops Kubernetes collection after the specified seconds. Reports are written at shutdown, not continuously checkpointed. `--json` reserves stdout for the final JSON report; plain live progress remains on stderr. With `--tui`, progress and pending analysis events appear in the terminal browser instead.
+
+## Interactive terminal
+
+```sh
+jevernetes k8s -f --tail 0 --tui
+jevernetes k8s -f --tail 0 --namespace example --offline --tui --output .runs/live.json
+jevernetes files examples/mixed.log --offline --tui
+```
+
+The native Rust TUI uses the same collector and classifier as plain output. It requires interactive stdin/stdout and a usable `TERM`. `--tui` rejects `--json` and log input from `-` before collection begins.
+
+| Key / action | Behavior |
+| --- | --- |
+| `1`–`5`, Tab, left/right, or click a tab | Important, Routine, Needs Review, All, Search |
+| Up/down, `j`/`k`, PgUp/PgDn, Home/End, mouse wheel | Move selection or scroll details |
+| Enter / Esc | Open a frozen event detail / go back |
+| `/` or `?` | Ask Jev about all retained events, including Routine and pending |
+| `f` | Local case-insensitive literal substring search |
+| Tab in query editor | Toggle Jev/exact search |
+| Ctrl+B in query editor | Cycle 4, 16, or 64 search batches (8 new groups per batch) |
+| Ctrl+U in query editor | Clear the query; arrows/Home/End edit at the cursor |
+| `i` in search results | Inspect every occurrence of the selected group |
+| `x` in search results | Cancel search, preserving results so far |
+| `q` / Ctrl+C | Stop collection and search, restore the terminal, and write `--output` |
+
+Completed files, snapshots, and live duration/budget stops remain open for browsing until quit. SIGINT/SIGTERM exits and writes the final report; Ctrl+C returns 130. `q` returns the normal report status. Selection follows event identity as live retention evicts older events. All shows the current batch awaiting classification; queued and dropped evidence is represented by counters, not invented event rows. Details include the complete retained multiline event, source identity, confidence, truncation, and analysis errors.
+
+Each search freezes all retained and currently displayed pending events, groups exact source/text occurrences, and keeps that evidence even after live eviction. Searches never silently cover earlier evicted or dropped logs. Jev receives the redacted question, representative event, and occurrence count/time range. Low-confidence or truncated relevance decisions remain Possible; failed and unexamined groups are explicitly counted. Exact search is local. `--offline` disables Jev search as well as classification.
+
+Search has its own single request lane, usage meter, batch limit (16 by default), and estimated $0.01 stop threshold per query. It stops scheduling on unmetered responses; in-flight requests can exceed the cost estimate. Search usage is shown separately and is not part of the collection report's usage. Successful relevance decisions are cached for five minutes (2,048 entries), keyed by query, model, source/text group, and occurrence metadata. A new search requires finishing or cancelling the previous search. Search results and reviews are not saved in Rust reports.
 
 ## Reports and exit codes
 
@@ -41,4 +71,4 @@ SIGINT/SIGTERM cancels discovery, requests and reconnect waits, joins producers,
 
 All Kubernetes reports conservatively remain partial because tail/since limits and server retention cannot establish complete history. Reconnection uses inclusive timestamps and occurrence counts, but rotation, identical bursts beyond the cursor bound, missing timestamps and process restarts prevent exactly-once guarantees. Inspect coverage and metrics rather than interpreting no important events as no incidents.
 
-The legacy `--workers`, `--collect-workers`, `--discovery-interval`, `--top`, `--tui`, `--rules-file`, dashboard/search/context/review commands are not silently emulated. Use the [legacy reference](legacy-usage.md) for those workflows and the [migration table](migration.md) for planned replacements.
+The legacy `--workers`, `--collect-workers`, `--discovery-interval`, `--top`, `--rules-file`, dashboard/context/review commands are not silently emulated. Use the [legacy reference](legacy-usage.md) for those workflows and the [migration table](migration.md) for planned replacements. Rust search is available inside `--tui`; there is no standalone search subcommand or saved-report browser.

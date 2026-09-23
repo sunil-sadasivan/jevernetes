@@ -10,6 +10,9 @@ The first migration deliverable is one Cargo package with a reusable library and
 | `kubernetes` | Read-only paginated inventory/watch, instance discovery, snapshot/log streams, reconnect cursors and cancellation |
 | `runtime` | Bounded queue, batching, one analysis lane, intra-batch sharing, retention and loss accounting |
 | `report` | Cumulative counters, bounded coverage/event history, schema 2 projection and atomic private writes |
+| `progress` | Optional bounded terminal view, pending batches, immutable shared event handles and usage counters |
+| `search` | Frozen occurrence groups, literal/typed relevance search, bounded TTL cache and separate budgets/usage |
+| `tui` | Native Ratatui/Crossterm rendering, keyboard/mouse input, selection, details, query editing and terminal restoration |
 | binary `main` | CLI validation, input selection, credentials at runtime, signals, output and exit codes |
 
 ```mermaid
@@ -34,6 +37,8 @@ Tokio schedules one task per active log stream, one discovery task and one analy
 Application payload memory is approximately `O(streams × (line + pending event + cursor) + queue × event + retention × event + batch × event + cache entries)`, plus a 50-pod discovery page, transport buffers and report serialization. Default caps are 64 streams, 64 KiB line, 16,000-byte event, 4,096 distinct cursor hashes per stream, 1,024 queue events, 2,000 retained live events, batch 8 and 500 coverage records. A snapshot retains at most 100,000 events by default; lower `--max-events` for small-memory jobs. User-selected very large caps can consume substantial memory. Source metadata and pod responses remain subject to Kubernetes transport/server object limits; these application bounds are not a byte-perfect process RSS cap. JSON projection temporarily clones retained evidence. No claim of measured low RSS or throughput is made yet.
 
 A single provider lane makes in-flight work, shared retry cooldown, cache ownership and spending easy to bound. It intentionally defers the legacy four-request/parallel-snapshot throughput tuning. Files/snapshots await queue capacity. Live ingestion uses explicit drop-on-full to avoid blocking all discovery/ingestion behind slow model requests; cumulative counters expose loss. Dropped events have no retained payload. The only retained classification history is the bounded window; counters cover the full process lifetime.
+
+`--tui` adds a 100 ms terminal refresh and an event-driven input stream. Analysis publishes the current pending batch and finalized events into a separately bounded progress view; rendering and search never hold its lock across terminal or network I/O. Views and details share immutable event handles. A single frozen search window can retain one additional window of evicted events; the search cache has 2,048 decisions and a five-minute TTL. Search uses a separate single-request lane and $0.01 estimated per-query threshold, independent of collection's usage/budget. Its results and usage are session-only. Terminal state is restored on normal quit, input errors, cancellation, and unwinding; CLI cleanup joins collection and search before returning the final report.
 
 ## Security and trust
 

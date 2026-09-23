@@ -184,6 +184,7 @@ impl Usage {
     }
 }
 /// A single scheduling lane shares backoff and never multiplies in-flight budgets.
+#[derive(Clone)]
 pub struct Jev {
     http: reqwest::Client,
     key: reqwest::header::HeaderValue,
@@ -223,6 +224,36 @@ impl Jev {
         stop: &CancellationToken,
     ) -> Result<Vec<Judgment>, String> {
         let body = build_request(events, &self.model);
+        let raw = self.evaluate(body, stop).await?;
+        decode(&raw, events.len()).map_err(str::to_owned)
+    }
+
+    /// Independent search accounting; transport and credentials stay in memory.
+    pub fn search_client(&self) -> Self {
+        let mut client = self.clone();
+        client.usage = Usage::new(
+            self.usage.input_usd_per_million,
+            self.usage.output_usd_per_million,
+        );
+        client
+    }
+
+    pub fn model(&self) -> &str {
+        &self.model
+    }
+
+    pub async fn search(
+        &mut self,
+        groups: &[&crate::search::Group],
+        query: &str,
+        stop: &CancellationToken,
+    ) -> Result<Vec<crate::search::Decision>, String> {
+        let body = crate::search::build_request(groups, query, &self.model);
+        let raw = self.evaluate(body, stop).await?;
+        crate::search::decode(&raw, groups.len()).map_err(str::to_owned)
+    }
+
+    async fn evaluate(&mut self, body: Value, stop: &CancellationToken) -> Result<Vec<u8>, String> {
         for attempt in 0..3 {
             if stop.is_cancelled() {
                 return Err("Analysis stopped before request".into());
@@ -269,7 +300,7 @@ impl Jev {
             };
             self.usage.record(&raw);
             if (200..300).contains(&status) {
-                return decode(&raw, events.len()).map_err(str::to_owned);
+                return Ok(raw);
             }
             if ![429, 500, 502, 503, 504].contains(&status) || attempt == 2 {
                 return Err(format!("Jev HTTP {status}"));

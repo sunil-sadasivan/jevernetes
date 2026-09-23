@@ -78,6 +78,26 @@ fn validation_and_missing_key_fail_before_collection() {
 }
 
 #[test]
+fn tui_rejects_json_stdin_and_noninteractive_output_before_collection() {
+    for (args, expected) in [
+        (vec!["k8s", "--tui", "--json"], "--json"),
+        (vec!["files", "-", "--tui"], "stdin"),
+        (vec!["k8s", "--tui"], "interactive terminal"),
+    ] {
+        let result = Command::new(env!("CARGO_BIN_EXE_jevernetes"))
+            .args(args)
+            .env_remove("TYPESAFE_API_KEY")
+            .env_remove("TYPESAFEAI_API_KEY")
+            .env_remove("TYPESAFE_API_KEY_FILE")
+            .output()
+            .unwrap();
+        assert!(!result.status.success());
+        assert!(String::from_utf8_lossy(&result.stderr).contains(expected));
+        assert!(result.stdout.is_empty());
+    }
+}
+
+#[test]
 fn event_cap_is_global_and_exact_boundary_is_not_a_gap() {
     let r = run(b"one\ntwo\nthree\n", &["--max-events", "2"]);
     assert_eq!(r.status.code(), Some(2));

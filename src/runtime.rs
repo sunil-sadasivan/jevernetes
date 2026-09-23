@@ -3,6 +3,7 @@ use crate::{
     events::{Event, Framer, Parser, Source},
     grouping::Cache,
     jev::{Importance, Jev, Judgment},
+    progress::SharedProgress,
     report::{Report, SharedMetrics, gap},
 };
 use std::{
@@ -68,11 +69,22 @@ pub struct AnalyzeOptions {
     pub print_events: bool,
 }
 pub async fn analyze(
+    rx: mpsc::Receiver<Event>,
+    sender_metrics: SharedMetrics,
+    client: Option<Jev>,
+    opts: AnalyzeOptions,
+    stop: CancellationToken,
+) -> (Report, Option<Jev>) {
+    analyze_observed(rx, sender_metrics, client, opts, stop, None).await
+}
+
+pub async fn analyze_observed(
     mut rx: mpsc::Receiver<Event>,
     sender_metrics: SharedMetrics,
     mut client: Option<Jev>,
     opts: AnalyzeOptions,
     stop: CancellationToken,
+    progress: Option<SharedProgress>,
 ) -> (Report, Option<Jev>) {
     let mut report = Report::new(opts.retain);
     let mut cache = Cache::new(
@@ -106,6 +118,9 @@ pub async fn analyze(
             }
         }
         sender_metrics.lock().expect("metrics lock").queue_depth = rx.len();
+        if let Some(progress) = &progress {
+            progress.lock().expect("progress lock").begin(&batch);
+        }
         let mut owned = Vec::new();
         let mut references = HashMap::new();
         let mut duplicate_of = HashMap::new();
@@ -176,6 +191,12 @@ pub async fn analyze(
                 batch[i].analysis_reused = true;
                 batch[i].analysis_representative_id = Some(batch[representative].id.clone());
             }
+        }
+        if let Some(progress) = &progress {
+            progress
+                .lock()
+                .expect("progress lock")
+                .commit(&batch, client.as_ref().map(|c| &c.usage));
         }
         for event in batch {
             if event.truncated {
@@ -518,6 +539,64 @@ mod tests {
         assert_eq!(r.events.len(), 2);
         assert_eq!(r.evicted, 1);
         assert_eq!(r.counts["important"], 2);
+    }
+    #[tokio::test]
+    async fn observed_pending_events_finalize_on_cancellation_and_view_stays_bounded() {
+        let metrics = Arc::new(Mutex::new(Metrics::default()));
+        let (tx, rx) = mpsc::channel(4);
+        let sender = Sender {
+            tx,
+            metrics: metrics.clone(),
+        };
+        let stop = CancellationToken::new();
+        ingest(
+            &b"ERROR first\nERROR second\n"[..],
+            Source::new(),
+            1000,
+            &sender,
+            &stop,
+        )
+        .await;
+        drop(sender);
+        let progress = crate::progress::Progress::new(1, crate::jev::Usage::new(0.0, 0.0));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let client = Jev::test_client(format!("http://{}", listener.local_addr().unwrap()));
+        let opts = AnalyzeOptions {
+            batch_size: 2,
+            max_batches: 1,
+            max_cost: 1.0,
+            grouping: true,
+            retain: 1,
+            max_events: 100,
+            live: true,
+            print_events: false,
+        };
+        let mut task = Box::pin(analyze_observed(
+            rx,
+            metrics,
+            Some(client),
+            opts,
+            stop.clone(),
+            Some(progress.clone()),
+        ));
+        assert!(futures::poll!(&mut task).is_pending());
+        assert_eq!(progress.lock().unwrap().pending.len(), 2);
+        let frozen = progress.lock().unwrap().pending[0].clone();
+        stop.cancel();
+        let (report, _) = tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .unwrap();
+        let view = progress.lock().unwrap();
+        assert!(view.pending.is_empty());
+        assert_eq!(view.events.len(), 1);
+        assert_eq!(view.total, report.total);
+        assert_eq!(view.evicted, report.evicted);
+        assert_eq!(view.events[0].id, report.events[0].id);
+        assert!(view.events[0].judgment.analysis_error.is_some());
+        assert!(
+            frozen.judgment.analysis_error.is_none(),
+            "frozen views stay immutable"
+        );
     }
     #[tokio::test]
     async fn actual_http_grouping_reuses_across_batches_and_preserves_occurrences() {

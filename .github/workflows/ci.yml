@@ -20,6 +20,8 @@ jobs:
       - run: cargo clippy --locked --all-targets --all-features -- -D warnings
       - run: cargo test --locked --all-features
       - run: cargo build --locked --release
+      - name: Native TUI search and terminal cleanup
+        run: python3 tests/rust/tui_pty.py target/release/jevernetes
       - name: Offline synthetic CLI smoke
         run: |
           printf 'ERROR synthetic failure\nINFO ready\n' | target/release/jevernetes files - --offline --json > /tmp/jevernetes-smoke.json

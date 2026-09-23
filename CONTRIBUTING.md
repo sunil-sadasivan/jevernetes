@@ -7,6 +7,7 @@ cargo fmt --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-features
 cargo build --release --locked
+python3 tests/rust/tui_pty.py target/release/jevernetes
 ```
 
 Keep `Cargo.lock` tracked and build output in ignored `target/`. See docs/architecture.md and docs/migration.md for boundaries and deferred parity. The legacy companion still needs Python 3.11+ and `kubectl`; Node.js is used for browser-logic tests. Preserve its regression checks while migrating workflows:
