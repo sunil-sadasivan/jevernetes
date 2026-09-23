@@ -4,6 +4,7 @@ use crate::{events::Event, jev::Judgment};
 use rusqlite::{Connection, OptionalExtension, params};
 use std::{fs::File, path::Path, time::Duration};
 
+pub const SCHEMA_VERSION: i64 = 2;
 pub const ROW_LIMIT: i64 = 100_000;
 pub const OUTBOX_LIMIT: i64 = 10_000;
 pub const RETENTION: i64 = 604_800;
@@ -35,6 +36,14 @@ pub struct Applied {
     pub enqueued: bool,
     pub decision: Option<Decision>,
 }
+struct Incident {
+    window: i64,
+    count: u32,
+    level: u32,
+    last: i64,
+    sequence: i64,
+    last_decision: Option<String>,
+}
 impl Store {
     pub fn open(path: &Path) -> Result<Self> {
         // Directory must be provisioned privately by the operator; never chmod an existing directory.
@@ -58,8 +67,18 @@ impl Store {
             .map_err(|_| "Cannot open controller lock")?;
         lock.try_lock()
             .map_err(|_| "Controller state already locked or locking unsupported")?;
-        let conn = db(Connection::open(path))?;
+        let mut conn = db(Connection::open(path))?;
         db(conn.busy_timeout(Duration::from_millis(100)))?;
+        let version: i64 = db(conn.query_row("PRAGMA user_version", [], |r| r.get(0)))?;
+        if !(0..=SCHEMA_VERSION).contains(&version) {
+            return Err("Unsupported controller state schema");
+        }
+        if version == 0 {
+            let tables: i64 = db(conn.query_row("SELECT count(*) FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%'", [], |r| r.get(0)))?;
+            if tables != 0 {
+                return Err("Unsupported unversioned controller state");
+            }
+        }
         // Serialized connection, rollback journal, FULL sync. No network filesystem support.
         db(conn.execute_batch(
             "PRAGMA page_size=4096; PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL;
@@ -69,11 +88,10 @@ impl Store {
         if page_size != 4096 {
             return Err("Controller state requires 4096-byte SQLite pages");
         }
-        let version: i64 = db(conn.query_row("PRAGMA user_version", [], |r| r.get(0)))?;
-        if version != 0 && version != 1 {
-            return Err("Unsupported controller state schema");
-        }
-        db(conn.execute_batch("BEGIN IMMEDIATE;
+        if version < SCHEMA_VERSION {
+            let tx = db(conn.transaction())?;
+            if version == 0 {
+                db(tx.execute_batch("
             CREATE TABLE IF NOT EXISTS verdicts (key TEXT PRIMARY KEY, judgment TEXT NOT NULL, created INTEGER NOT NULL, expires INTEGER NOT NULL);
             CREATE INDEX IF NOT EXISTS verdict_expiry ON verdicts(expires);
             CREATE TABLE IF NOT EXISTS seen (key TEXT PRIMARY KEY, at INTEGER NOT NULL, decision TEXT NOT NULL);
@@ -85,7 +103,40 @@ impl Store {
             CREATE INDEX IF NOT EXISTS outbox_time ON outbox(status,updated);
             CREATE TABLE IF NOT EXISTS delivery_clock (id INTEGER PRIMARY KEY CHECK(id=1), next INTEGER NOT NULL);
             INSERT OR IGNORE INTO delivery_clock VALUES (1,0);
-            PRAGMA user_version=1; COMMIT;"))?;
+"))?;
+            }
+            db(tx.execute_batch("ALTER TABLE incidents ADD COLUMN last_decision TEXT CHECK(last_decision IN ('review','notify'))"))?;
+            // Recover the last enqueued class by its sequence-derived ID, not timestamps:
+            // delivery updates timestamps and clocks may move backwards. Pruned payloads
+            // leave NULL, which conservatively permits the next Notify through cooldown.
+            let incidents: Vec<(String, i64)> = {
+                let mut query = db(tx.prepare("SELECT key,sequence FROM incidents"))?;
+                db(db(query.query_map([], |r| Ok((r.get(0)?, r.get(1)?))))?.collect())?
+            };
+            for (key, sequence) in incidents {
+                let payload: Option<String> = db(tx
+                    .query_row(
+                        "SELECT payload FROM outbox WHERE id=?1",
+                        [digest(&(&key, sequence))],
+                        |r| r.get(0),
+                    )
+                    .optional())?;
+                if let Some(payload) = payload {
+                    let value: serde_json::Value = serde_json::from_str(&payload)
+                        .map_err(|_| "Invalid persisted notification during migration")?;
+                    let decision = value["decision"]
+                        .as_str()
+                        .filter(|d| matches!(*d, "review" | "notify"))
+                        .ok_or("Invalid persisted notification during migration")?;
+                    db(tx.execute(
+                        "UPDATE incidents SET last_decision=?2 WHERE key=?1",
+                        params![key, decision],
+                    ))?;
+                }
+            }
+            db(tx.pragma_update(None, "user_version", SCHEMA_VERSION))?;
+            db(tx.commit())?;
+        }
         Ok(Self { conn, _lock: lock })
     }
     pub fn lookup(
@@ -147,6 +198,27 @@ impl Store {
             db(tx.execute("INSERT INTO verdicts VALUES (?1,?2,?3,?4) ON CONFLICT(key) DO UPDATE SET judgment=excluded.judgment,created=excluded.created,expires=excluded.expires", params![contract.key(event), serde_json::to_string(&event.judgment).map_err(|_| "Invalid judgment")?, now, now.saturating_add(ttl)]))?;
         }
         let decision = policy.decide(event);
+        let key = digest(&("incident-v1", &event.source, &event.text, event.truncated));
+        let old = db(tx
+            .query_row(
+                "SELECT window,count,level,last,sequence,last_decision FROM incidents WHERE key=?1",
+                [&key],
+                |r| {
+                    Ok(Incident {
+                        window: r.get(0)?,
+                        count: r.get(1)?,
+                        level: r.get(2)?,
+                        last: r.get(3)?,
+                        sequence: r.get(4)?,
+                        last_decision: r.get(5)?,
+                    })
+                },
+            )
+            .optional())?;
+        let promote = decision == Decision::Notify
+            && old
+                .as_ref()
+                .is_some_and(|i| i.last_decision.as_deref() != Some("notify"));
         // Timestamped exact replays do not manufacture recurrence. Missing timestamps are
         // deliberately treated as new observations; a process cannot prove their identity.
         let seen_key = digest(&(
@@ -166,7 +238,7 @@ impl Store {
                 )
                 .optional())?;
             new_evidence = prior.is_none();
-            if prior.as_ref() == Some(&decision_signature) {
+            if prior.as_ref() == Some(&decision_signature) && !promote {
                 db(tx.commit())?;
                 return Ok(Applied {
                     duplicate: true,
@@ -187,16 +259,22 @@ impl Store {
             ..Default::default()
         };
         if matches!(decision, Decision::Notify | Decision::Review) {
-            let key = digest(&("incident-v1", &event.source, &event.text, event.truncated));
-            let old: Option<(i64, u32, u32, i64, i64)> = db(tx
-                .query_row(
-                    "SELECT window,count,level,last,sequence FROM incidents WHERE key=?1",
-                    [&key],
-                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
-                )
-                .optional())?;
-            let (mut window, mut count, mut level, last, mut sequence) =
-                old.unwrap_or((now, 0, 0, now - policy.cooldown_seconds, 0));
+            let new_incident = old.is_none();
+            let Incident {
+                mut window,
+                mut count,
+                mut level,
+                last,
+                mut sequence,
+                last_decision,
+            } = old.unwrap_or(Incident {
+                window: now,
+                count: 0,
+                level: 0,
+                last: now - policy.cooldown_seconds,
+                sequence: 0,
+                last_decision: None,
+            });
             if now < window || now - window >= policy.recurrence_window_seconds {
                 window = now;
                 count = 0;
@@ -209,12 +287,13 @@ impl Store {
             if escalate {
                 level += 1;
             }
-            let send = old.is_none()
+            let send = new_incident
+                || promote
                 || !new_evidence
                 || escalate
                 || now < last
                 || now.saturating_sub(last) >= policy.cooldown_seconds;
-            if old.is_none() {
+            if new_incident {
                 let n: i64 = db(tx.query_row("SELECT count(*) FROM incidents", [], |r| r.get(0)))?;
                 if n >= OUTBOX_LIMIT {
                     return Err("Controller incident capacity exhausted");
@@ -241,7 +320,7 @@ impl Store {
                 result.enqueued = true;
             }
             db(tx.execute(
-                "INSERT OR REPLACE INTO incidents VALUES (?1,?2,?3,?4,?5,?6,?7)",
+                "INSERT OR REPLACE INTO incidents (key,window,count,level,last,sequence,touched,last_decision) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
                 params![
                     key,
                     window,
@@ -249,7 +328,8 @@ impl Store {
                     level,
                     if send { now } else { last },
                     sequence,
-                    now
+                    now,
+                    if send { Some(if decision == Decision::Notify { "notify" } else { "review" }) } else { last_decision.as_deref() }
                 ],
             ))?;
         }

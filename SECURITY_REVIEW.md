@@ -47,3 +47,15 @@ cover these paths; this is not an independent audit, a live deployment, or proof
 detection accuracy. The state volume, webhook destination and metrics network exposure require
 operator controls described in [controller operations](docs/controller.md). No real credentials,
 private endpoints, deployed image tags or runtime state are included in the artifacts.
+
+## Controller independent-review fixes (2026-09-23)
+
+Focused regressions reproduced report/state path collisions, Review-to-Notify cooldown
+suppression after reopen, and real stdout backpressure starving a single-worker Tokio
+blocking pool. Fixes reject database/sidecar path aliases before state or cluster access,
+persist the last enqueued decision in schema 2 with transactional schema-1 migration, and
+isolate stdout in a single bounded dedicated writer. Injected blocked-write/flush tests
+cover cancellation, repeated retries, state progress, dead letters and runtime shutdown.
+Migration tests cover pruned payloads, already-suppressed replay, rollback and unsupported
+versions. Path validation assumes private directories without hostile concurrent mutation.
+No live cluster, credentials, deployment or external notification destination was used.

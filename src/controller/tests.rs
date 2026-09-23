@@ -648,3 +648,499 @@ fn full_outbox_refuses_new_evidence_atomically() {
         0
     );
 }
+
+#[test]
+fn review_to_notify_bypasses_cooldown_after_restart_and_replay() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.db");
+    let contract = Contract::jev("synthetic".into());
+    let policy = Policy::default();
+    let mut review = event("same incident", 1);
+    review.judgment.category_confidence = Some(0.5);
+    let mut s = Store::open(&path).unwrap();
+    assert!(
+        s.apply(&review, &contract, &policy, 100, 300)
+            .unwrap()
+            .enqueued
+    );
+    let row = s.claim(100, 8, 1).unwrap().unwrap();
+    s.finish(&row, 100, true, 8, 0).unwrap();
+    drop(s);
+    let mut s = Store::open(&path).unwrap();
+    let notify = event("same incident", 2);
+    assert!(
+        s.apply(&notify, &contract, &policy, 101, 300)
+            .unwrap()
+            .enqueued
+    );
+    drop(s);
+    let mut s = Store::open(&path).unwrap();
+    assert!(
+        s.apply(&notify, &contract, &policy, 102, 300)
+            .unwrap()
+            .duplicate
+    );
+    assert!(
+        !s.apply(&event("same incident", 3), &contract, &policy, 103, 300)
+            .unwrap()
+            .enqueued
+    );
+    assert_eq!(s.counts().unwrap(), (1, 0));
+    let (count, level, sequence): (u32, u32, u32) = s
+        .conn
+        .query_row("SELECT count,level,sequence FROM incidents", [], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        })
+        .unwrap();
+    assert_eq!((count, level, sequence), (3, 0, 2));
+}
+
+#[test]
+fn stdout_backpressure_does_not_occupy_tokio_blocking_pool() {
+    // Isolate real stdout in a child whose pipe is deliberately never drained.
+    // The injected-writer tests additionally exercise retries and cancellation.
+    const CHILD: &str = "JEV_SYNTHETIC_STDOUT_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .max_blocking_threads(1)
+            .build()
+            .unwrap();
+        let available = runtime.block_on(async {
+            let sink = sink::Stdout::new().unwrap();
+            let payload = "x".repeat(128 * 1024);
+            assert!(
+                tokio::time::timeout(Duration::from_millis(100), sink.deliver("id", &payload))
+                    .await
+                    .is_err()
+            );
+            tokio::time::timeout(
+                Duration::from_millis(200),
+                tokio::task::spawn_blocking(|| ()),
+            )
+            .await
+            .is_ok()
+        });
+        runtime.shutdown_timeout(Duration::from_millis(10));
+        // Avoid libtest flushing the intentionally blocked stdout on exit.
+        std::process::exit(if available { 0 } else { 1 });
+    }
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+        .env_clear()
+        .env(CHILD, "1")
+        .args([
+            "--exact",
+            "controller::tests::stdout_backpressure_does_not_occupy_tokio_blocking_pool",
+            "--nocapture",
+        ])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if std::time::Instant::now() >= deadline {
+            child.kill().unwrap();
+            child.wait().unwrap();
+            panic!("blocked stdout prevented process shutdown");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    assert!(
+        status.success(),
+        "blocked stdout starved Tokio's only blocking worker"
+    );
+}
+
+#[test]
+fn promotion_rolls_back_seen_class_and_sequence_with_outbox() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("db");
+    let c = Contract::jev("synthetic".into());
+    let p = Policy {
+        recurrence_count: 2,
+        ..Policy::default()
+    };
+    let mut review = event("same", 1);
+    review.judgment.category_confidence = Some(0.5);
+    let mut s = Store::open(&path).unwrap();
+    s.apply(&review, &c, &p, 100, 300).unwrap();
+    s.conn.execute_batch("CREATE TRIGGER fail_outbox BEFORE INSERT ON outbox BEGIN SELECT RAISE(ABORT,'synthetic'); END;").unwrap();
+    let notify = event("same", 2);
+    assert!(s.apply(&notify, &c, &p, 101, 300).is_err());
+    let state: (String, u32, u32, u32) = s
+        .conn
+        .query_row(
+            "SELECT last_decision,count,level,sequence FROM incidents",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!(state, ("review".into(), 1, 0, 1));
+    s.conn.execute_batch("DROP TRIGGER fail_outbox").unwrap();
+    drop(s);
+    let mut s = Store::open(&path).unwrap();
+    assert!(s.apply(&notify, &c, &p, 102, 300).unwrap().enqueued);
+    assert!(s.apply(&notify, &c, &p, 103, 300).unwrap().duplicate);
+    let state: (String, u32, u32, u32) = s
+        .conn
+        .query_row(
+            "SELECT last_decision,count,level,sequence FROM incidents",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!(state, ("notify".into(), 2, 1, 2));
+    // A suppressed review must not overwrite the last enqueued class.
+    review.timestamp = Some("2026-09-20T00:00:03Z".into());
+    assert!(!s.apply(&review, &c, &p, 104, 300).unwrap().enqueued);
+    let last: String = s
+        .conn
+        .query_row("SELECT last_decision FROM incidents", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(last, "notify");
+}
+
+fn downgrade_fixture_to_v1(s: &Store) {
+    // Exactly the schema-1 layout, retaining all original table contents/indexes.
+    s.conn
+        .execute_batch("ALTER TABLE incidents DROP COLUMN last_decision; PRAGMA user_version=1;")
+        .unwrap();
+}
+
+#[test]
+fn schema_one_migration_recovers_last_enqueued_class_and_suppressed_replay() {
+    for status in ["pending", "delivered", "dead", "pruned"] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("db");
+        let c = Contract::jev("synthetic".into());
+        let p = Policy::default();
+        let mut review = event("same", 1);
+        review.judgment.category_confidence = Some(0.5);
+        let mut s = Store::open(&path).unwrap();
+        s.apply(&review, &c, &p, 100, 300).unwrap();
+        if status == "pruned" {
+            s.conn.execute("DELETE FROM outbox", []).unwrap();
+        } else {
+            s.conn
+                .execute("UPDATE outbox SET status=?1", [status])
+                .unwrap();
+        }
+        // Schema 1 could persist the seen signature but suppress this Notify.
+        let notify = event("same", 2);
+        let seen_key = digest(&(
+            &notify.source,
+            &notify.text,
+            notify.truncated,
+            &notify.timestamp,
+        ));
+        s.conn
+            .execute(
+                "INSERT INTO seen VALUES (?1,101,?2)",
+                rusqlite::params![seen_key, digest(&(&c, &p, Decision::Notify))],
+            )
+            .unwrap();
+        s.conn.execute("UPDATE incidents SET count=2", []).unwrap();
+        downgrade_fixture_to_v1(&s);
+        drop(s);
+        let mut s = Store::open(&path).unwrap();
+        assert_eq!(
+            s.conn
+                .query_row::<i64, _, _>("PRAGMA user_version", [], |r| r.get(0))
+                .unwrap(),
+            store::SCHEMA_VERSION
+        );
+        let prior: Option<String> = s
+            .conn
+            .query_row("SELECT last_decision FROM incidents", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            prior.as_deref(),
+            if status == "pruned" {
+                None
+            } else {
+                Some("review")
+            }
+        );
+        assert!(s.apply(&notify, &c, &p, 102, 300).unwrap().enqueued);
+        drop(s);
+        let mut s = Store::open(&path).unwrap();
+        assert!(s.apply(&notify, &c, &p, 103, 300).unwrap().duplicate);
+        let state: (u32, u32, u32) = s
+            .conn
+            .query_row("SELECT count,level,sequence FROM incidents", [], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })
+            .unwrap();
+        assert_eq!(
+            state,
+            (2, 0, 2),
+            "migration/replay must not manufacture recurrence"
+        );
+    }
+}
+
+#[test]
+fn schema_migration_uses_sequence_and_preserves_notify_cooldown() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("db");
+    let c = Contract::jev("synthetic".into());
+    let p = Policy::default();
+    let mut e = event("same", 1);
+    e.judgment.category_confidence = Some(0.5);
+    let mut s = Store::open(&path).unwrap();
+    s.apply(&e, &c, &p, 100, 300).unwrap();
+    s.conn
+        .execute("UPDATE outbox SET updated=9999", [])
+        .unwrap();
+    e.judgment.category_confidence = Some(0.99);
+    s.apply(&e, &c, &p, 101, 300).unwrap();
+    downgrade_fixture_to_v1(&s);
+    drop(s);
+    let mut s = Store::open(&path).unwrap();
+    assert!(s.apply(&e, &c, &p, 102, 300).unwrap().duplicate);
+    assert!(
+        !s.apply(&event("same", 2), &c, &p, 103, 300)
+            .unwrap()
+            .enqueued
+    );
+    assert_eq!(s.counts().unwrap(), (2, 0));
+}
+
+#[test]
+fn migration_failure_rolls_back_and_unknown_versions_are_untouched() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("db");
+    let mut s = Store::open(&path).unwrap();
+    s.apply(
+        &event("same", 1),
+        &Contract::jev("synthetic".into()),
+        &Policy::default(),
+        100,
+        300,
+    )
+    .unwrap();
+    downgrade_fixture_to_v1(&s);
+    s.conn
+        .execute("UPDATE outbox SET payload='invalid'", [])
+        .unwrap();
+    drop(s);
+    assert!(Store::open(&path).is_err());
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    assert_eq!(
+        conn.query_row::<i64, _, _>("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap(),
+        1
+    );
+    assert!(conn.prepare("SELECT last_decision FROM incidents").is_err());
+    for version in [0, 3, 999] {
+        conn.pragma_update(None, "user_version", version).unwrap();
+        let before = std::fs::read(&path).unwrap();
+        assert!(Store::open(&path).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+    }
+}
+
+struct WriterGate(Arc<(Mutex<bool>, std::sync::Condvar)>);
+impl WriterGate {
+    fn new() -> Self {
+        Self(Arc::new((Mutex::new(false), std::sync::Condvar::new())))
+    }
+}
+impl Drop for WriterGate {
+    fn drop(&mut self) {
+        *self.0.0.lock().unwrap() = true;
+        self.0.1.notify_all();
+    }
+}
+struct GatedWriter {
+    gate: Arc<(Mutex<bool>, std::sync::Condvar)>,
+    entered: Arc<tokio::sync::Notify>,
+    writes: Arc<std::sync::atomic::AtomicUsize>,
+    block_flush: bool,
+}
+impl GatedWriter {
+    fn wait(&self) {
+        self.entered.notify_one();
+        let (lock, wake) = &*self.gate;
+        let mut released = lock.lock().unwrap();
+        while !*released {
+            released = wake.wait(released).unwrap();
+        }
+    }
+}
+impl std::io::Write for GatedWriter {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.writes.fetch_add(1, Ordering::Relaxed);
+        if !self.block_flush {
+            self.wait();
+        }
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        if self.block_flush {
+            self.wait();
+        }
+        Ok(())
+    }
+}
+
+#[test]
+fn stuck_writer_retries_cancellation_state_and_runtime_shutdown_are_independent() {
+    for block_flush in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let gate = WriterGate::new();
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let writes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let sink = Arc::new(
+            sink::Stdout::with_writer(GatedWriter {
+                gate: gate.0.clone(),
+                entered: entered.clone(),
+                writes: writes.clone(),
+                block_flush,
+            })
+            .unwrap(),
+        );
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .max_blocking_threads(1)
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let c = controller(&dir);
+            c.apply(&event("one", 1)).await.unwrap();
+            let stop = CancellationToken::new();
+            let worker = tokio::spawn({
+                let c = c.clone();
+                let sink = sink.clone();
+                let stop = stop.clone();
+                async move { c.deliver(sink, stop).await }
+            });
+            tokio::time::timeout(Duration::from_secs(1), entered.notified())
+                .await
+                .unwrap();
+            // Shutdown cancels the delivery future, leaving the reserved intent pending.
+            stop.cancel();
+            tokio::time::timeout(Duration::from_secs(1), worker)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(c.db(|s| s.counts()).await.unwrap(), (1, 0));
+            for _ in 0..32 {
+                assert!(
+                    tokio::time::timeout(Duration::from_millis(100), sink.deliver("retry", "{}"))
+                        .await
+                        .unwrap()
+                        .is_err()
+                );
+            }
+            tokio::time::timeout(Duration::from_secs(1), c.apply(&event("two", 2)))
+                .await
+                .unwrap()
+                .unwrap();
+            // Drive persisted leases/retries without wall-clock sleeps. Busy writes consume
+            // the ordinary attempt budget; they never get marked delivered or spawn jobs.
+            for attempt in 0..16 {
+                let at = now() + 30 + attempt * 400;
+                let row = c.db(move |s| s.claim(at, 8, 1)).await.unwrap();
+                if let Some(row) = row {
+                    assert!(sink.deliver(&row.id, &row.payload).await.is_err());
+                    c.db(move |s| s.finish(&row, at, false, 8, 0))
+                        .await
+                        .unwrap();
+                }
+            }
+            assert_eq!(c.db(|s| s.counts()).await.unwrap(), (0, 2));
+            assert!(c.ready.load(Ordering::Acquire));
+            assert_eq!(writes.load(Ordering::Relaxed), 1);
+        });
+        drop(sink);
+        // Neither resource drop nor runtime shutdown joins the blocked writer.
+        let start = std::time::Instant::now();
+        drop(runtime);
+        assert!(start.elapsed() < Duration::from_secs(1));
+        assert_eq!(writes.load(Ordering::Relaxed), 1);
+        drop(gate);
+        let reopened = Store::open(&dir.path().join("state.db")).unwrap();
+        assert_eq!(reopened.counts().unwrap(), (0, 2));
+    }
+}
+
+#[tokio::test]
+async fn writer_timeout_holds_permit_until_completion_then_allows_retry() {
+    let gate = WriterGate::new();
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let writes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let sink = Arc::new(
+        sink::Stdout::with_writer(GatedWriter {
+            gate: gate.0.clone(),
+            entered: entered.clone(),
+            writes: writes.clone(),
+            block_flush: false,
+        })
+        .unwrap(),
+    );
+    let attempt = tokio::spawn({
+        let sink = sink.clone();
+        async move { tokio::time::timeout(Duration::from_millis(100), sink.deliver("id", "{}")).await }
+    });
+    tokio::time::timeout(Duration::from_secs(1), entered.notified())
+        .await
+        .unwrap();
+    assert!(attempt.await.unwrap().is_err());
+    for _ in 0..16 {
+        assert!(sink.deliver("id", "{}").await.is_err());
+    }
+    assert_eq!(writes.load(Ordering::Relaxed), 1);
+    drop(gate);
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if sink.deliver("id", "{}").await.is_ok() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(writes.load(Ordering::Relaxed), 2);
+    assert!(sink.deliver("id", &"x".repeat(131073)).await.is_err());
+}
+
+#[tokio::test]
+async fn writer_errors_release_permit_and_success_flushes_jsonl() {
+    struct Writer {
+        failed: bool,
+        bytes: Arc<Mutex<Vec<u8>>>,
+        flushed: Arc<AtomicBool>,
+    }
+    impl std::io::Write for Writer {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if !self.failed {
+                self.failed = true;
+                return Err(std::io::Error::other("synthetic"));
+            }
+            self.bytes.lock().unwrap().extend(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            self.flushed.store(true, Ordering::Release);
+            Ok(())
+        }
+    }
+    let bytes = Arc::new(Mutex::new(Vec::new()));
+    let flushed = Arc::new(AtomicBool::new(false));
+    let sink = sink::Stdout::with_writer(Writer {
+        failed: false,
+        bytes: bytes.clone(),
+        flushed: flushed.clone(),
+    })
+    .unwrap();
+    assert!(sink.deliver("id", "{}").await.is_err());
+    sink.deliver("id", "{}").await.unwrap();
+    assert_eq!(*bytes.lock().unwrap(), b"{}\n");
+    assert!(flushed.load(Ordering::Acquire));
+}

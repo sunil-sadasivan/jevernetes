@@ -1,25 +1,87 @@
 //! Notification transports accept only the redacted, allowlisted outbox payload.
 use super::store::Result;
-use std::{future::Future, pin::Pin, time::Duration};
-use tokio::io::AsyncWriteExt;
+use std::{
+    future::Future,
+    io::Write,
+    pin::Pin,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
+    time::Duration,
+};
 
 pub type Delivery<'a> = Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
 pub trait Sink: Send + Sync {
     fn deliver<'a>(&'a self, id: &'a str, payload: &'a str) -> Delivery<'a>;
 }
-pub struct Stdout;
+struct WriteRequest {
+    payload: String,
+    done: tokio::sync::oneshot::Sender<Result<()>>,
+}
+
+// One dedicated OS thread, deliberately independent of Tokio's blocking pool.
+// The busy permit belongs to the write, not the delivery future: cancellation
+// cannot release it while an uninterruptible write/flush is still outstanding.
+// Dropping the sink closes the channel without joining a possibly stuck thread.
+pub struct Stdout {
+    requests: mpsc::SyncSender<WriteRequest>,
+    busy: Arc<AtomicBool>,
+}
+impl Stdout {
+    pub fn new() -> Result<Self> {
+        Self::with_writer(std::io::stdout())
+    }
+
+    pub(crate) fn with_writer(mut writer: impl Write + Send + 'static) -> Result<Self> {
+        let (requests, receiver) = mpsc::sync_channel::<WriteRequest>(1);
+        let busy = Arc::new(AtomicBool::new(false));
+        let worker_busy = busy.clone();
+        std::thread::Builder::new()
+            .name("notification-stdout".into())
+            .spawn(move || {
+                while let Ok(request) = receiver.recv() {
+                    let result = writer
+                        .write_all(request.payload.as_bytes())
+                        .and_then(|()| writer.flush())
+                        .map_err(|_| "Notification stdout failed");
+                    worker_busy.store(false, Ordering::Release);
+                    let _ = request.done.send(result);
+                }
+            })
+            .map_err(|_| "Cannot start notification stdout writer")?;
+        Ok(Self { requests, busy })
+    }
+}
 impl Sink for Stdout {
     fn deliver<'a>(&'a self, _id: &'a str, payload: &'a str) -> Delivery<'a> {
         Box::pin(async move {
-            let mut output = tokio::io::stdout();
-            output
-                .write_all(format!("{payload}\n").as_bytes())
+            if payload.len() > 131072 {
+                return Err("Notification exceeds payload bound");
+            }
+            if self
+                .busy
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_err()
+            {
+                return Err("Notification stdout writer busy");
+            }
+            let (done, result) = tokio::sync::oneshot::channel();
+            if self
+                .requests
+                .try_send(WriteRequest {
+                    payload: format!("{payload}\n"),
+                    done,
+                })
+                .is_err()
+            {
+                self.busy.store(false, Ordering::Release);
+                return Err("Notification stdout writer unavailable");
+            }
+            result
                 .await
-                .map_err(|_| "Notification stdout failed")?;
-            output
-                .flush()
-                .await
-                .map_err(|_| "Notification stdout failed")
+                .unwrap_or(Err("Notification stdout writer unavailable"))
         })
     }
 }

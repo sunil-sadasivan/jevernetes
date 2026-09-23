@@ -17,7 +17,13 @@ invalidation, TTL reduction/rescore/pruning, unsafe-verdict rejection, policy th
 review/abstention, cooldown and recurrence, changed-decision replay, atomic outbox rollback,
 crash leases, persisted rate limiting, attempts/dead letters, sanitized webhook requests,
 redirect rejection and body bounds, state-failure visibility, independent delivery shutdown,
-health semantics and CLI validation. Existing queue, provider and collector tests remain enabled.
+health semantics and CLI validation. Independent-review regressions add database/sidecar
+path alias rejection before state creation, schema-1 migration/rollback/version checks,
+Review-to-Notify promotion after restart and suppressed replay, and blocked stdout isolation
+from SQLite and runtime shutdown. The real-stdout regression uses a child with an undrained
+pipe; deterministic injected writers cover blocked write/flush, timeout, cancellation, busy
+retries, dead letters and recovery without modifying process-global stdout. Existing queue,
+provider and collector tests remain enabled.
 
 ```sh
 cargo test --all-features controller::tests::offline_controller_smoke_and_shutdown
@@ -46,12 +52,22 @@ operator-selected base-image digests and was not used to publish an image. Produ
 power-loss testing, actual CPU/RSS/load measurements, real detection accuracy/calibration,
 live-cluster checks and fleet scaling remain deferred. See [controller limits](docs/controller.md).
 
-Local verification for this deliverable passed formatting, Clippy with warnings denied,
+Original controller-commit verification passed formatting, Clippy with warnings denied,
 50 Rust tests (43 library + 7 CLI), release compilation, the offline controller/webhook smoke,
 the release-binary offline/redaction smoke, 117 Python tests, five JavaScript helper suites,
 JavaScript syntax checks, controller artifact checks, local Kustomize rendering and staged
 private-data/artifact review. No image build, live Kubernetes/provider evaluation, push or
 deployment was performed.
+
+Independent-review fix verification (2026-09-23): all three focused defect regressions
+failed before the fixes and passed afterward. The final matrix passed `cargo fmt --check`,
+`cargo clippy --all-targets --all-features -- -D warnings`, `cargo test --all-features`
+(64 tests: 54 library + 10 CLI), `cargo build --release --locked`, controller artifact checks,
+local `kubectl kustomize deploy/base`, release-content checks, release-binary offline/redaction
+smoke and `git diff --check`. Cargo used cached dependencies with no live service access;
+loopback fixture tests required execution outside the port-binding-restricted sandbox.
+Legacy implementation files were unchanged, so legacy suites were not rerun for this fix.
+No push, PR, deployment or credential access was performed.
 
 # Legacy validation
 

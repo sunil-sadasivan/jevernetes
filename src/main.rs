@@ -164,6 +164,9 @@ async fn run_controller(cli: &Cli, args: &ControllerArgs) -> Result<i32, &'stati
             "Controller requires grouping; use --output for final reports and JSONL notifications on stdout",
         );
     }
+    if let Some(output) = &cli.output {
+        jevernetes::controller::paths::validate(&args.state, output)?;
+    }
     let policy = if let Some(path) = &args.policy {
         use std::io::Read;
         let file = std::fs::File::open(path).map_err(|_| "Cannot read controller policy")?;
@@ -189,7 +192,7 @@ async fn run_controller(cli: &Cli, args: &ControllerArgs) -> Result<i32, &'stati
         metrics.clone(),
     )?;
     let sink: Arc<dyn Sink> = match args.sink {
-        SinkKind::Stdout => Arc::new(Stdout),
+        SinkKind::Stdout => Arc::new(Stdout::new()?),
         SinkKind::Webhook => Arc::new(Webhook::from_env()?),
     };
     let usage = Usage::new(cli.input_price, cli.output_price);
@@ -309,6 +312,7 @@ async fn run_controller(cli: &Cli, args: &ControllerArgs) -> Result<i32, &'stati
         started.elapsed().as_secs_f64(),
     );
     if let Some(path) = &cli.output {
+        jevernetes::controller::paths::validate(&args.state, path)?;
         write_report(path, &value)?;
     }
     eprintln!(

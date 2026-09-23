@@ -43,7 +43,11 @@ Controller mode adds a private SQLite database and a network notification destin
 store contains redacted evidence in outbox payloads and sensitive operational judgments;
 best-effort redaction is not anonymization. Restrict the directory/PVC and backups, use
 volume encryption, and keep state out of git. New database/lock files use mode 0600 on Unix;
-existing directory/file permissions remain the operator's responsibility. Cache identities
+existing directory/file permissions remain the operator's responsibility. Controller report
+paths cannot alias the state database or its lock/journal/WAL sidecars; checks happen before
+state creation and again before report replacement. Symlinks and Unix hard-link aliases
+are checked without creating state. Keep directories private and stable against concurrent
+entry replacement by other processes. Cache identities
 include full evidence/source, provider/model, prompt/taxonomy and the versioned decision
 contract. Failed, unknown or truncated judgments cannot be reused as safe.
 
@@ -55,7 +59,10 @@ auth values are never logged; Authorization is marked sensitive; HTTPS is requir
 redirects/proxies disabled, timeouts and request/response sizes bounded. Operators must
 approve destinations and egress; this is not a general SSRF-filtering proxy. `--offline`
 disables Jev but can still deliver notifications. Stdout is a development sink and must be
-drained and access-controlled.
+drained and access-controlled. It has one dedicated writer thread and one outstanding
+write/flush at most; canceled/timed-out writes retain that slot until completion. A stuck
+stdout cannot exhaust Tokio blocking workers or hold up state ingestion/runtime shutdown;
+subsequent attempts remain subject to durable retry/dead-letter limits.
 
 State failure is fatal/visible, notification failure is independently retried/dead-lettered.
 The unauthenticated metrics/health endpoint exposes aggregate counters only; restrict

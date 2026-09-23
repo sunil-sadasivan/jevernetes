@@ -1,5 +1,6 @@
 //! Durable probabilistic monitoring: classification is advisory; policy owns decisions.
 pub mod health;
+pub mod paths;
 pub mod policy;
 pub mod sink;
 pub mod store;

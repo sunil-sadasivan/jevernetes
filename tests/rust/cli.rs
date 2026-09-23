@@ -207,3 +207,76 @@ fn controller_cli_and_policy_validation_do_not_access_cluster() {
     assert!(help.status.success());
     assert!(String::from_utf8_lossy(&help.stdout).contains("--verdict-ttl"));
 }
+
+fn reject_controller_paths(state: &std::path::Path, output: &std::path::Path) {
+    let result = Command::new(env!("CARGO_BIN_EXE_jevernetes"))
+        .env_clear()
+        .args([
+            "controller",
+            "--namespace",
+            "synthetic",
+            "--offline",
+            "--state",
+        ])
+        .arg(state)
+        .arg("--output")
+        .arg(output)
+        .output()
+        .unwrap();
+    assert!(!result.status.success());
+    assert!(
+        String::from_utf8_lossy(&result.stderr).contains("Controller output conflicts with state"),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+}
+
+#[test]
+fn controller_rejects_equal_paths_before_creating_state() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = dir.path().join("state.db");
+    reject_controller_paths(&state, &state);
+    assert!(!state.exists());
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+}
+
+#[test]
+fn controller_rejects_normalized_paths_without_damaging_state() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = dir.path().join("state.db");
+    drop(jevernetes::controller::store::Store::open(&state).unwrap());
+    let before = std::fs::read(&state).unwrap();
+    let sub = dir.path().join("sub");
+    std::fs::create_dir(&sub).unwrap();
+    reject_controller_paths(&state, &sub.join(".././state.db"));
+    assert_eq!(std::fs::read(&state).unwrap(), before);
+}
+
+#[cfg(unix)]
+#[test]
+fn controller_rejects_symlinks_hardlinks_and_sidecar_aliases() {
+    use std::os::unix::fs::symlink;
+    let dir = tempfile::tempdir().unwrap();
+    let state = dir.path().join("state.db");
+    let alias = dir.path().join("alias");
+    symlink(&state, &alias).unwrap();
+    // Dangling links must be resolved before state creation, in either direction.
+    reject_controller_paths(&state, &alias);
+    reject_controller_paths(&alias, &state);
+    assert!(!state.exists());
+    drop(jevernetes::controller::store::Store::open(&state).unwrap());
+    let before = std::fs::read(&state).unwrap();
+    reject_controller_paths(&state, &alias);
+    reject_controller_paths(&alias, &state);
+    let hardlink = dir.path().join("hardlink");
+    std::fs::hard_link(&state, &hardlink).unwrap();
+    reject_controller_paths(&state, &hardlink);
+    let directory_alias = dir.path().join("directory-alias");
+    symlink(dir.path(), &directory_alias).unwrap();
+    reject_controller_paths(&state, &directory_alias.join("state.db"));
+    for suffix in [".lock", "-journal", "-wal", "-shm"] {
+        let sidecar = dir.path().join(format!("state.db{suffix}"));
+        reject_controller_paths(&alias, &sidecar);
+    }
+    assert_eq!(std::fs::read(&state).unwrap(), before);
+}
