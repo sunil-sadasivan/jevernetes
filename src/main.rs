@@ -79,6 +79,8 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Command {
+    /// Persist judgments, apply confidence policy and durably notify while following Kubernetes.
+    Controller(ControllerArgs),
     /// Analyze text/JSONL, gzip files, or '-' for stdin.
     Files {
         #[arg(required=true,num_args=1..)]
@@ -113,6 +115,219 @@ enum Command {
         duration: u64,
     },
 }
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum SinkKind {
+    Stdout,
+    Webhook,
+}
+#[derive(clap::Args)]
+struct ControllerArgs {
+    /// SQLite file in an existing private writable directory. One process/replica only.
+    #[arg(long)]
+    state: PathBuf,
+    /// JSON Policy; unknown fields and invalid thresholds are rejected.
+    #[arg(long)]
+    policy: Option<PathBuf>,
+    #[arg(long, value_enum, default_value = "stdout")]
+    sink: SinkKind,
+    #[arg(long, default_value = "0.0.0.0:9090")]
+    listen: std::net::SocketAddr,
+    #[arg(long, default_value="300", value_parser=clap::value_parser!(i64).range(1..=604800))]
+    verdict_ttl: i64,
+    /// Bypass persisted verdict reads; exact grouping within a batch remains enabled.
+    #[arg(long)]
+    rescore: bool,
+    #[arg(long)]
+    namespace: String,
+    #[arg(long)]
+    selector: Option<String>,
+    #[arg(long, default_value="64",value_parser=positive)]
+    max_streams: usize,
+    #[arg(long,default_value="1h",value_parser=since)]
+    since: i64,
+    #[arg(long,default_value="500",value_parser=clap::value_parser!(i64).range(0..))]
+    tail: i64,
+    #[arg(long, default_value = "0")]
+    duration: u64,
+}
+async fn run_controller(cli: &Cli, args: &ControllerArgs) -> Result<i32, &'static str> {
+    use jevernetes::controller::{
+        Contract, Controller, health,
+        policy::Policy,
+        sink::{Sink, Stdout, Webhook},
+        store::Store,
+    };
+    use std::sync::atomic::Ordering;
+    if cli.no_grouping || cli.json {
+        return Err(
+            "Controller requires grouping; use --output for final reports and JSONL notifications on stdout",
+        );
+    }
+    let policy = if let Some(path) = &args.policy {
+        use std::io::Read;
+        let file = std::fs::File::open(path).map_err(|_| "Cannot read controller policy")?;
+        let mut data = Vec::new();
+        file.take(16385)
+            .read_to_end(&mut data)
+            .map_err(|_| "Cannot read controller policy")?;
+        if data.len() > 16384 {
+            return Err("Controller policy exceeds 16 KiB");
+        }
+        serde_json::from_slice::<Policy>(&data).map_err(|_| "Invalid controller policy JSON")?
+    } else {
+        Policy::default()
+    };
+    policy.validate()?;
+    let metrics = Arc::new(Mutex::new(Metrics::default()));
+    let controller = Controller::new(
+        Store::open(&args.state)?,
+        Contract::jev(cli.model.clone()),
+        policy,
+        args.verdict_ttl,
+        args.rescore,
+        metrics.clone(),
+    )?;
+    let sink: Arc<dyn Sink> = match args.sink {
+        SinkKind::Stdout => Arc::new(Stdout),
+        SinkKind::Webhook => Arc::new(Webhook::from_env()?),
+    };
+    let usage = Usage::new(cli.input_price, cli.output_price);
+    let client = if cli.offline {
+        None
+    } else {
+        Some(Jev::new(&key()?, cli.model.clone(), usage.clone())?)
+    };
+    let options = Options {
+        context: None,
+        namespace: Some(args.namespace.clone()),
+        selector: args.selector.clone(),
+        since: args.since,
+        tail: args.tail,
+        max_bytes: MAX_INPUT,
+        max_streams: args.max_streams,
+        previous: false,
+        in_cluster: true,
+    };
+    let (kube, cluster) = kubernetes::connect(&options).await?;
+    let listener = tokio::net::TcpListener::bind(args.listen)
+        .await
+        .map_err(|_| "Cannot bind controller health listener")?;
+    let stop = CancellationToken::new();
+    let worker_stop = CancellationToken::new();
+    let signals = signal(stop.clone())?;
+    let fault_monitor = tokio::spawn({
+        let c = controller.clone();
+        let stop = stop.clone();
+        async move {
+            c.fault.cancelled().await;
+            stop.cancel();
+        }
+    });
+    let delivery = tokio::spawn({
+        let c = controller.clone();
+        let s = worker_stop.clone();
+        async move {
+            c.deliver(sink, s).await;
+        }
+    });
+    let health_task = tokio::spawn(health::serve(
+        listener,
+        controller.clone(),
+        worker_stop.clone(),
+    ));
+    let timer = tokio::spawn({
+        let stop = stop.clone();
+        let duration = args.duration;
+        async move {
+            if duration > 0 {
+                tokio::time::sleep(Duration::from_secs(duration)).await;
+                stop.cancel();
+            }
+        }
+    });
+    let (tx, rx) = mpsc::channel(cli.queue_size);
+    let opts = AnalyzeOptions {
+        batch_size: cli.batch_size.into(),
+        max_batches: cli.max_batches as u64,
+        max_cost: cli.max_cost,
+        grouping: true,
+        retain: cli.retain_events,
+        max_events: cli.max_events as u64,
+        live: true,
+        print_events: false,
+    };
+    let mut consumer = tokio::spawn(runtime::analyze_controlled(
+        rx,
+        metrics.clone(),
+        client,
+        opts,
+        stop.clone(),
+        Some(controller.clone()),
+    ));
+    eprintln!("[controller] advisory monitoring started; coverage is partial; one local writer");
+    let started = Instant::now();
+    let mut producer = tokio::spawn(kubernetes::live(
+        kube,
+        cluster,
+        options,
+        Sender {
+            tx,
+            metrics: metrics.clone(),
+        },
+        stop.clone(),
+    ));
+    // A failed analysis task must also stop otherwise healthy log streams.
+    let (producer_result, result) = tokio::select! {
+        collected = &mut producer => {
+            stop.cancel();
+            controller.ready.store(false, Ordering::Release);
+            (collected, consumer.await)
+        }
+        analyzed = &mut consumer => {
+            stop.cancel();
+            controller.ready.store(false, Ordering::Release);
+            (producer.await, analyzed)
+        }
+    };
+    worker_stop.cancel();
+    let _ = delivery.await;
+    let _ = health_task.await;
+    let interrupted = signals.is_finished();
+    signals.abort();
+    timer.abort();
+    fault_monitor.abort();
+    producer_result.map_err(|_| "Controller collection task failed")?;
+    let (report, client) = result.map_err(|_| "Controller analysis task failed")?;
+    let usage = client.map(|c| c.usage).unwrap_or(usage);
+    let value = report.value(
+        &metrics,
+        &usage,
+        json!({"kind":"controller","namespace":args.namespace,"selector":args.selector}),
+        cli.offline,
+        true,
+        started.elapsed().as_secs_f64(),
+    );
+    if let Some(path) = &cli.output {
+        write_report(path, &value)?;
+    }
+    eprintln!(
+        "[controller] stopped; events={} state_failures={} pending={} dead={} coverage_gaps={}",
+        report.total,
+        metrics.lock().expect("metrics").store_failures,
+        value["metrics"]["outbox_pending"],
+        value["metrics"]["outbox_dead"],
+        value["summary"]["coverage_gaps"]
+    );
+    Ok(if controller.fault.is_cancelled() {
+        1
+    } else if interrupted {
+        130
+    } else {
+        2
+    })
+}
+
 fn signal(stop: CancellationToken) -> Result<tokio::task::JoinHandle<()>, &'static str> {
     // Install handlers before starting collection, not on a later task poll.
     #[cfg(unix)]
@@ -164,6 +379,9 @@ fn key() -> Result<String, &'static str> {
     )
 }
 async fn run(cli: Cli) -> Result<i32, &'static str> {
+    if let Command::Controller(args) = &cli.command {
+        return run_controller(&cli, args).await;
+    }
     let started = Instant::now();
     let metrics = Arc::new(Mutex::new(Metrics::default()));
     let stop = CancellationToken::new();
@@ -238,6 +456,7 @@ async fn run(cli: Cli) -> Result<i32, &'static str> {
     let producer_metrics = metrics.clone();
     let producer = tokio::spawn(async move {
         match cli.command {
+            Command::Controller(_) => unreachable!("controller dispatched separately"),
             Command::Files {
                 paths,
                 max_file_bytes,

@@ -168,3 +168,42 @@ fn sigterm_writes_final_report_and_exits() {
     let v: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
     assert!(v["summary"]["coverage_gaps"].as_u64().unwrap() > 0);
 }
+
+#[test]
+fn controller_cli_and_policy_validation_do_not_access_cluster() {
+    let dir = tempfile::tempdir().unwrap();
+    let policy = dir.path().join("policy.json");
+    std::fs::write(&policy, r#"{"min_confidence":1.1}"#).unwrap();
+    for extra in [
+        vec!["--verdict-ttl", "0"],
+        vec!["--sink", "email"],
+        vec!["--no-grouping"],
+        vec!["--json"],
+        vec!["--webhook-url", "https://example.invalid"],
+        vec!["--policy", policy.to_str().unwrap()],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_jevernetes"))
+            .args([
+                "controller",
+                "--state",
+                dir.path().join("db").to_str().unwrap(),
+                "--namespace",
+                "synthetic",
+                "--offline",
+            ])
+            .args(extra)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(
+            !dir.path().join("db").exists(),
+            "invalid flags/policy must fail before state or cluster access"
+        );
+    }
+    let help = Command::new(env!("CARGO_BIN_EXE_jevernetes"))
+        .args(["controller", "--help"])
+        .output()
+        .unwrap();
+    assert!(help.status.success());
+    assert!(String::from_utf8_lossy(&help.stdout).contains("--verdict-ttl"));
+}

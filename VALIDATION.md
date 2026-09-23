@@ -12,7 +12,46 @@ printf 'ERROR synthetic failure\nINFO ready\n' | target/release/jevernetes files
 
 Rust tests use synthetic inputs and loopback HTTP fixtures, never live Kubernetes or Jev credentials. They cover byte/event bounds, multiline/redaction, typed choices/confidence, safe HTTP failures/retries, usage, exact reuse/expiry, reconnect multiplicity and cursor bounds, queue drops, retention and CLI reports/permissions. See docs/architecture.md for benchmarks and authorized cluster validation still needed. Legacy validation below describes the retained companion only.
 
-Verified for this migration: Rust formatting and Clippy with warnings denied, 26 Rust tests, release build, 117 legacy Python tests, all five JavaScript helper suites, and an offline release-binary smoke with six synthetic events. The smoke checked JSON equivalence, stable distinct occurrence IDs, multiline grouping, password/PEM suppression, zero provider requests, and mode 0600. Loopback HTTP tests exercise the real Kubernetes client against synthetic list/watch/get/log responses and the real Jev client against synthetic provider responses. No live cluster or provider calls were made. The optional legacy wheel/sdist build was not run locally because the `build` module was absent; the existing CI packaging job remains enabled.
+The controller adds deterministic checks for SQLite reopen, exclusive ownership, full contract
+invalidation, TTL reduction/rescore/pruning, unsafe-verdict rejection, policy thresholds,
+review/abstention, cooldown and recurrence, changed-decision replay, atomic outbox rollback,
+crash leases, persisted rate limiting, attempts/dead letters, sanitized webhook requests,
+redirect rejection and body bounds, state-failure visibility, independent delivery shutdown,
+health semantics and CLI validation. Existing queue, provider and collector tests remain enabled.
+
+```sh
+cargo test --all-features controller::tests::offline_controller_smoke_and_shutdown
+python3 tools/check_controller_artifacts.py
+kubectl kustomize deploy/base > /tmp/controller-manifests.yaml
+python3 -m unittest discover -s tests -v
+node tests/test_context_ui.cjs
+node tests/test_prompt_ui.cjs
+node tests/test_review_ui.cjs
+node tests/test_grouping_ui.cjs
+node tests/test_search_ui.cjs
+python3 tools/check_release.py
+git diff --check
+```
+
+The offline controller smoke seeds a synthetic typed verdict, feeds redacted events through
+the real bounded analysis lane, verifies persistent reuse and novelty/cooldown suppression,
+delivers to a local synthetic webhook, checks the durable delivery checkpoint and cancels
+idle workers. It makes no Kubernetes or Jev request and loads no credentials. Other tests use
+synthetic loopback provider/Kubernetes responses. A sandbox must permit local port binding.
+
+Artifact checks use Python's standard JSON parser plus explicit RBAC/security/storage/build
+invariants. Local Kustomize rendering checks resource composition. These are not live API
+schema/admission checks or proof an image runs on the target cluster. The Dockerfile requires
+operator-selected base-image digests and was not used to publish an image. Production-volume
+power-loss testing, actual CPU/RSS/load measurements, real detection accuracy/calibration,
+live-cluster checks and fleet scaling remain deferred. See [controller limits](docs/controller.md).
+
+Local verification for this deliverable passed formatting, Clippy with warnings denied,
+50 Rust tests (43 library + 7 CLI), release compilation, the offline controller/webhook smoke,
+the release-binary offline/redaction smoke, 117 Python tests, five JavaScript helper suites,
+JavaScript syntax checks, controller artifact checks, local Kustomize rendering and staged
+private-data/artifact review. No image build, live Kubernetes/provider evaluation, push or
+deployment was performed.
 
 # Legacy validation
 
@@ -27,7 +66,7 @@ node tests/test_prompt_ui.cjs
 node tests/test_review_ui.cjs
 ```
 
-The Python suite contains 83 tests covering parsing, multiline grouping, redaction, bounded collection, model response validation, retry and token accounting, Kubernetes inventory errors, live-stream reconnection and cleanup, pending classifications, queue overflow, report persistence, and dashboard HTTP access controls. Kubernetes and provider behavior use synthetic fixtures or mocks; these tests do not establish connectivity to a real cluster.
+The Python suite covers parsing, multiline grouping, redaction, bounded collection, model response validation, retry and token accounting, Kubernetes inventory errors, live-stream reconnection and cleanup, pending classifications, queue overflow, report persistence, and dashboard HTTP access controls. Kubernetes and provider behavior use synthetic fixtures or mocks; these tests do not establish connectivity to a real cluster.
 
 Bulk review checks cover atomic validation and persistence, scoped acknowledgments, exact matching for short messages, legacy rules, and live-session changes. Browser checks with a synthetic local backend verified selection across filters, bulk acknowledgment and expected rules, single-event saves, and stable layout during delayed live polling. Pattern suggestion checks cover multiline structured messages and standalone braces.
 

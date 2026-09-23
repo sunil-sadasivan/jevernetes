@@ -1,6 +1,6 @@
 # Jevernetes
 
-**Jevernetes uses Rust to collect and analyze Kubernetes logs.** The `jevernetes` binary provides bounded streaming ingestion, local offline rules, typed [Jev](https://docs.typesafe.ai) analysis, and JSON reports. Collection is read-only and judgments are advisory.
+**Jevernetes uses Rust to collect and analyze Kubernetes logs.** The `jevernetes` binary provides bounded streaming ingestion, local offline rules, typed [Jev](https://docs.typesafe.ai) analysis, JSON reports, and a durable probabilistic monitoring controller. Collection is read-only and judgments are advisory.
 
 ## Quick start
 
@@ -26,6 +26,18 @@ jevernetes k8s -f --offline --tail 0 --max-streams 64 --output .runs/live.json
 Kubernetes access uses the Rust Kubernetes client with your trusted kubeconfig, or service-account configuration with `--in-cluster`. No `kubectl` or Python is needed for the Rust runtime. Offline file analysis makes no network requests. Online analysis requires `TYPESAFE_API_KEY`, `TYPESAFEAI_API_KEY`, or `TYPESAFE_API_KEY_FILE`; omit `--offline` to enable it. Never put credentials into command-line arguments or git.
 
 Live mode reports queue pressure and coverage gaps on stderr, batches analysis, and saves a final report on SIGINT/SIGTERM or a configured duration/budget stop. Reports contain a bounded retained window, cumulative counters, and usage estimates. Kubernetes reports conservatively report restricted history; exit code 2 means partial coverage, not a crash.
+
+## In-cluster controller
+
+`jevernetes controller --namespace example --state /var/lib/jevernetes/state.db`
+continuously follows logs, reuses successful judgments from SQLite, applies a deterministic
+security/fraud confidence policy, and commits notifications to a durable outbox. JSONL
+stdout and HTTPS webhook sinks are available. Review is the default for uncertain evidence;
+there is no automatic remediation. One replica owns one persistent volume.
+
+See [controller operation and exact limits](docs/controller.md), the [Kustomize base](deploy/base),
+and the [probabilistic control-plane thesis and roadmap](docs/probabilistic-control-plane.md).
+Templates contain placeholder images and Secret references; no deployment is implied.
 
 ## Compatibility
 

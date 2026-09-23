@@ -36,3 +36,29 @@ AI limits use batches and an estimated cost threshold. Neither constitutes a str
 ## Release checks
 
 Source releases exclude local reports, review rules, environment files, kubeconfigs, keys, bytecode and build output. CI runs synthetic regression tests, JavaScript checks and package-content checks with read-only repository permissions and pinned GitHub Actions. No real cluster credentials are needed for tests. See [SECURITY_REVIEW.md](SECURITY_REVIEW.md) for the initial review scope and limitations.
+
+## Rust controller state and notification boundary
+
+Controller mode adds a private SQLite database and a network notification destination. The
+store contains redacted evidence in outbox payloads and sensitive operational judgments;
+best-effort redaction is not anonymization. Restrict the directory/PVC and backups, use
+volume encryption, and keep state out of git. New database/lock files use mode 0600 on Unix;
+existing directory/file permissions remain the operator's responsibility. Cache identities
+include full evidence/source, provider/model, prompt/taxonomy and the versioned decision
+contract. Failed, unknown or truncated judgments cannot be reused as safe.
+
+Only deterministic typed policy produces advisory notify/review intents. No remediation,
+cluster write, executable model action, label/annotation copying or arbitrary callback is
+implemented. Payload metadata is allowlisted; context labels, input paths and endpoints
+are excluded. Configure webhook secrets solely via environment or mounted files. URL and
+auth values are never logged; Authorization is marked sensitive; HTTPS is required,
+redirects/proxies disabled, timeouts and request/response sizes bounded. Operators must
+approve destinations and egress; this is not a general SSRF-filtering proxy. `--offline`
+disables Jev but can still deliver notifications. Stdout is a development sink and must be
+drained and access-controlled.
+
+State failure is fatal/visible, notification failure is independently retried/dead-lettered.
+The unauthenticated metrics/health endpoint exposes aggregate counters only; restrict
+network access. One writer/replica owns a local persistent volume. See
+[controller limits and maintenance](docs/controller.md) for retention, crash windows,
+clock assumptions, safe backup/requeue practices and incomplete-coverage semantics.

@@ -68,11 +68,21 @@ pub struct AnalyzeOptions {
     pub print_events: bool,
 }
 pub async fn analyze(
+    rx: mpsc::Receiver<Event>,
+    sender_metrics: SharedMetrics,
+    client: Option<Jev>,
+    opts: AnalyzeOptions,
+    stop: CancellationToken,
+) -> (Report, Option<Jev>) {
+    analyze_controlled(rx, sender_metrics, client, opts, stop, None).await
+}
+pub async fn analyze_controlled(
     mut rx: mpsc::Receiver<Event>,
     sender_metrics: SharedMetrics,
     mut client: Option<Jev>,
     opts: AnalyzeOptions,
     stop: CancellationToken,
+    controller: Option<crate::controller::Controller>,
 ) -> (Report, Option<Jev>) {
     let mut report = Report::new(opts.retain);
     let mut cache = Cache::new(
@@ -110,6 +120,27 @@ pub async fn analyze(
         let mut references = HashMap::new();
         let mut duplicate_of = HashMap::new();
         for (i, event) in batch.iter_mut().enumerate() {
+            if let Some(c) = &controller {
+                match c.lookup(event).await {
+                    Ok(Some(j)) => {
+                        event.judgment = j;
+                        event.analysis_reused = true;
+                        continue;
+                    }
+                    Ok(None) => (),
+                    Err(_) => {
+                        event.judgment = Judgment::failed("Controller state unavailable");
+                        gap(
+                            &sender_metrics,
+                            &event.source,
+                            "error",
+                            "Controller state unavailable; collection stopped",
+                        );
+                        stop.cancel();
+                        continue;
+                    }
+                }
+            }
             if client.is_none() {
                 event.judgment.importance = if event.baseline.important {
                     Importance::Important
@@ -119,17 +150,22 @@ pub async fn analyze(
                 continue;
             }
             if opts.grouping && !event.truncated {
-                if let Some((judgment, id)) = cache.get(event, Instant::now()) {
+                if controller.is_none()
+                    && let Some((judgment, id)) = cache.get(event, Instant::now())
+                {
                     event.judgment = judgment;
                     event.analysis_reused = true;
                     event.analysis_representative_id = Some(id);
                     continue;
                 }
-                if let Some(index) = references.get(&event.group_id) {
+                let key = controller
+                    .as_ref()
+                    .map_or_else(|| event.group_id.clone(), |c| c.contract.key(event));
+                if let Some(index) = references.get(&key) {
                     duplicate_of.insert(i, *index);
                     continue;
                 }
-                references.insert(event.group_id.clone(), i);
+                references.insert(key, i);
             }
             owned.push(i);
         }
@@ -155,7 +191,7 @@ pub async fn analyze(
                 Ok(judgments) => {
                     for (&i, judgment) in owned.iter().zip(judgments) {
                         batch[i].judgment = judgment.conservative(batch[i].truncated);
-                        if opts.grouping {
+                        if opts.grouping && controller.is_none() {
                             cache.insert(&batch[i], Instant::now());
                         }
                     }
@@ -177,7 +213,28 @@ pub async fn analyze(
                 batch[i].analysis_representative_id = Some(batch[representative].id.clone());
             }
         }
-        for event in batch {
+        if let Some(client) = &client {
+            let mut m = sender_metrics.lock().expect("metrics lock");
+            m.provider_batches = report.batches;
+            m.provider_attempts = client.usage.request_attempts;
+            m.provider_input_tokens = client.usage.input_tokens;
+            m.provider_output_tokens = client.usage.output_tokens;
+            m.provider_unmetered_requests = client.usage.unmetered_requests;
+            m.estimated_cost_usd = client.usage.estimated_cost_usd;
+        }
+        for mut event in batch {
+            if let Some(c) = &controller
+                && c.apply(&event).await.is_err()
+            {
+                gap(
+                    &sender_metrics,
+                    &event.source,
+                    "error",
+                    "Controller state commit failed; evidence requires review",
+                );
+                event.judgment = Judgment::failed("Controller state commit failed");
+                stop.cancel();
+            }
             if event.truncated {
                 gap(
                     &sender_metrics,

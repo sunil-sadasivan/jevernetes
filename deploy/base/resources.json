@@ -1,0 +1,299 @@
+{
+  "apiVersion": "v1",
+  "kind": "List",
+  "items": [
+    {
+      "apiVersion": "v1",
+      "kind": "Namespace",
+      "metadata": {
+        "name": "jevernetes"
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "ServiceAccount",
+      "metadata": {
+        "name": "jevernetes"
+      }
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "Role",
+      "metadata": {
+        "name": "jevernetes"
+      },
+      "rules": [
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "pods"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "pods/log"
+          ],
+          "verbs": [
+            "get"
+          ]
+        }
+      ]
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "RoleBinding",
+      "metadata": {
+        "name": "jevernetes"
+      },
+      "roleRef": {
+        "apiGroup": "rbac.authorization.k8s.io",
+        "kind": "Role",
+        "name": "jevernetes"
+      },
+      "subjects": [
+        {
+          "kind": "ServiceAccount",
+          "name": "jevernetes",
+          "namespace": "jevernetes"
+        }
+      ]
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "PersistentVolumeClaim",
+      "metadata": {
+        "name": "controller-state"
+      },
+      "spec": {
+        "accessModes": [
+          "ReadWriteOnce"
+        ],
+        "resources": {
+          "requests": {
+            "storage": "1Gi"
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "ConfigMap",
+      "metadata": {
+        "name": "controller-policy"
+      },
+      "data": {
+        "policy.json": "{\n  \"categories\": [\n    \"security\",\n    \"fraud\"\n  ],\n  \"severities\": [\n    \"degraded\",\n    \"impact\",\n    \"outage\"\n  ],\n  \"min_confidence\": 0.85,\n  \"cooldown_seconds\": 300,\n  \"recurrence_window_seconds\": 900,\n  \"recurrence_count\": 5,\n  \"max_escalation\": 8,\n  \"abstention\": \"review\"\n}"
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "metadata": {
+        "name": "jevernetes"
+      },
+      "spec": {
+        "replicas": 1,
+        "strategy": {
+          "type": "Recreate"
+        },
+        "selector": {
+          "matchLabels": {
+            "app": "jevernetes"
+          }
+        },
+        "template": {
+          "metadata": {
+            "labels": {
+              "app": "jevernetes"
+            }
+          },
+          "spec": {
+            "serviceAccountName": "jevernetes",
+            "terminationGracePeriodSeconds": 60,
+            "securityContext": {
+              "runAsNonRoot": true,
+              "runAsUser": 65532,
+              "runAsGroup": 65532,
+              "fsGroup": 65532,
+              "seccompProfile": {
+                "type": "RuntimeDefault"
+              }
+            },
+            "containers": [
+              {
+                "name": "controller",
+                "image": "example.invalid/jevernetes:REPLACE_ME",
+                "imagePullPolicy": "IfNotPresent",
+                "args": [
+                  "controller",
+                  "--namespace",
+                  "jevernetes",
+                  "--state",
+                  "/var/lib/jevernetes/state.db",
+                  "--policy",
+                  "/etc/jevernetes/policy.json",
+                  "--sink",
+                  "webhook",
+                  "--listen",
+                  "0.0.0.0:9090",
+                  "--selector",
+                  "app!=jevernetes"
+                ],
+                "env": [
+                  {
+                    "name": "TYPESAFE_API_KEY_FILE",
+                    "value": "/var/run/jevernetes-secrets/jev-key"
+                  },
+                  {
+                    "name": "JEV_WEBHOOK_URL_FILE",
+                    "value": "/var/run/jevernetes-secrets/webhook-url"
+                  }
+                ],
+                "ports": [
+                  {
+                    "name": "health",
+                    "containerPort": 9090
+                  }
+                ],
+                "readinessProbe": {
+                  "httpGet": {
+                    "path": "/readyz",
+                    "port": "health"
+                  },
+                  "periodSeconds": 10
+                },
+                "livenessProbe": {
+                  "httpGet": {
+                    "path": "/livez",
+                    "port": "health"
+                  },
+                  "periodSeconds": 10
+                },
+                "resources": {
+                  "requests": {
+                    "cpu": "100m",
+                    "memory": "128Mi"
+                  },
+                  "limits": {
+                    "cpu": "1",
+                    "memory": "512Mi"
+                  }
+                },
+                "securityContext": {
+                  "allowPrivilegeEscalation": false,
+                  "readOnlyRootFilesystem": true,
+                  "capabilities": {
+                    "drop": [
+                      "ALL"
+                    ]
+                  }
+                },
+                "volumeMounts": [
+                  {
+                    "name": "state",
+                    "mountPath": "/var/lib/jevernetes"
+                  },
+                  {
+                    "name": "policy",
+                    "mountPath": "/etc/jevernetes",
+                    "readOnly": true
+                  },
+                  {
+                    "name": "secrets",
+                    "mountPath": "/var/run/jevernetes-secrets",
+                    "readOnly": true
+                  }
+                ]
+              }
+            ],
+            "volumes": [
+              {
+                "name": "state",
+                "persistentVolumeClaim": {
+                  "claimName": "controller-state"
+                }
+              },
+              {
+                "name": "policy",
+                "configMap": {
+                  "name": "controller-policy"
+                }
+              },
+              {
+                "name": "secrets",
+                "projected": {
+                  "defaultMode": 288,
+                  "sources": [
+                    {
+                      "secret": {
+                        "name": "controller-jev",
+                        "items": [
+                          {
+                            "key": "api-key",
+                            "path": "jev-key"
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "secret": {
+                        "name": "controller-webhook",
+                        "items": [
+                          {
+                            "key": "url",
+                            "path": "webhook-url"
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "secret": {
+                        "name": "controller-webhook-auth",
+                        "optional": true,
+                        "items": [
+                          {
+                            "key": "token",
+                            "path": "webhook-token"
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "name": "jevernetes"
+      },
+      "spec": {
+        "selector": {
+          "app": "jevernetes"
+        },
+        "ports": [
+          {
+            "name": "health",
+            "port": 9090,
+            "targetPort": "health"
+          }
+        ]
+      }
+    }
+  ]
+}
