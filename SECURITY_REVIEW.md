@@ -30,3 +30,7 @@ The loopback API is not an authentication boundary against other local users/pro
 ## Ongoing automation
 
 Dependabot, TruffleHog, Bandit, pip-audit and CodeQL are configured for ongoing checks. See CONTRIBUTING.md for triggers, permissions, thresholds and the one synthetic fixture suppression.
+
+## Rust migration scope (2026-09-23)
+
+The initial findings above apply to the legacy Python release. The Rust migration adds typed System One validation (including fraud), bounded incremental parsing/private-key suppression, redirect rejection, controlled errors, bounded session caches/queues/cursors, API-based read-only Kubernetes collection and private atomic report writes. Synthetic regression coverage is recorded in VALIDATION.md. The migration has not received an independent security audit, live-cluster penetration test, performance qualification or provider-backed semantic accuracy evaluation. The Python/browser security jobs remain enabled; Cargo updates and Rust lint/test/build checks are added. A dedicated Rust dependency advisory audit and authenticated proxy/exec-plugin deployment review remain future security validation work.

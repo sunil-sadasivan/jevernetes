@@ -6,7 +6,7 @@ import subprocess
 import tarfile
 import zipfile
 
-PRIVATE_PARTS = {'.security-venv', '.runs', 'reports', '.kube', '__pycache__', '.venv', 'build', 'dist', '.git'}
+PRIVATE_PARTS = {'.security-venv', '.runs', 'reports', '.kube', '__pycache__', '.venv', 'build', 'dist', 'target', '.git'}
 TOKENS = re.compile(rb'(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{30,}|AKIA[0-9A-Z]{16}|sk-[A-Za-z0-9_-]{40,})')
 PERSONAL_PATH = re.compile(rb'/(?:Users|home)/[A-Za-z0-9_.-]+/')
 

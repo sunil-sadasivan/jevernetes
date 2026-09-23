@@ -1,4 +1,20 @@
-# Validation
+# Rust validation
+
+Required checks (CI uses Rust 1.94):
+
+```sh
+cargo fmt --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --all-features
+cargo build --release --locked
+printf 'ERROR synthetic failure\nINFO ready\n' | target/release/jevernetes files - --offline --json
+```
+
+Rust tests use synthetic inputs and loopback HTTP fixtures, never live Kubernetes or Jev credentials. They cover byte/event bounds, multiline/redaction, typed choices/confidence, safe HTTP failures/retries, usage, exact reuse/expiry, reconnect multiplicity and cursor bounds, queue drops, retention and CLI reports/permissions. See docs/architecture.md for benchmarks and authorized cluster validation still needed. Legacy validation below describes the retained companion only.
+
+Verified for this migration: Rust formatting and Clippy with warnings denied, 26 Rust tests, release build, 117 legacy Python tests, all five JavaScript helper suites, and an offline release-binary smoke with six synthetic events. The smoke checked JSON equivalence, stable distinct occurrence IDs, multiline grouping, password/PEM suppression, zero provider requests, and mode 0600. Loopback HTTP tests exercise the real Kubernetes client against synthetic list/watch/get/log responses and the real Jev client against synthetic provider responses. No live cluster or provider calls were made. The optional legacy wheel/sdist build was not run locally because the `build` module was absent; the existing CI packaging job remains enabled.
+
+# Legacy validation
 
 Run the automated checks from the project directory:
 
