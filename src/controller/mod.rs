@@ -1,5 +1,6 @@
 //! Durable probabilistic monitoring: classification is advisory; policy owns decisions.
 pub mod health;
+pub mod inspect;
 pub mod paths;
 pub mod policy;
 pub mod sink;
@@ -165,6 +166,13 @@ pub struct Controller {
     pub wake: Arc<tokio::sync::Notify>,
 }
 impl Controller {
+    /// Collection has finished. Keep serving and delivering without restarting provider budgets.
+    pub async fn hold_after_stop(&self, shutdown: &CancellationToken) {
+        self.ready.store(false, Ordering::Release);
+        self.metrics.lock().expect("metrics").collection_stopped = 1;
+        shutdown.cancelled().await;
+    }
+
     pub fn new(
         store: Store,
         contract: Contract,

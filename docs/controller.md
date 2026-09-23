@@ -56,6 +56,8 @@ The database reuses freed pages; pruning does not shrink the file. Incident tomb
 
 Log ingestion before the SQLite transaction remains volatile. A crash can lose queued/uncommitted evidence; replay is constrained by Kubernetes log retention and the `--since` (1h) / `--tail` (500) window. Failed notifications survive restart. Provider usage/cost counters and batch limits are per process, **not durable financial limits**; repeated restarts reset those limits and can spend again. Set external account quotas for a real spending ceiling. On new work after budget exhaustion the controller cancels collection; queued unrequested evidence becomes unknown/review. Report/metrics always retain partial-coverage semantics. Notification failure alone does not stop collection or make readiness false; growing pending/dead counts require operator attention.
 
+For a Kubernetes Deployment, enable `--hold-after-stop`: after a budget, duration, collection failure or state limit stops collection, the process stays alive with readiness false and `jevernetes_collection_stopped 1`. Health, remote inspection and pending delivery remain available until SIGINT/SIGTERM. This prevents automatic restart loops from renewing the provider budget after a normal bounded stop. Explicit restarts, crashes and node replacement still reset per-process budgets. Investigate the stop before restarting. The final `--output` report is written on shutdown; use remote inspection while paused.
+
 SIGINT/SIGTERM cancels collection/provider requests, flushes/drains the bounded queue, commits policy/outbox for drained evidence, then cancels delivery and health tasks. Outbox intent survives cancellation. SQLite FULL-sync latency and a slow local disk can extend shutdown; the manifest allows 60 seconds, but no latency claim is made without testing the target volume.
 
 The development stdout sink owns one dedicated OS writer thread and at most one outstanding bounded write/flush, separate from Tokio’s blocking pool. A timeout or cancellation cannot release that write’s slot; retries fail busy until it completes, consuming the normal durable retry/dead-letter budget without queuing more writes. A permanently blocked pipe can stop this sink from making progress, but cannot starve SQLite ingestion or delay controller/runtime shutdown. Shutdown does not join the stuck thread. A late write may still appear after timeout/dead-letter, so stdout has the same duplicate/ambiguous-acknowledgment limitation as other transports. Keep it drained and monitor dead letters; it is a development sink. No shutdown network flush is required for durability.
@@ -65,6 +67,34 @@ The development stdout sink owns one dedicated OS writer thread and at most one 
 Alert on state failure/unready, any dead letters, sustained pending backlog, unmetered provider requests, drops, unfollowed observations and coverage gaps. The health listener defaults to `0.0.0.0:9090`, has no authentication and exposes no event payloads; restrict network access using site policy. No per-source metric labels introduce unbounded cardinality.
 
 ## Deployment and maintenance
+
+### Inspect a remote controller from the CLI
+
+Enable `controller --inspect-port 9091` in the pod (included in `deploy/base`). This opens a separate read-only listener on **127.0.0.1 only**; do not add it to a Service or Ingress. The CLI uses your kubeconfig credentials and Kubernetes port-forwarding directly, without a local listening socket, `kubectl` subprocess, provider key, or new classification requests.
+
+```sh
+# Stats and the 20 most recently touched incidents; auto-select one running app=jevernetes pod.
+jevernetes remote --context do-nyc1-pingdex --namespace jevernetes
+
+# Refresh every five seconds, rediscovering the pod after a rollout.
+jevernetes remote --context do-nyc1-pingdex --namespace jevernetes --watch
+
+# Exact pod selection and retained incident evidence, judgment, policy and delivery state.
+jevernetes remote --context do-nyc1-pingdex --namespace jevernetes \
+  --pod CONTROLLER_POD --incident INCIDENT_ID
+
+# JSON output for scripts; --watch emits one JSON object per sample.
+jevernetes remote --context do-nyc1-pingdex --namespace jevernetes \
+  --json --output .runs/controller-status.json
+```
+
+Use `--namespace jevernetes-pr12-test` for the isolated test deployment. `--selector` changes discovery; ambiguous matches fail rather than choosing an arbitrary controller. `--pod` requires `get pods`, discovery requires `list pods`, and the native WebSocket tunnel requires `get pods/portforward`. Grant these to the **operator's identity**, not the controller service account. Some cluster access policies also require `create pods/portforward`. Port-forward permission is sensitive: it grants access to other ports in the selected pod too. Same-pod containers and identities with exec access can also reach loopback. Do not use host networking for this controller.
+
+The overview includes ingestion/coverage, queue drops, verdict reuse, policy decisions, provider usage/cost, delivery backlog/dead letters and incident counts. Counters reset with the process; incident state and outbox counts come from SQLite. Coverage remains partial. In watch mode, an unavailable pod produces an explicit stale-output message and retry; `--pod` stays pinned to that name, while discovery can select a replacement. Ctrl-C/SIGTERM closes the tunnel. Saved output is atomically replaced with private permissions and contains the latest successful sample, with its timestamp.
+
+Inspection API schema 1 has `GET /v1/status` and `GET /v1/incidents/<64-hex-id>`. Incident detail includes the **last enqueued notification**, which may precede newer observations suppressed by cooldown; it is not a complete event history. Pruned notification evidence returns null while durable incident counters remain. Evidence uses the existing redacted notification format. The read does not claim deliveries, update recurrence, prune state or trigger Jev. Inspection is opt-in outside the base manifest and is absent from the public health/metrics endpoint. Requests are capped at 1 KiB, responses at 256 KiB, with one request in flight and a two-second server deadline. Busy state returns 503 without stopping collection; the client uses a 20-second sample timeout and supports `--interval 2..3600`.
+
+The controller image and local CLI must both include this capability; the original PR #12 image has only health and metrics. No controller deployment, RBAC grant or provider call is performed by `remote`.
 
 `deploy/base` is a Kustomize base with namespace-scoped read-only pod/log RBAC, one replica with Recreate strategy, a 1 GiB RWO PVC, Secret references, non-root UID/GID 65532, dropped capabilities, RuntimeDefault seccomp, read-only root filesystem and resource requests/limits. The example only observes its namespace; adapt namespace and RBAC together for your workload. Never bind this identity to Secret-read or mutation permissions. No Secret values are provided. Provision `controller-jev` key `api-key` and `controller-webhook` key `url` through your approved secret manager. Optional `controller-webhook-auth` key `token` is projected; enable `JEV_WEBHOOK_TOKEN_FILE=/var/run/jevernetes-secrets/webhook-token` only when that Secret exists. Secrets are read once at startup; restart to rotate them. The base excludes `app=jevernetes` to avoid reviewing its own logs. Preserve an equivalent exclusion when changing labels/selectors to prevent notification feedback loops.
 

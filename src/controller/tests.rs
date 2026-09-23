@@ -35,6 +35,197 @@ fn controller(dir: &tempfile::TempDir) -> Controller {
     )
     .unwrap()
 }
+
+#[tokio::test]
+async fn paused_collection_keeps_inspection_and_delivery_until_shutdown() {
+    let dir = tempfile::tempdir().unwrap();
+    let c = controller(&dir);
+    c.apply(&event("synthetic notification", 1)).await.unwrap();
+    let shutdown = CancellationToken::new();
+    let collection = shutdown.child_token();
+    collection.cancel();
+    assert!(!shutdown.is_cancelled());
+    let hold = tokio::spawn({
+        let c = c.clone();
+        let shutdown = shutdown.clone();
+        async move { c.hold_after_stop(&shutdown).await }
+    });
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while c.ready.load(Ordering::Acquire) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(inspect::serve(listener, c.clone(), shutdown.clone()));
+    let status: inspect::Snapshot = reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .unwrap()
+        .get(format!("http://{addr}/v1/status"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(!status.ready);
+    assert_eq!(status.metrics["collection_stopped"], 1);
+    assert_eq!(status.outbox_pending, 1);
+    assert!(!hold.is_finished());
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let delivery = tokio::spawn({
+        let c = c.clone();
+        let stop = shutdown.clone();
+        let entered = entered.clone();
+        async move { c.deliver(Arc::new(StalledSink { entered }), stop).await }
+    });
+    tokio::time::timeout(Duration::from_secs(1), entered.notified())
+        .await
+        .unwrap();
+    shutdown.cancel();
+    tokio::time::timeout(Duration::from_secs(1), async {
+        hold.await.unwrap();
+        server.await.unwrap();
+        delivery.await.unwrap();
+    })
+    .await
+    .unwrap();
+    assert_eq!(c.db(|s| s.counts()).await.unwrap(), (1, 0));
+}
+
+#[tokio::test]
+async fn inspection_is_bounded_read_only_and_preserves_sanitized_evidence() {
+    let dir = tempfile::tempdir().unwrap();
+    let c = controller(&dir);
+    for i in 0..25 {
+        c.apply(&event(
+            &format!("security evidence {i} password=synthetic-private"),
+            i,
+        ))
+        .await
+        .unwrap();
+    }
+    let (id, changes) = {
+        let store = c.store.lock().unwrap();
+        let changes = store.conn.total_changes();
+        let (count, pending, dead, recent) = store.inspection().unwrap();
+        assert_eq!((count, pending, dead), (25, 25, 0));
+        assert_eq!(recent.len(), inspect::RECENT_LIMIT);
+        let id = recent[0].id.clone();
+        let detail = store.incident_detail(&id).unwrap().unwrap();
+        assert_eq!(detail.delivery_status.as_deref(), Some("pending"));
+        assert_eq!(detail.delivery_attempts, Some(0));
+        let raw = serde_json::to_string(&detail).unwrap();
+        assert!(!raw.contains("synthetic-private"));
+        assert!(!raw.contains("private-context"));
+        assert!(!raw.contains("private-path"));
+        assert_eq!(
+            store.conn.total_changes(),
+            changes,
+            "inspection must not claim or update rows"
+        );
+        (id, changes)
+    };
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let stop = CancellationToken::new();
+    let server = tokio::spawn(inspect::serve(listener, c.clone(), stop.clone()));
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    let status: inspect::Snapshot = client
+        .get(format!("http://{addr}/v1/status"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(status.incident_count, 25);
+    assert!(!status.coverage_complete);
+    let detail: inspect::Detail = client
+        .get(format!("http://{addr}/v1/incidents/{id}"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(detail.incident.id, id);
+    assert!(detail.last_notification.is_some());
+    assert_eq!(
+        client
+            .post(format!("http://{addr}/v1/status"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        400
+    );
+    assert_eq!(
+        client
+            .get(format!("http://{addr}/v1/incidents/{}", "f".repeat(64)))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        404
+    );
+    assert_eq!(
+        client
+            .get(format!("http://{addr}/v1/incidents/not-an-id"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        404
+    );
+    assert_eq!(c.store.lock().unwrap().conn.total_changes(), changes);
+    stop.cancel();
+    tokio::time::timeout(Duration::from_secs(1), server)
+        .await
+        .unwrap()
+        .unwrap();
+
+    // The public health listener must never serve payloads.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let stop = CancellationToken::new();
+    let server = tokio::spawn(health::serve(listener, c.clone(), stop.clone()));
+    assert_eq!(
+        client
+            .get(format!("http://{addr}/v1/status"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        404
+    );
+    stop.cancel();
+    server.await.unwrap();
+
+    let store = c.store.lock().unwrap();
+    store
+        .conn
+        .execute("DELETE FROM outbox WHERE incident=?1", [&id])
+        .unwrap();
+    let detail = store.incident_detail(&id).unwrap().unwrap();
+    assert!(detail.last_notification.is_none());
+    assert_eq!(detail.incident.notification_sequence, 1);
+}
+
+#[tokio::test]
+async fn inspection_refuses_non_loopback_listener() {
+    let dir = tempfile::tempdir().unwrap();
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    tokio::time::timeout(
+        Duration::from_secs(1),
+        inspect::serve(listener, controller(&dir), CancellationToken::new()),
+    )
+    .await
+    .unwrap();
+}
 #[test]
 fn persistence_contract_expiry_and_unsafe_reuse() {
     let dir = tempfile::tempdir().unwrap();

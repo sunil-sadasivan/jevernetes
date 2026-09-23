@@ -2,6 +2,49 @@ use std::{
     io::Write,
     process::{Command, Stdio},
 };
+
+#[test]
+fn remote_validates_scope_and_does_not_require_provider_credentials() {
+    let dir = tempfile::tempdir().unwrap();
+    for (args, expected) in [
+        (vec!["remote"], "--namespace"),
+        (
+            vec![
+                "remote",
+                "--namespace",
+                "synthetic",
+                "--incident",
+                "../private",
+            ],
+            "64 hexadecimal",
+        ),
+        (
+            vec![
+                "remote",
+                "--namespace",
+                "synthetic",
+                "--context",
+                "missing",
+                "--json",
+            ],
+            "Kubernetes configuration",
+        ),
+    ] {
+        let result = Command::new(env!("CARGO_BIN_EXE_jevernetes"))
+            .args(args)
+            .env("KUBECONFIG", dir.path().join("missing-kubeconfig"))
+            .env_remove("TYPESAFE_API_KEY")
+            .env_remove("TYPESAFEAI_API_KEY")
+            .env_remove("TYPESAFE_API_KEY_FILE")
+            .output()
+            .unwrap();
+        assert!(!result.status.success());
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        assert!(stderr.contains(expected), "{stderr}");
+        assert!(!stderr.contains("Set TYPESAFE"));
+        assert!(result.stdout.is_empty());
+    }
+}
 fn run(input: &[u8], extra: &[&str]) -> std::process::Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_jevernetes"))
         .args(["files", "-", "--offline", "--json"])

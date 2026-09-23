@@ -136,6 +136,7 @@
                 "imagePullPolicy": "IfNotPresent",
                 "args": [
                   "controller",
+                  "--hold-after-stop",
                   "--namespace",
                   "jevernetes",
                   "--state",
@@ -146,6 +147,8 @@
                   "webhook",
                   "--listen",
                   "0.0.0.0:9090",
+                  "--inspect-port",
+                  "9091",
                   "--selector",
                   "app!=jevernetes"
                 ],

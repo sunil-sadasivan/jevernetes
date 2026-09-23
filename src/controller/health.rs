@@ -30,7 +30,7 @@ pub async fn serve(listener: TcpListener, controller: Controller, stop: Cancella
                 if c.ready.load(Ordering::Acquire) {
                     (200, "ready\n".into())
                 } else {
-                    (503, "state unavailable\n".into())
+                    (503, "collection stopped or state unavailable\n".into())
                 }
             } else if first.starts_with("GET /metrics HTTP/1.") {
                 let m = c.metrics.lock().expect("metrics");

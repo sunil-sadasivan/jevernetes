@@ -79,6 +79,8 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Command {
+    /// Inspect stats and incidents in a running controller through Kubernetes port-forwarding.
+    Remote(jevernetes::remote::Args),
     /// Persist judgments, apply confidence policy and durably notify while following Kubernetes.
     Controller(ControllerArgs),
     /// Analyze text/JSONL, gzip files, or '-' for stdin.
@@ -123,6 +125,12 @@ enum SinkKind {
 }
 #[derive(clap::Args)]
 struct ControllerArgs {
+    /// Keep health, inspection and pending delivery alive after collection stops until SIGTERM.
+    #[arg(long)]
+    hold_after_stop: bool,
+    /// Enable read-only incident inspection on 127.0.0.1:PORT, through Kubernetes port-forwarding.
+    #[arg(long, value_parser=clap::value_parser!(u16).range(1..))]
+    inspect_port: Option<u16>,
     /// SQLite file in an existing private writable directory. One process/replica only.
     #[arg(long)]
     state: PathBuf,
@@ -216,9 +224,19 @@ async fn run_controller(cli: &Cli, args: &ControllerArgs) -> Result<i32, &'stati
     let listener = tokio::net::TcpListener::bind(args.listen)
         .await
         .map_err(|_| "Cannot bind controller health listener")?;
-    let stop = CancellationToken::new();
+    let inspection = if let Some(port) = args.inspect_port {
+        Some(
+            tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port))
+                .await
+                .map_err(|_| "Cannot bind controller inspection listener")?,
+        )
+    } else {
+        None
+    };
+    let shutdown = CancellationToken::new();
+    let stop = shutdown.child_token();
     let worker_stop = CancellationToken::new();
-    let signals = signal(stop.clone())?;
+    let signals = signal(shutdown.clone())?;
     let fault_monitor = tokio::spawn({
         let c = controller.clone();
         let stop = stop.clone();
@@ -239,6 +257,13 @@ async fn run_controller(cli: &Cli, args: &ControllerArgs) -> Result<i32, &'stati
         controller.clone(),
         worker_stop.clone(),
     ));
+    let inspection_task = inspection.map(|listener| {
+        tokio::spawn(jevernetes::controller::inspect::serve(
+            listener,
+            controller.clone(),
+            worker_stop.clone(),
+        ))
+    });
     let timer = tokio::spawn({
         let stop = stop.clone();
         let duration = args.duration;
@@ -293,9 +318,18 @@ async fn run_controller(cli: &Cli, args: &ControllerArgs) -> Result<i32, &'stati
             (producer.await, analyzed)
         }
     };
+    if args.hold_after_stop && !shutdown.is_cancelled() {
+        eprintln!(
+            "[controller] collection paused; readiness false; inspection and delivery remain available until shutdown"
+        );
+        controller.hold_after_stop(&shutdown).await;
+    }
     worker_stop.cancel();
     let _ = delivery.await;
     let _ = health_task.await;
+    if let Some(task) = inspection_task {
+        let _ = task.await;
+    }
     let interrupted = signals.is_finished();
     signals.abort();
     timer.abort();
@@ -383,6 +417,13 @@ fn key() -> Result<String, &'static str> {
     )
 }
 async fn run(cli: Cli) -> Result<i32, &'static str> {
+    if let Command::Remote(args) = &cli.command {
+        let stop = CancellationToken::new();
+        let signals = signal(stop.clone())?;
+        let result = jevernetes::remote::run(args, cli.json, cli.output.as_deref(), stop).await;
+        signals.abort();
+        return result;
+    }
     if let Command::Controller(args) = &cli.command {
         return run_controller(&cli, args).await;
     }
@@ -460,7 +501,9 @@ async fn run(cli: Cli) -> Result<i32, &'static str> {
     let producer_metrics = metrics.clone();
     let producer = tokio::spawn(async move {
         match cli.command {
-            Command::Controller(_) => unreachable!("controller dispatched separately"),
+            Command::Controller(_) | Command::Remote(_) => {
+                unreachable!("controller/remote dispatched separately")
+            }
             Command::Files {
                 paths,
                 max_file_bytes,
