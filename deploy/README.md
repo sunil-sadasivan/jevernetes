@@ -46,5 +46,10 @@ policy requires it. Do not grant Secret/ConfigMap API reads to the controller.
 The patch preserves the base command and does not enable a template provider. Restart
 to load a new artifact; projected updates do not hot-reload. The loader accepts trusted
 projected symlinks to regular files, hashes the loaded bytes, and rejects invalid or
-expired artifacts before state/cluster access. Keep source scopes exact, mount and
-parent directories trusted, and the base's read-only RBAC and self-log exclusion intact.
+expired artifacts before state/cluster access. Version 2 requires a canonical
+`prefix_identity` with the exact logger-clock grammar (or explicit empty identity for
+whole-line JSON). Review `source_scope` as a nonempty subset: stable workload fields
+may exclude pod/pod_uid, but missing or changed scoped values always miss. Compatible
+overlapping rules are rejected. Version 1 artifacts must be recompiled and reviewed;
+they do not silently gain broader scope. Keep mount and parent directories trusted,
+and the base's read-only RBAC and self-log exclusion intact.

@@ -1,3 +1,56 @@
+# Reviewed logger envelopes and subset scopes (2026-09-27)
+
+Started at exact local HEAD `3542ac4074c3e7b9e0f419b2b9e4df0cb6059e89`.
+Reviewed artifact version 2 now requires an explicit canonical prefix identity,
+including the reused strict Drain logger-clock grammar; whole-line JSON uses an
+empty identity. Only one bounded prefix and a complete JSON object suffix qualify.
+Reviewed nonempty source scopes match exact subsets and replace volatile sources
+only in the session cache key. Compatible overlapping scopes are rejected unless
+prefix/shape/literal constraints prove they cannot match the same event. Version 1
+artifacts fail closed and require explicit recompilation/review.
+
+Five new tests cover envelope grammar and malformed/ambiguous extraction, clock
+range/Unicode/format changes, source subsets and overlap in either rule order,
+sensitive/escaped credential fields, and the 198-routine/two-security replay. Existing
+shape/protected-value, publication/TTL/capacity/rescore/restart and shadow quarantine
+regressions remain passing. All source/text evidence remains unchanged. Parser-extracted
+timestamps conservatively fall back because their bytes cannot satisfy a prefix
+identity in `Event.text`. No provider, collector, policy, SQLite or shadow activation
+semantics changed.
+
+The wholly synthetic two-replica replay has 200 retained events, 159 exact 42-byte
+prefixes and one normalized prefix. At batch size 1 it uses three injected
+classifications and 197 reviewed reuses; at batch size 8 it uses ten classifications
+and 190 reuses. Both security-shape records retain their complete evidence and pod
+identity in two Notify/outbox intents. Whole-line replay remains 300 retained events,
+one classification and 299 reuses. These are mechanical tests, not production
+accuracy or security-equivalence claims.
+
+All Cargo commands used `CARGO_NET_OFFLINE=true`; dependencies/lockfile are unchanged.
+No live Kubernetes/provider APIs, credentials, private reports, external network,
+push, PR or deployment were accessed. No Kubernetes command was run.
+
+| Check | Result |
+| --- | --- |
+| Format and diff checks | Passed. |
+| Strict Clippy, all targets/features | Passed. |
+| Full Rust all-feature suite | 95 library tests passed; 17 existing loopback fixtures failed at bind with PermissionDenied. **Not a passing full suite.** |
+| Socket-free all-feature suite (only those 17 named fixtures skipped) | 95 library + 15 CLI tests passed; main and doctest targets passed (zero tests). |
+| Reviewed tests | All 16 passed, including five new envelope/scope tests. |
+| Locked release build and offline CLI smoke | Passed; two smoke events retained, zero provider requests. |
+| All three Rust examples | Passed: reviewed whole-line 300/1/299 and envelope 200/3/197 (retained/classifications/reuses); shadow 304 classifications, zero reuse; Drain 1,000/2/998. |
+| Python unittest discovery | 113 tests ran; dashboard HTTP class setup failed on denied loopback bind. Other executed tests passed. **Not a passing full suite.** |
+| Python compileall; five JS helper suites; app/search syntax | Passed. |
+| Optional browser pipe integration | Did not pass: exited 13 without diagnostics; no browser pass claimed. |
+| Controller/deployment and tracked-release static checks | Passed, including v2 canonical clock grammar, stable subset fixture and existing optional read-only mount. |
+| TruffleHog 3.97.1 tracked-source scan, updates and verification disabled | Exit 0; zero verified/unverified findings. Sandbox process-cleanup permission errors remain; **not an unqualified scanner pass**. |
+| Python build/security tooling | build, setuptools, Bandit and pip-audit unavailable; no installation/network fetch attempted. |
+
+The user-reported 107-library/15-CLI unrestricted host pass applies to the parent.
+The changed snapshot still needs loopback-dependent checks in an authorized host
+before claiming a complete host matrix. Historical results below describe earlier
+snapshots; the v2 prefix/subset contract supersedes their full-source v1 contract.
+
 # Reviewed compiled-rule activation (2026-09-27)
 
 Implemented the second stage on top of reviewed parent `36b7570`: default-off

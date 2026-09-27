@@ -10,9 +10,10 @@ use serde_json::json;
 use std::sync::{Arc, Mutex};
 use tokio_util::sync::CancellationToken;
 fn artifact(wall: i64) -> Value {
-    json!({"artifact_version":1,"schema_version":1,"rules":[{
+    json!({"artifact_version":2,"schema_version":1,"rules":[{
         "id":"synthetic-session","version":1,"expires_at":wall+300,
         "source_scope":{"type":"file","path":"-"},
+        "prefix_identity":{"text":"","clock_grammar":""},
         "shape":{"":"object","/operation":"string","/request_id":"string","/payload_id":"string","/status":"number","/outcome":"string"},
         "required_literals":{"/operation":"getPhoneCalloutSessionDetails"},
         "normalize_paths":["/request_id","/payload_id"],
@@ -49,7 +50,7 @@ fn strict_artifact_contract_bounds_and_ambiguity() {
     let v = artifact(1000);
     assert!(decode(v.clone()));
     for (path, value) in [
-        ("/artifact_version", json!(2)),
+        ("/artifact_version", json!(1)),
         ("/schema_version", json!(0)),
         ("/extra", json!(1)),
         ("/rules", json!([])),
@@ -118,6 +119,7 @@ fn strict_artifact_contract_bounds_and_ambiguity() {
         "version",
         "expires_at",
         "source_scope",
+        "prefix_identity",
         "shape",
         "required_literals",
         "normalize_paths",
@@ -148,8 +150,8 @@ fn strict_artifact_contract_bounds_and_ambiguity() {
         vec![b' '; 65537],
         v.to_string()
             .replace(
-                "\"artifact_version\":1",
-                "\"artifact_version\":1,\"artifact_version\":1",
+                "\"artifact_version\":2",
+                "\"artifact_version\":2,\"artifact_version\":2",
             )
             .into_bytes(),
     ] {
@@ -362,7 +364,7 @@ fn literal_shape_source_and_ineligible_variants_never_collide() {
             "outcome" => v["outcome"] = json!("denied"),
             "type" => v["request_id"] = json!(42),
             "source" => {
-                e.source.insert("pod".into(), json!("other"));
+                e.source.insert("path".into(), json!("other"));
             }
             "truncated" => e.truncated = true,
             "private" => e.sensitive = true,
@@ -445,7 +447,7 @@ async fn files_snapshot_and_controller_keep_all_evidence_and_notify_variants() {
                         307 => v["unknown"] = json!(true),
                         308 => v["request_id"] = json!(42),
                         _ => {
-                            e.source.insert("namespace".into(), json!("other"));
+                            e.source.insert("type".into(), json!("other"));
                         }
                     }
                     e.text = v.to_string();
@@ -746,6 +748,366 @@ async fn controller_rescore_retry_and_recurrence_are_preserved() {
         // Routine/Ignore does not increase incident recurrence; all three
         // independently classified security occurrences do, as in the existing policy.
         assert_eq!(counts, vec![1, 3]);
+        let verdicts: i64 = store
+            .conn
+            .query_row("SELECT count(*) FROM verdicts", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(verdicts, 0);
+    }
+}
+
+fn envelope_matcher(scope: Value, prefix: &str) -> Matcher {
+    let mut v = artifact(1000);
+    v["rules"][0]["source_scope"] = scope;
+    v["rules"][0]["prefix_identity"] =
+        serde_json::to_value(prefix_identity(prefix).unwrap()).unwrap();
+    Matcher::new(
+        Rules::decode(v.to_string().as_bytes(), 1000).unwrap(),
+        Contract::jev("synthetic".into()),
+        64,
+        Duration::from_secs(300),
+        Arc::new(Mutex::new(Metrics::default())),
+    )
+    .unwrap()
+}
+fn envelope_event(i: u32, prefix: &str) -> Event {
+    let mut p = Parser::new(event(i).source);
+    p.feed(Line {
+        bytes: format!("{prefix}{}", event(i).text).into_bytes(),
+        truncated: false,
+        private: false,
+    });
+    let mut e = p.flush().unwrap();
+    e.judgment = event(i).judgment;
+    e
+}
+#[test]
+fn strict_logger_envelope_identity_and_whole_json_regression() {
+    let now = Instant::now();
+    for (a, b) in [
+        ("12:34:56 INFO ", "23:59:59 INFO "),
+        (
+            "[12:34:56.123] INFO synthetic.module - ",
+            "[00:00:00.456] INFO synthetic.module - ",
+        ),
+        (
+            "12:34:56,123456 info: [module] ",
+            "01:02:03,654321 info: [module] ",
+        ),
+        (
+            "[12:34:56.123456789] DEBUG module: ",
+            "[23:59:59.000000001] DEBUG module: ",
+        ),
+        ("", ""),
+    ] {
+        let mut m = envelope_matcher(json!({"type":"file","path":"-"}), a);
+        let mut first = envelope_event(1, a);
+        let ticket = m.prepare(&mut first, now, 1000, false).unwrap();
+        let mut sibling = envelope_event(2, b);
+        let second = m.prepare(&mut sibling, now, 1000, false).unwrap();
+        assert!(!sibling.analysis_reused);
+        m.complete_batch(vec![(ticket, &first), (second, &sibling)], now, 1000);
+        let mut hit = envelope_event(3, b);
+        let before = (hit.text.clone(), hit.source.clone(), hit.id.clone());
+        assert!(m.prepare(&mut hit, now, 1000, false).is_none());
+        assert!(hit.analysis_reused);
+        assert_eq!(before, (hit.text, hit.source, hit.id));
+        assert_eq!(
+            m.rules.artifact.rules[0].prefix_identity,
+            prefix_identity(a).unwrap()
+        );
+    }
+    // Dates stay literal for directly built events. Parser-extracted stamps
+    // conservatively fall back; they may not disappear from reviewed identity.
+    let m = envelope_matcher(json!({"type":"file"}), "2024-02-29 12:34:56 INFO ");
+    let mut e = event(1);
+    e.text = format!("2024-02-29 12:34:56 INFO {}", e.text);
+    assert!(m.key(&e, 1000).is_some());
+    e.text = e.text.replace("2024-02-29", "2024-03-01");
+    assert!(m.key(&e, 1000).is_none());
+    for stamp in ["2024-02-29 12:34:56 ", "2023-02-29 24:60:60 "] {
+        let e = envelope_event(1, stamp);
+        assert!(matcher(1000, 4, 300).key(&e, 1000).is_none());
+    }
+}
+#[test]
+fn invalid_ambiguous_prefix_suffix_and_semantic_changes_fail_closed() {
+    let m = envelope_matcher(json!({"type":"file"}), "[12:34:56.123] INFO module - ");
+    for prefix in [
+        "",
+        "INFO module - ",
+        "[24:00:00.123] INFO module - ",
+        "[12:60:00.123] INFO module - ",
+        "[12:00:60.123] INFO module - ",
+        "[１２:34:56.123] INFO module - ",
+        "[12:34:56.12] INFO module - ",
+        "[12:34:56.123Z] INFO module - ",
+        "[[12:34:56.123]] INFO module - ",
+        "[12:34:56.123 INFO module - ",
+        "12:34:56.123] INFO module - ",
+        "[12:34:56.123] INFO:: module - ",
+        "[12:34:56.123] InfO module - ",
+        "[12:34:56.123]  INFO module - ",
+        "[12:34:56.123]\tINFO module - ",
+        "[12:34:56.123]\u{a0}INFO module - ",
+        " [12:34:56.123] INFO module - ",
+        "[12:34:56.123] INFO 01:02:03 module - ",
+        "[12:34:56.123] INFO [01:02:03] module - ",
+        "[12:34:56.123] INFO \"module\" - ",
+        "[12:34:56.123] INFO } module - ",
+        "[12:34:56.123] INFO { module - ",
+        "[12:34:56.123] INFO [module - ",
+        "[12:34:56.123] INFO module -",
+        "[12:34:56.123] INFO module\n- ",
+        "[12:34:56.123] DEBUG module - ",
+        "[12:34:56.123] INFO other - ",
+        "[12:34:56.123] INFO module denied ",
+        "[12:34:56,123] INFO module - ",
+        "12:34:56.123 INFO module - ",
+        "[12:34:56.123456] INFO module - ",
+    ] {
+        let mut e = event(1);
+        e.text = format!("{prefix}{}", e.text);
+        assert!(m.key(&e, 1000).is_none(), "{prefix:?}");
+    }
+    let raw = envelope_event(1, "[12:34:56.123] INFO module - ").text;
+    for text in [
+        format!("{raw} trailing"),
+        format!("{raw} {{}}"),
+        format!("{raw}}}"),
+        raw.replacen('{', "{{", 1),
+        raw[..raw.len() - 1].into(),
+        raw.replace("\"status\":200", "\"status\":200,\"status\":200"),
+        format!("[12:34:56.123] INFO {} {}", "x".repeat(256), event(1).text),
+    ] {
+        let mut e = event(1);
+        e.text = text;
+        assert!(m.key(&e, 1000).is_none());
+    }
+    for identity in [
+        json!({"text":"","clock_grammar":"logger-clock:true:46:12"}),
+        json!({"text":"[00:00:00.000] INFO module - ","clock_grammar":""}),
+        json!({"text":"[00:00:00.000] INFO module - ","clock_grammar":"logger-clock:false:46:12"}),
+        json!({"text":"[12:34:56.123] INFO module - ","clock_grammar":"logger-clock:true:46:12"}),
+        json!({"text":"<clock> INFO module - ","clock_grammar":"timestamp"}),
+    ] {
+        let mut v = artifact(1000);
+        v["rules"][0]["prefix_identity"] = identity;
+        assert!(!decode(v));
+    }
+}
+#[test]
+fn source_subset_reuse_and_compatible_scope_ambiguity() {
+    let scope = json!({"type":"kubernetes","context":"synthetic","namespace":"demo","container":"api","kind":"container","previous":false,"restart_count":0});
+    let now = Instant::now();
+    let prefix = "[12:34:56.123] INFO module - ";
+    for included in [None, Some("pod"), Some("pod_uid")] {
+        let mut scope = scope.clone();
+        if let Some(k) = included {
+            scope[k] = json!("replica-1");
+        }
+        let mut m = envelope_matcher(scope.clone(), prefix);
+        let mut a = envelope_event(1, prefix);
+        a.source = serde_json::from_value(scope.clone()).unwrap();
+        a.source.insert("pod".into(), json!("replica-1"));
+        a.source.insert("pod_uid".into(), json!("replica-1"));
+        let t = m.prepare(&mut a, now, 1000, false).unwrap();
+        m.complete_batch(vec![(t, &a)], now, 1000);
+        let mut b = a.clone();
+        b.source.insert("pod".into(), json!("replica-2"));
+        b.source.insert("pod_uid".into(), json!("replica-2"));
+        m.prepare(&mut b, now, 1000, false);
+        assert_eq!(b.analysis_reused, included.is_none());
+        for k in scope.as_object().unwrap().keys() {
+            for value in [
+                None,
+                Some(json!("changed")),
+                Some(json!([])),
+                Some(json!(null)),
+                Some(json!(true)),
+            ] {
+                let mut b = a.clone();
+                if let Some(v) = value {
+                    b.source.insert(k.clone(), v);
+                } else {
+                    b.source.remove(k);
+                }
+                assert!(m.key(&b, 1000).is_none(), "{k}");
+            }
+        }
+    }
+    for other in [
+        json!({"type":"file"}),
+        json!({"pod":"replica-1"}),
+        json!({"type":"file","path":"-","pod":"replica-1"}),
+    ] {
+        for reverse in [false, true] {
+            let mut v = artifact(1000);
+            let mut b = v["rules"][0].clone();
+            b["id"] = json!("second");
+            b["source_scope"] = other.clone();
+            v["rules"].as_array_mut().unwrap().push(b);
+            if reverse {
+                v["rules"].as_array_mut().unwrap().reverse();
+            }
+            assert!(!decode(v.clone()));
+            // A contradictory shared value proves scopes cannot simultaneously match.
+            v["rules"][0]["source_scope"]["type"] = json!("one");
+            v["rules"][1]["source_scope"]["type"] = json!("two");
+            assert!(decode(v));
+        }
+    }
+    let mut v = artifact(1000);
+    let mut b = v["rules"][0].clone();
+    b["id"] = json!("enveloped");
+    b["prefix_identity"] = serde_json::to_value(prefix_identity(prefix).unwrap()).unwrap();
+    v["rules"].as_array_mut().unwrap().push(b);
+    assert!(decode(v));
+}
+#[test]
+fn enveloped_sensitive_payloads_never_seed_even_with_escaped_field_names() {
+    let now = Instant::now();
+    let prefix = "[12:34:56.123] INFO module - ";
+    let mut m = envelope_matcher(json!({"type":"file"}), prefix);
+    for private in [false, true] {
+        let mut p = Parser::new(event(1).source);
+        p.feed(Line {
+            bytes: format!("{prefix}{}", event(1).text).into_bytes(),
+            truncated: false,
+            private,
+        });
+        let mut e = p.flush().unwrap();
+        e.judgment = event(1).judgment;
+        if !private {
+            e.text = e.text.replace("payload-1", "[REDACTED]");
+        }
+        assert!(m.prepare(&mut e, now, 1000, false).is_none());
+        assert!(!e.analysis_reused);
+    }
+    let mut e = envelope_event(1, prefix);
+    e.text = e.text.replace(
+        "\"payload_id\"",
+        "\"nested\":{\"to\\u006ben\":{}},\"payload_id\"",
+    );
+    let (_, v) = payload(&e.text).unwrap();
+    m.rules.artifact.rules[0].shape = structured::shape(&v).unwrap();
+    assert!(m.key(&e, 1000).is_none());
+}
+
+#[tokio::test]
+async fn two_pod_envelope_replay_retains_198_routine_and_two_security_occurrences() {
+    use crate::controller::{Controller, policy::Policy, store::Store};
+    for batch_size in [1, 8] {
+        let dir = tempfile::tempdir().unwrap();
+        let wall = crate::controller::now();
+        let metrics = Arc::new(Mutex::new(Metrics::default()));
+        let controller = Controller::new(
+            Store::open(&dir.path().join("state.db")).unwrap(),
+            Contract::jev("synthetic".into()),
+            Policy::default(),
+            300,
+            false,
+            metrics.clone(),
+        )
+        .unwrap();
+        let mut artifact: Value = serde_json::from_slice(include_bytes!(
+            "../../examples/reviewed-rules.synthetic.json"
+        ))
+        .unwrap();
+        for r in artifact["rules"].as_array_mut().unwrap() {
+            r["expires_at"] = json!(wall + 300);
+            r["review"]["reviewed_at"] = json!(wall - 1);
+        }
+        let rules = Rules::decode(artifact.to_string().as_bytes(), wall).unwrap();
+        let scope: Source =
+            serde_json::from_value(artifact["rules"][1]["source_scope"].clone()).unwrap();
+        let (tx, rx) = tokio::sync::mpsc::channel(256);
+        let mut evidence = Vec::new();
+        let mut judgments = Vec::new();
+        for i in 1..=200 {
+            let prefix = format!("[07:08:09.{:03}] INFO synthetic.session.log ", i % 159);
+            assert_eq!(prefix.len(), 42);
+            let mut e = envelope_event(i, &prefix);
+            e.source = scope.clone();
+            e.source
+                .insert("pod".into(), json!(format!("replica-{}", i % 2)));
+            e.source
+                .insert("pod_uid".into(), json!(format!("uid-{}", i % 2)));
+            if i > 198 {
+                let mut payload: Value = serde_json::from_str(&event(i).text).unwrap();
+                payload["finding"] =
+                    json!({"category":"security","denied":true,"details":[],"context":{}});
+                // Keep routine literals identical: complete shape alone must separate these.
+                e.text = format!("{prefix}{payload}");
+                e.judgment.category = Category::Security;
+                e.judgment.importance = Importance::Important;
+                e.judgment.severity = Severity::Impact;
+            }
+            if i <= batch_size as u32 || i > 198 {
+                judgments.push(Ok(e.judgment.clone()));
+            }
+            evidence.push((e.text.clone(), e.source.clone()));
+            tx.send(e).await.unwrap();
+        }
+        drop(tx);
+        let mut client = ProviderClient::test_client("unused-offline".into());
+        client.synthetic = Some(judgments.into());
+        let (report, client) = runtime::analyze_with_templates(
+            rx,
+            metrics.clone(),
+            Some(client),
+            AnalyzeOptions {
+                batch_size,
+                max_batches: 64,
+                max_cost: 1.0,
+                grouping: Strategy::Semantic,
+                drain_capacity: 4,
+                retain: 200,
+                max_events: 200,
+                live: true,
+                print_events: false,
+            },
+            CancellationToken::new(),
+            Some(controller.clone()),
+            Templates {
+                learner: None,
+                reviewed: Some((rules, 64, Duration::from_secs(300))),
+            },
+        )
+        .await;
+        assert!(client.unwrap().synthetic.unwrap().is_empty());
+        assert_eq!(report.total, 200);
+        assert_eq!(report.events.len(), 200);
+        assert_eq!(report.reused, 198 - batch_size as u64);
+        for (i, (e, (text, source))) in report.events.iter().zip(&evidence).enumerate() {
+            assert_eq!(&e.text, text);
+            assert_eq!(&e.source, source);
+            assert_eq!(e.analysis_reused, (batch_size..198).contains(&i));
+        }
+        let m = metrics.lock().unwrap();
+        assert_eq!(m.policy_ignore, 198);
+        assert_eq!(m.policy_notify, 2);
+        assert_eq!(m.notifications_enqueued, 2);
+        assert_eq!(m.verdict_hits, 0);
+        assert_eq!(m.template_provider_attempts, 0);
+        drop(m);
+        let store = controller.store.lock().unwrap();
+        let mut statement = store.conn.prepare("SELECT payload FROM outbox").unwrap();
+        let payloads = statement
+            .query_map([], |r| r.get::<_, String>(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(payloads.len(), 2);
+        for payload in payloads {
+            let v: Value = serde_json::from_str(&payload).unwrap();
+            assert!(
+                evidence[198..]
+                    .iter()
+                    .any(|(text, source)| v["evidence"] == *text
+                        && v["source"]["pod_uid"] == source["pod_uid"])
+            );
+        }
         let verdicts: i64 = store
             .conn
             .query_row("SELECT count(*) FROM verdicts", [], |r| r.get(0))

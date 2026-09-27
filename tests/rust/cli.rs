@@ -462,8 +462,10 @@ fn reviewed_rules_offline_files_report_and_online_risk_only_credentials() {
     ))
     .unwrap();
     let now = jevernetes::controller::now();
-    v["rules"][0]["expires_at"] = serde_json::json!(now + 3600);
-    v["rules"][0]["review"]["reviewed_at"] = serde_json::json!(now - 1);
+    for rule in v["rules"].as_array_mut().unwrap() {
+        rule["expires_at"] = serde_json::json!(now + 3600);
+        rule["review"]["reviewed_at"] = serde_json::json!(now - 1);
+    }
     std::fs::write(&path, v.to_string()).unwrap();
     let result=run(b"{\"operation\":\"getPhoneCalloutSessionDetails\",\"outcome\":\"success\",\"payload_id\":\"synthetic\",\"request_id\":\"synthetic\",\"status\":200}\n", &["--grouping-strategy","semantic","--template-rules",path.to_str().unwrap()]);
     assert!(

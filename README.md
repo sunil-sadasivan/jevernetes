@@ -97,6 +97,8 @@ CARGO_NET_OFFLINE=true cargo run --locked --example semantic_shadow
 Separately reviewed compiled rules can activate deterministic semantic reuse with
 `--grouping-strategy semantic --template-rules PATH` (default off). LLM proposals stay
 shadow-only and cannot self-promote. Active reuse needs only the risk provider, retains
-every occurrence, and uses bounded session-only verdicts. See the
+every occurrence, and uses bounded session-only verdicts. Version 2 rules explicitly
+review whole-line JSON or strict logger-envelope identity and a nonempty subset of
+source fields, allowing deliberate reuse across pods. See the
 [reviewed artifact contract](docs/provider-template-learning.md#reviewed-artifact-activation)
 and run `cargo run --locked --example reviewed_reduction` for a socket-free synthetic demo.

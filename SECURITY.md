@@ -84,7 +84,9 @@ Their strict bounded loader has no proposal/report import path. Review metadata 
 non-secret bounded identifiers, not cryptographic attestation. File selection and
 trusted private directory/mount ownership provide authorization; a writable malicious
 rule file can authorize overly broad scalar normalization. Treat review of each
-normalization path as security-sensitive. Source/complete shape, protected fields,
+normalization path and source subset as security-sensitive. Version 2 rules require
+a canonical prefix with explicit strict clock grammar; compatible overlapping scopes
+are rejected. Reviewed source fields/complete shape, protected fields,
 literals, risk contract and a computed artifact digest bind reuse. Verdicts remain
 session-only, expire without sliding, and never persist as active rules in SQLite.
 All evidence still reaches controller policy. See the

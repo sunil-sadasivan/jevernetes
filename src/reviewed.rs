@@ -32,6 +32,7 @@ struct Rule {
     version: u32,
     expires_at: i64,
     source_scope: Source,
+    prefix_identity: PrefixIdentity,
     shape: BTreeMap<String, Kind>,
     required_literals: BTreeMap<String, Value>,
     normalize_paths: Vec<String>,
@@ -45,6 +46,81 @@ struct Review {
     review_id: String,
     compiler: String,
     reviewed_at: i64,
+}
+/// Empty strings mean whole-line JSON. Otherwise text contains a zeroed clock,
+/// with its exact reviewed grammar retained separately (never an untyped wildcard).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PrefixIdentity {
+    text: String,
+    clock_grammar: String,
+}
+fn prefix_identity(prefix: &str) -> Option<PrefixIdentity> {
+    if prefix.is_empty() {
+        return Some(PrefixIdentity {
+            text: String::new(),
+            clock_grammar: String::new(),
+        });
+    }
+    if prefix.len() > 256
+        || !prefix.is_ascii()
+        || prefix.chars().any(char::is_control)
+        || crate::events::redact(prefix) != prefix
+        || prefix.to_ascii_lowercase().contains("[redacted")
+    {
+        return None;
+    }
+    let mut tokens: Vec<_> = prefix.strip_suffix(' ')?.split(' ').collect();
+    if tokens.iter().any(|t| t.is_empty()) {
+        return None;
+    }
+    // Supply the payload position even when the envelope is just clock + level.
+    tokens.push("{}");
+    let (index, clock_grammar) = crate::drain::logger_clock(&tokens)?;
+    tokens.pop();
+    for (i, token) in tokens.iter().enumerate() {
+        if i == index {
+            continue;
+        }
+        let token = token.strip_suffix(':').unwrap_or(token);
+        let token = if token.starts_with('[') {
+            token.strip_prefix('[')?.strip_suffix(']')?
+        } else {
+            token
+        };
+        // Literal logger names/separators only. No braces, quotes, escapes,
+        // extra clocks, control/Unicode whitespace or unbalanced brackets.
+        if token.is_empty()
+            || !token
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"_.-/=".contains(&b))
+        {
+            return None;
+        }
+    }
+    let clock: String = tokens[index]
+        .chars()
+        .map(|c| if c.is_ascii_digit() { '0' } else { c })
+        .collect();
+    tokens[index] = &clock;
+    Some(PrefixIdentity {
+        text: format!("{} ", tokens.join(" ")),
+        clock_grammar,
+    })
+}
+fn payload(text: &str) -> Option<(PrefixIdentity, Value)> {
+    if text.len() > structured::MAX_BYTES || text.contains(['\n', '\r']) {
+        return None;
+    }
+    // The first opening brace is the only candidate; never search/retry later
+    // objects. Strict prefix validation rejects any preceding closing brace.
+    let start = text.find('{')?;
+    let prefix = prefix_identity(&text[..start])?;
+    let value = structured::parse(&text.as_bytes()[start..], structured::MAX_BYTES)?;
+    value.is_object().then_some((prefix, value))
+}
+fn scopes_compatible(a: &Source, b: &Source) -> bool {
+    a.iter().all(|(k, v)| b.get(k).is_none_or(|w| v == w))
 }
 /// Validated immutable artifact; all construction goes through strict decoding.
 #[derive(Clone)]
@@ -95,7 +171,7 @@ impl Rules {
     pub fn decode(raw: &[u8], now: i64) -> Result<Self, &'static str> {
         let value = structured::parse(raw, FILE_LIMIT).ok_or(ERROR)?;
         let artifact: Artifact = serde_json::from_value(value).map_err(|_| ERROR)?;
-        if artifact.artifact_version != 1
+        if artifact.artifact_version != 2
             || artifact.schema_version != 1
             || artifact.rules.is_empty()
             || artifact.rules.len() > 64
@@ -117,6 +193,7 @@ impl Rules {
                     .into_iter()
                     .any(|s| !token(s))
                 || r.source_scope.is_empty()
+                || prefix_identity(&r.prefix_identity.text).as_ref() != Some(&r.prefix_identity)
                 || r.source_scope.len() > 16
                 || r.source_scope
                     .iter()
@@ -190,7 +267,8 @@ impl Rules {
         for (i, a) in artifact.rules.iter().enumerate() {
             for b in &artifact.rules[..i] {
                 // Any possible dual match is rejected, regardless of claimed IDs/versions.
-                if a.source_scope == b.source_scope
+                if scopes_compatible(&a.source_scope, &b.source_scope)
+                    && a.prefix_identity == b.prefix_identity
                     && a.shape == b.shape
                     && !a
                         .required_literals
@@ -283,12 +361,18 @@ impl Matcher {
             || event.text.contains(['\n', '\r'])
             || event.text.to_ascii_lowercase().contains("[redacted")
             || event.baseline.important
+            // Parser-extracted timestamps are outside Event.text and therefore
+            // cannot satisfy an explicit reviewed envelope identity.
+            || event.timestamp.is_some()
         {
             return None;
         }
-        let mut value = structured::parse(event.text.as_bytes(), structured::MAX_BYTES)?;
+        let (prefix, mut value) = payload(&event.text)?;
         // Direct callers receive the same sensitive-data gate as Parser callers.
-        if crate::events::redact(&event.text) != event.text {
+        let canonical = value.to_string();
+        if crate::events::redact(&event.text) != event.text
+            || crate::events::redact(&canonical) != canonical
+        {
             return None;
         }
         let shape = structured::shape(&value)?;
@@ -298,27 +382,35 @@ impl Matcher {
         }) {
             return None;
         }
-        let (index, rule) = self
+        let mut matching = self
             .rules
             .artifact
             .rules
             .iter()
             .enumerate()
-            .find(|(_, r)| {
+            .filter(|(_, r)| {
                 r.expires_at > wall
                     && r.review.reviewed_at <= wall
-                    && r.source_scope == event.source
+                    && r.source_scope
+                        .iter()
+                        .all(|(k, v)| event.source.get(k) == Some(v))
+                    && r.prefix_identity == prefix
                     && r.shape == shape
                     && r.required_literals
                         .iter()
                         .chain(&r.protected_literals)
                         .all(|(p, v)| value.pointer(p) == Some(v))
-            })?;
+            });
+        let (index, rule) = matching.next()?;
+        if matching.next().is_some() {
+            return None;
+        }
         for p in &rule.normalize_paths {
             *value.pointer_mut(p)? = Value::Null;
         }
         let mut normalized = event.clone();
         normalized.text = value.to_string();
+        normalized.source = rule.source_scope.clone();
         Some((
             digest(&(
                 &self.rules.digest,
@@ -326,6 +418,8 @@ impl Matcher {
                 self.rules.artifact.schema_version,
                 &rule.id,
                 rule.version,
+                &rule.prefix_identity,
+                &rule.source_scope,
                 &shape,
                 self.contract.key(&normalized),
             )),

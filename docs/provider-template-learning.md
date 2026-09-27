@@ -188,7 +188,9 @@ The complete synthetic example is
 It contains invented evidence only and is not a production rule. Its explicit expiry
 is intentional. Use `cargo run --locked --example reviewed_reduction` for deterministic
 replay at a fixed synthetic time: 300 retained events, one injected classification,
-299 reuses and zero network calls. A prefilled batch of eight requires eight independent
+299 reuses, plus a 200-event logger-envelope replay across two synthetic pods
+(198 routine, two distinct security-shape records): three classifications, 197 reuses,
+all evidence retained and zero network calls. A prefilled batch of eight requires eight independent
 classifications before any verdict publishes.
 
 ```
@@ -199,15 +201,15 @@ The same option works for snapshot/follow and controller modes, with independent
 selected TypeSafe, OpenAI or Anthropic risk credentials as above. `--template-provider`
 is optional; adding it collects advisory candidates alongside the reviewed matcher.
 
-The strict version-1 artifact has mandatory `artifact_version`, `schema_version` and
-`rules`. Every rule requires `id`, positive `version`, Unix-seconds `expires_at`, exact
-`source_scope`, complete `shape`, `required_literals`, `normalize_paths`,
+The strict version-2 artifact (schema version 1) has mandatory `artifact_version`, `schema_version` and
+`rules`. Every rule requires `id`, positive `version`, Unix-seconds `expires_at`, explicit subset
+`source_scope`, canonical `prefix_identity`, complete `shape`, `required_literals`, `normalize_paths`,
 `protected_literals` and `review`. Review requires `reviewer`, `review_id`, `compiler`
 and Unix-seconds `reviewed_at`. Unknown/missing fields and duplicate JSON keys at any
 depth are rejected. A claimed digest field is rejected. The runtime computes SHA-256
 from the actual file bytes; even whitespace/review changes invalidate identity on reload.
 Provider/model, actual risk prompt/schema/contract, artifact digest/versions, rule
-ID/version, complete source, complete path/type shape and every non-normalized value
+ID/version, reviewed source scope, canonical prefix including clock grammar, complete path/type shape and every non-normalized value
 participate in the fingerprint.
 
 | Resource | Hard bound / semantics |
@@ -215,15 +217,46 @@ participate in the fingerprint.
 | File | 64 KiB, capped read plus one-byte probe; regular files only |
 | Rules | 1–64; duplicate IDs (even different versions) and potentially overlapping rules rejected |
 | IDs/review labels/source keys | 1–64 ASCII identifier bytes |
-| Source scope | 1–16 exact scalar fields; full equality, no wildcard/subset/workload expansion |
+| Source scope | 1–16 exact scalar constraints; every listed key must exist with the same type/value; unlisted fields are excluded from the cache key |
+| Prefix identity | Mandatory `{ "text": "", "clock_grammar": "" }` for whole-line JSON; otherwise a canonical strict logger envelope of ≤256 ASCII bytes with explicit clock grammar |
 | Shape | 1–128 nodes, depth ≤8, root object; includes every object, array, index and empty container |
 | Paths | ≤128 bytes, restricted JSON pointers with nonempty ASCII alphanumeric/underscore/hyphen segments; escape sequences unsupported |
 | Literals/normalization | 1–32 required literals, 1–32 normalize paths, 0–32 protected literals; no overlap or duplicate paths |
 | Strings | ≤256 bytes per scalar; no control characters or recognized redaction/secret values |
 | Expiry | Reviewed time positive and not in the future, expiry strictly future, validity ≤366 days |
-| Matched event | ≤2 KiB, single complete non-sensitive JSON object; no truncation/redaction/private/multiline/parse ambiguity |
+| Matched event | ≤2 KiB including envelope, single complete non-sensitive JSON object suffix or whole-line object; no truncation/redaction/private/multiline/parse ambiguity |
 | Session cache | `--template-capacity` 1–256 (default 64) fingerprints; full cache falls back to classification |
 | Verdict TTL | `--template-ttl` 1–3600 seconds, default 300; controller also caps by `--verdict-ttl` |
+
+Version 1 artifacts are rejected rather than silently acquiring broader source semantics.
+Recompile and review each scope explicitly. Stable workload scopes can include `type`,
+`context`, `namespace`, `container`, `kind`, `previous` and `restart_count` while excluding
+`pod`/`pod_uid`; including either replica field prevents cross-replica matches when that
+field changes. Every raw source field is still retained in evidence. Empty scopes fail.
+Two scopes are compatible unless a shared key has conflicting values. Compatible scopes
+with the same prefix and complete shape must have contradictory required/protected
+literals; otherwise the artifact is rejected, even for disjoint key sets or strict subsets.
+Runtime matching also refuses multiple matches.
+
+For envelopes, `prefix_identity.text` preserves the exact prefix with only ASCII clock
+digits zeroed, including the trailing space; `clock_grammar` records the existing Drain
+logger-clock grammar. For example, `[00:00:00.000] INFO synthetic.session.log ` has
+`logger-clock:true:46:12` (bracketed, decimal separator byte 46, 12 clock bytes).
+The loader recomputes and compares this identity; neither an omitted grammar nor a
+noncanonical sample clock is accepted. The shared grammar permits HH:MM:SS with valid
+ranges and optional 3/6/9-digit dot/comma fractions, optional brackets, a known level
+with optional single colon, and an optional valid literal calendar date. Precision,
+separator, brackets, date, level and every logger literal stay in identity. Prefixes
+use single ASCII spaces, with literal logger tokens limited to alphanumerics and
+`_.-/=`, optional enclosing brackets and a single trailing colon. Additional clocks,
+quotes, braces, malformed brackets, controls and Unicode are rejected. Only the first
+opening brace can begin the payload; a duplicate-key-aware JSON parser must consume
+that entire suffix (apart from JSON trailing whitespace). No scanning for later objects.
+JSON strings and nested objects may contain braces normally. Changed prefix semantics
+never reuse a verdict. Parser-extracted timestamps conservatively fall back, since
+those bytes are outside `Event.text` and cannot satisfy a reviewed prefix identity.
+Shadow learning and its original pre-redaction quarantine remain unchanged; proposals
+are still advisory and do not gain envelope activation privileges.
 
 Credential loaders already allow Kubernetes projected symlinks to regular files; the
 rule loader follows the same policy and rejects directories/devices/non-regular targets.
@@ -243,7 +276,7 @@ case/separator variants and ancestors; access/allow/permit/privilege/denial and
 recognized credential names are also blocked) can never normalize. They remain literal even
 if omitted from `protected_literals`. Required and protected literals additionally
 restrict which values can match a rule. Unknown/new/missing keys, changed types,
-source or structure always miss. No similarity, embeddings or fine-tuning participates.
+scoped source fields or structure always miss. No similarity, embeddings or fine-tuning participates.
 
 Only a completed, independently classified, baseline-clean, cacheable routine judgment
 (category routine; severity info/noise; all three finite confidences ≥0.85) can seed a

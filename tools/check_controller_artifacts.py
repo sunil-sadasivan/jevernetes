@@ -67,3 +67,22 @@ assert reviewed_pod['volumes'][0]['configMap'] == {
     'items': [{'key': 'rules.json', 'path': 'rules.json'}],
 }
 assert '--template-provider' not in reviewed_container['args']
+
+# The optional mount activates only a separately reviewed v2 artifact. This public
+# synthetic fixture demonstrates both identities, never production rule contents.
+artifact = json.loads((root / 'examples/reviewed-rules.synthetic.json').read_text())
+assert artifact['artifact_version'] == 2 and artifact['schema_version'] == 1
+whole, envelope = artifact['rules']
+assert whole['prefix_identity'] == {'text': '', 'clock_grammar': ''}
+assert envelope['prefix_identity'] == {
+    'text': '[00:00:00.000] INFO synthetic.session.log ',
+    'clock_grammar': 'logger-clock:true:46:12',
+}
+assert len(envelope['prefix_identity']['text']) == 42
+assert envelope['source_scope'] == {
+    'type': 'kubernetes', 'context': 'synthetic', 'namespace': 'demo',
+    'container': 'api', 'kind': 'container', 'previous': False, 'restart_count': 0,
+}
+assert whole['shape'] == envelope['shape']
+assert 'pod' not in envelope['source_scope'] and 'pod_uid' not in envelope['source_scope']
+print('Reviewed v2 synthetic prefix/scope and optional mount invariants passed.')

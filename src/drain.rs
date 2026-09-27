@@ -74,7 +74,7 @@ fn variable(token: &str) -> Option<String> {
 /// only in a leading logger prefix followed by a known level and a message.
 /// An optional strict calendar date still in Event.text remains literal.
 /// No clocks elsewhere in the message (durations, user content) are normalized.
-fn logger_clock(tokens: &[&str]) -> Option<(usize, String)> {
+pub(crate) fn logger_clock(tokens: &[&str]) -> Option<(usize, String)> {
     let first = *tokens.first()?;
     let date = first.len() == 10
         && first.bytes().enumerate().all(|(i, b)| {
