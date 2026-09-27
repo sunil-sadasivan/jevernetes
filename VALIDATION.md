@@ -1,5 +1,39 @@
 # Rust validation
 
+## Drain experiment pre-integration check (2026-09-27)
+
+The [logdrain source review](docs/drain-template-mining.md) records an unresolved
+build-dependency blocker. No mining implementation or fixture was added, and no
+cost reduction was measured. The checks below concern the unchanged base runtime
+plus documentation, not a validated Drain integration. Cargo build/check/test
+commands used `CARGO_NET_OFFLINE=true` after reverting the unresolved dependency.
+
+| Command | Result |
+| --- | --- |
+| `cargo fmt --all --check` | Passed. |
+| `cargo clippy --locked --all-targets --all-features -- -D warnings` | Passed. |
+| `cargo test --locked --all-features` | 39 library tests passed; 15 failed at synthetic loopback listener binding with `Operation not permitted`. The sandbox prevents these fixtures from running; the suite is not green. |
+| `cargo test --locked --all-features --test cli` | All 10 CLI tests passed when run separately after the library-test failures. |
+| `cargo build --locked --release` | Passed with the original lockfile. |
+| Release-binary offline CLI smoke below | Passed: 2 raw events, 1 important, 1 uncertain. This is not a template-reduction fixture. |
+| `python3 -m unittest discover -s tests -v` | Ran 113 tests; one class-setup error binding the dashboard loopback listener (`Operation not permitted`). |
+| `node --check jevernetes/web/app.js` and `node --check jevernetes/web/search.js` | Passed. |
+| `node tests/test_context_ui.cjs`, `node tests/test_prompt_ui.cjs`, `node tests/test_review_ui.cjs`, `node tests/test_grouping_ui.cjs`, `node tests/test_search_ui.cjs` | All five passed. |
+| `python3 tools/check_controller_artifacts.py` and `python3 tools/check_release.py` | Passed. |
+| `cargo audit` | Unavailable: Cargo audit subcommand is not installed. |
+| `python3 -m bandit -r jevernetes --severity-level medium --confidence-level medium` | Unavailable: module is not installed. |
+| `python3 -m pip_audit --strict -r requirements-dev.txt` | Unavailable: module is not installed. |
+| `python3 -m build` | Unavailable: module is not installed; distribution-archive validation could not run. |
+| `git diff --check` | Passed. |
+
+Toolchains were Cargo/Rust 1.94 and Python 3.14 locally; CI's Python 3.11/3.13 matrix
+was not reproduced. No live Jev or Kubernetes calls, credentials, deployments,
+services, pushes, or PR operations were used. Re-run the complete test and audit
+matrix after making the required build dependencies, security tooling, and local
+fixture port binding available. Hosted CodeQL/TruffleHog jobs were not run locally.
+
+## Required checks
+
 Required checks (CI uses Rust 1.94):
 
 ```sh

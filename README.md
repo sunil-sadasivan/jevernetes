@@ -39,6 +39,10 @@ See [controller operation and exact limits](docs/controller.md), the [Kustomize 
 and the [probabilistic control-plane thesis and roadmap](docs/probabilistic-control-plane.md).
 Templates contain placeholder images and Secret references; no deployment is implied.
 
+The isolated Drain-template experiment is blocked before integration; see the
+[source review and dependency blocker](docs/drain-template-mining.md). No Drain option
+or cost-reduction demo is available yet.
+
 ## Compatibility
 
 The **Python companion is legacy** and remains available for the dashboard, interactive TUI, semantic search, review overrides, context fetching, and investigation-prompt export:
