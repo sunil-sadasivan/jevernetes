@@ -78,3 +78,14 @@ headers sensitive, redirects and proxies disabled, requests/responses bounded. N
 or transport details appear in reports/errors. Redaction remains best effort. Shadow
 proposals are untrusted bounded typed data, cannot invoke tools, change sinks, mutate
 Kubernetes, or activate rules. See [provider and registry boundaries](docs/provider-template-learning.md).
+
+Reviewed semantic rules are separately operator-authored local artifacts, default off.
+Their strict bounded loader has no proposal/report import path. Review metadata is
+non-secret bounded identifiers, not cryptographic attestation. File selection and
+trusted private directory/mount ownership provide authorization; a writable malicious
+rule file can authorize overly broad scalar normalization. Treat review of each
+normalization path as security-sensitive. Source/complete shape, protected fields,
+literals, risk contract and a computed artifact digest bind reuse. Verdicts remain
+session-only, expire without sliding, and never persist as active rules in SQLite.
+All evidence still reaches controller policy. See the
+[reviewed contract](docs/provider-template-learning.md#reviewed-artifact-activation).

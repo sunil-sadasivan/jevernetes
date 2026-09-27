@@ -1,0 +1,59 @@
+{
+  "apiVersion": "apps/v1",
+  "kind": "Deployment",
+  "metadata": {
+    "name": "jevernetes"
+  },
+  "spec": {
+    "template": {
+      "spec": {
+        "containers": [
+          {
+            "name": "controller",
+            "args": [
+              "controller",
+              "--namespace",
+              "jevernetes",
+              "--state",
+              "/var/lib/jevernetes/state.db",
+              "--policy",
+              "/etc/jevernetes/policy.json",
+              "--sink",
+              "webhook",
+              "--listen",
+              "0.0.0.0:9090",
+              "--selector",
+              "app!=jevernetes",
+              "--grouping-strategy",
+              "semantic",
+              "--template-rules",
+              "/etc/jevernetes-reviewed/rules.json"
+            ],
+            "volumeMounts": [
+              {
+                "name": "reviewed-rules",
+                "mountPath": "/etc/jevernetes-reviewed",
+                "readOnly": true
+              }
+            ]
+          }
+        ],
+        "volumes": [
+          {
+            "name": "reviewed-rules",
+            "configMap": {
+              "name": "controller-reviewed-rules",
+              "defaultMode": 288,
+              "items": [
+                {
+                  "key": "rules.json",
+                  "path": "rules.json"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  }
+}

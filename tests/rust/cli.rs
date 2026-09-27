@@ -396,3 +396,112 @@ fn offline_semantic_is_local_and_retains_all_occurrences() {
     );
     assert!(!r.status.success());
 }
+
+#[test]
+fn reviewed_rules_validate_before_input_credentials_or_controller_state() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rules.json");
+    let state = dir.path().join("state.db");
+    for bytes in [
+        b"{}".to_vec(),
+        vec![b' '; 65537],
+        br#"{"artifact_version":999}"#.to_vec(),
+    ] {
+        std::fs::write(&path, bytes).unwrap();
+        for command in [
+            vec!["files", "/nonexistent-synthetic-fixture"],
+            vec!["k8s"],
+            vec![
+                "controller",
+                "--namespace",
+                "synthetic",
+                "--state",
+                state.to_str().unwrap(),
+            ],
+        ] {
+            let result = Command::new(env!("CARGO_BIN_EXE_jevernetes"))
+                .env_clear()
+                .args(command)
+                .args([
+                    "--grouping-strategy",
+                    "semantic",
+                    "--template-rules",
+                    path.to_str().unwrap(),
+                ])
+                .output()
+                .unwrap();
+            assert_eq!(result.status.code(), Some(1));
+            assert!(
+                String::from_utf8_lossy(&result.stderr).contains("Invalid reviewed template rules")
+            );
+            assert!(!state.exists());
+        }
+    }
+    for grouping in ["exact", "off", "drain"] {
+        assert!(
+            !run(
+                b"",
+                &[
+                    "--grouping-strategy",
+                    grouping,
+                    "--template-rules",
+                    path.to_str().unwrap()
+                ]
+            )
+            .status
+            .success()
+        );
+    }
+}
+#[test]
+fn reviewed_rules_offline_files_report_and_online_risk_only_credentials() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rules.json");
+    let mut v: serde_json::Value = serde_json::from_slice(include_bytes!(
+        "../../examples/reviewed-rules.synthetic.json"
+    ))
+    .unwrap();
+    let now = jevernetes::controller::now();
+    v["rules"][0]["expires_at"] = serde_json::json!(now + 3600);
+    v["rules"][0]["review"]["reviewed_at"] = serde_json::json!(now - 1);
+    std::fs::write(&path, v.to_string()).unwrap();
+    let result=run(b"{\"operation\":\"getPhoneCalloutSessionDetails\",\"outcome\":\"success\",\"payload_id\":\"synthetic\",\"request_id\":\"synthetic\",\"status\":200}\n", &["--grouping-strategy","semantic","--template-rules",path.to_str().unwrap()]);
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(report["summary"]["events"], 1);
+    assert_eq!(report["summary"]["reused_events"], 0);
+    assert_eq!(
+        report["reviewed_template_rules"]["mode"],
+        "reviewed-session-only"
+    );
+    assert!(report["template_learning"].is_null());
+    for provider in ["typesafe", "openai", "anthropic"] {
+        let result = Command::new(env!("CARGO_BIN_EXE_jevernetes"))
+            .env_clear()
+            .args([
+                "files",
+                "/nonexistent-synthetic-fixture",
+                "--grouping-strategy",
+                "semantic",
+                "--template-rules",
+                path.to_str().unwrap(),
+                "--risk-provider",
+                provider,
+                "--model",
+                "synthetic",
+                "--input-price",
+                "0",
+                "--output-price",
+                "0",
+            ])
+            .output()
+            .unwrap();
+        let error = String::from_utf8_lossy(&result.stderr);
+        assert!(error.contains("API_KEY"), "{error}");
+        assert!(!error.contains("template-provider"));
+    }
+}

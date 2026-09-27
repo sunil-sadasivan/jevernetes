@@ -86,10 +86,17 @@ prefer mounted files in Kubernetes. There is no provider fallback.
 **shadow-only** structured template proposals. The template role has an independent
 model, rates and budget. Local validation checks observed paths, protected fields,
 minimum support and deterministic replay, but never promotes or reuses proposals.
-Every event still classifies and reaches controller policy; actual semantic savings
+Without a reviewed artifact every event still classifies and reaches controller policy; shadow savings
 are zero in this release. Exact defaults and Drain behavior are preserved.
 See [provider contracts, bounds, setup and activation limitations](docs/provider-template-learning.md).
 
 ```sh
 CARGO_NET_OFFLINE=true cargo run --locked --example semantic_shadow
 ```
+
+Separately reviewed compiled rules can activate deterministic semantic reuse with
+`--grouping-strategy semantic --template-rules PATH` (default off). LLM proposals stay
+shadow-only and cannot self-promote. Active reuse needs only the risk provider, retains
+every occurrence, and uses bounded session-only verdicts. See the
+[reviewed artifact contract](docs/provider-template-learning.md#reviewed-artifact-activation)
+and run `cargo run --locked --example reviewed_reduction` for a socket-free synthetic demo.

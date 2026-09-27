@@ -18,6 +18,13 @@ pub struct Coverage {
 }
 #[derive(Default, Serialize)]
 pub struct Metrics {
+    pub reviewed_misses: u64,
+    pub reviewed_fallbacks: u64,
+    pub reviewed_publications: u64,
+    pub reviewed_capacity_misses: u64,
+    pub reviewed_stale_tickets: u64,
+    pub reviewed_expirations: u64,
+    pub reviewed_entries: usize,
     pub semantic_proposals: u64,
     pub semantic_rejections: u64,
     pub semantic_rejection_reasons: BTreeMap<String, u64>,
@@ -123,6 +130,7 @@ fn severity_rank(severity: Severity) -> u8 {
 }
 pub struct Report {
     pub learning: Option<crate::semantic::LearningReport>,
+    pub reviewed: Option<crate::reviewed::ActiveReport>,
     pub risk_contract: Option<crate::controller::Contract>,
     pub events: VecDeque<Event>,
     pub counts: BTreeMap<String, u64>,
@@ -137,6 +145,7 @@ impl Report {
     pub fn new(limit: usize) -> Self {
         Self {
             learning: None,
+            reviewed: None,
             risk_contract: None,
             events: VecDeque::new(),
             counts: BTreeMap::new(),
@@ -215,7 +224,7 @@ impl Report {
             usage.estimated_cost_usd + template_usage.map_or(0.0, |u| u.estimated_cost_usd);
         json!({"schema_version":2,"runtime":"rust","created_at":chrono::Utc::now().to_rfc3339(),"mode":if offline{"offline-rules"}else{self.risk_contract.as_ref().map_or("jev", |c| if c.provider==crate::provider::ProviderKind::Openai.endpoint(){"openai"}else if c.provider==crate::provider::ProviderKind::Anthropic.endpoint(){"anthropic"}else{"jev"})},"scope":scope,
             "summary":{"events":self.total,"lines":self.lines,"important":self.counts.get("important").unwrap_or(&0),"routine":self.counts.get("routine").unwrap_or(&0),"uncertain":self.counts.get("uncertain").unwrap_or(&0),"unknown":self.counts.get("unknown").unwrap_or(&0),"streams":m.streams_started,"coverage_gaps":m.coverage_gaps,"api_requests":usage.request_attempts,"total_api_requests":total_attempts,"total_estimated_cost_usd":total_cost,"reused_events":self.reused,"elapsed_seconds":elapsed,"complete_within_window":complete,"retained_events":self.events.len(),"evicted_events":self.evicted},
-            "provider_usage":{"risk":usage,"template":template_usage},"risk_contract":self.risk_contract,"template_learning":self.learning,"usage":usage,"coverage":m.coverage,"metrics":&*m,"batches":self.batches,"events":self.events,"important_groups":groups})
+            "provider_usage":{"risk":usage,"template":template_usage},"risk_contract":self.risk_contract,"template_learning":self.learning,"reviewed_template_rules":self.reviewed,"usage":usage,"coverage":m.coverage,"metrics":&*m,"batches":self.batches,"events":self.events,"important_groups":groups})
     }
 }
 pub fn write_report(path: &Path, value: &Value) -> Result<(), &'static str> {

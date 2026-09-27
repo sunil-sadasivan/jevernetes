@@ -1,12 +1,14 @@
 # Provider adapters and semantic shadow learning
 
-This release implements **shadow learning only**. It can collect and validate bounded
-structured-template proposals in files, Kubernetes snapshots/follow, and the continuous
-controller. It never activates a proposal or reuses its judgment. Every occurrence in
-semantic mode receives ordinary risk classification and continues through retention,
-recurrence, policy and notification. Exact remains the default; Drain is unchanged.
-Embeddings and fine-tuning are neither required nor implemented, and are never authority
-for reuse. This is not an accuracy or security-equivalence claim.
+LLMs learn candidates in **shadow only**. Separately operator-reviewed compiled
+artifacts can activate deterministic judgment reuse with `--template-rules PATH`.
+The flag defaults off and requires semantic grouping. No proposal, report, confidence
+score, embedding or fine-tuning result can authorize activation. Exact remains the
+default; Drain and all provider adapters keep their existing behavior.
+
+Every raw occurrence remains in the normal bounded retention, recurrence, policy and
+notification pipeline. Reuse replaces only the risk judgment and records its original
+representative ID. This is not a provider accuracy or security-equivalence claim.
 
 ## Independent providers
 
@@ -67,11 +69,13 @@ ceiling. Budget and usage counters reset on restart.
 ## Selecting shadow learning
 
 Select `--grouping-strategy semantic` (alias `learned`) and
-`--template-provider openai|anthropic`. This strategy is always shadow; there is no
-promotion flag. Template TypeSafe is deliberately unsupported because proposals do
+`--template-provider openai|anthropic`. This provider role is always shadow; there is no
+promotion flag. Reviewed artifacts use the separate `--template-rules` option. Template TypeSafe is deliberately unsupported because proposals do
 not fit its preserved choice endpoint. `--template-provider off` is the default.
-Online semantic mode requires a template provider; ordinary `--offline` semantic mode
-only runs local rules, without candidates or synthetic confidence.
+Online semantic mode requires a template provider **or** reviewed rules. Active rules
+do not require a template provider/key. `--offline` only runs local baseline judgments;
+these remain unscored/uncertain and cannot seed active reuse. Socket-free tests and the
+reviewed reduction example inject deterministic synthetic judgments without credentials.
 
 Both roles may use the same provider/model or different ones. Set
 `--template-model`, `--template-input-price`, and `--template-output-price` explicitly.
@@ -124,11 +128,17 @@ user-controlled text and identities are never normalized.
 classified distinct occurrences, not reused judgments or repeated observation IDs.
 Only high-confidence (all three at least 0.85), baseline-clean routine judgments
 with routine category and info/noise severity qualify. Security/fraud, failures,
-unknown or uncertain judgments quarantine that source/shape partition. All stored
+unknown or uncertain judgments quarantine that source/shape partition. Ineligible
+evidence also quarantines its proven family before returning. A nonserialized hash of
+the complete original source/shape is retained before redaction and continuation; this
+allows private/redacted/malformed multiline evidence to invalidate its own family.
+An entirely unparseable new record with no proven shape cannot be assigned to a family
+and never matches a rule; unrelated families are not merged by source alone. All stored
 samples must replay with identical non-normalized fields. Later literal changes
 invalidate the candidate even if risk classification calls them routine. New fields
 create a separate partition and require fresh evidence. Samples collected while a
-proposal is pending participate in replay; monotonic generation tickets reject stale
+proposal is pending participate in replay; a 17th independent sample permanently rejects
+that candidate/ticket as replay-incomplete, even if the sample would match; monotonic generation tickets reject stale
 completions after expiry/recreation. No same-batch or later event borrows a verdict.
 
 The registry holds at most `--template-capacity` partitions (default 64, range 1–256),
@@ -138,7 +148,7 @@ Capacity misses classify normally; expired partitions are pruned on observations
 completions and report snapshots. The gauge may remain stale while the lane is idle.
 Rejection reason labels are a fixed enum, never model or event text.
 
-## Reports, controller state and next activation step
+## Reports and controller state
 
 Reports add `risk_contract` and `template_learning` with schema/version, role-specific
 provider/model provenance, proposal-schema and prompt fingerprint, bounded candidate
@@ -149,24 +159,116 @@ payloads are persisted by the registry. Existing report event retention/counters
 unchanged. `semantic_*` and `template_*` metrics are available in JSON and numeric
 controller Prometheus fields; rejection-reason counts are in JSON. `semantic_shadow_matches`
 counts **already classified** observations matching a candidate, not avoided work.
-Promotions, active templates and semantic classifications avoided are always zero.
+Promotions are always zero. Active-template and avoided-classification metrics count
+only separately reviewed rules; with no artifact both remain zero.
 
 Candidates are process-local and saved only in the final report (`--output` for a
-controller). Reports are never imported as rules. No SQLite schema migration or active
-rule persistence is introduced. Restart loses candidates and repeats learning; existing
+controller). Reports are never imported as rules. No SQLite schema migration or durable active
+verdict persistence is introduced. Restart loses candidates and repeats learning; existing
 incidents, outbox, delivery retries, health and shutdown semantics remain intact.
-Semantic mode bypasses durable exact verdict reads/writes to keep evidence independent;
-every occurrence still enters policy/novelty/incident/outbox processing. Template
+Semantic mode bypasses durable exact verdict reads/writes; every occurrence still
+enters policy/novelty/incident/outbox processing. Active verdicts publish only after
+the batch classifications and controller transactions finish. Template
 failure does not suppress security/fraud notifications. Queue drops and retention
 limits still apply; reuse must never mean deleting raw occurrences.
 
-Automatic activation, one-classification reuse for varying structured events, durable
-candidate restoration and active-template controller tests are deferred. A next step
-must define a reviewed compiled-rule contract, validate restart provenance/TTL,
-collision and protected-mutation checks across all evidence, publish only completed
-verdicts with generation tickets, and test active reuse plus normal security/fraud
-notifications. A replay pass or model confidence alone is insufficient authorization.
-This release deliberately claims **zero semantic classification savings**.
+## Reviewed artifact activation
+
+An operator must deliberately compile a new artifact offline from the documented
+schema, inspect source scope and every complete path/type, approve each scalar to
+normalize, fix required/protected literals, assign review identifiers, version and
+expiry, and place the result in a trusted private directory. A replay pass is evidence
+for that review, never approval. There is no proposal import, report-to-rule converter,
+auto-promotion, hot reload or model-controlled file path. Review identifiers are bounded
+non-secret identifiers, not signatures or proof that a human review actually occurred;
+the operator-selected file and its access controls are the trust boundary.
+
+The complete synthetic example is
+[`examples/reviewed-rules.synthetic.json`](../examples/reviewed-rules.synthetic.json).
+It contains invented evidence only and is not a production rule. Its explicit expiry
+is intentional. Use `cargo run --locked --example reviewed_reduction` for deterministic
+replay at a fixed synthetic time: 300 retained events, one injected classification,
+299 reuses and zero network calls. A prefilled batch of eight requires eight independent
+classifications before any verdict publishes.
+
+```
+jevernetes files - --grouping-strategy semantic --template-rules .runs/reviewed.json
+```
+
+The same option works for snapshot/follow and controller modes, with independently
+selected TypeSafe, OpenAI or Anthropic risk credentials as above. `--template-provider`
+is optional; adding it collects advisory candidates alongside the reviewed matcher.
+
+The strict version-1 artifact has mandatory `artifact_version`, `schema_version` and
+`rules`. Every rule requires `id`, positive `version`, Unix-seconds `expires_at`, exact
+`source_scope`, complete `shape`, `required_literals`, `normalize_paths`,
+`protected_literals` and `review`. Review requires `reviewer`, `review_id`, `compiler`
+and Unix-seconds `reviewed_at`. Unknown/missing fields and duplicate JSON keys at any
+depth are rejected. A claimed digest field is rejected. The runtime computes SHA-256
+from the actual file bytes; even whitespace/review changes invalidate identity on reload.
+Provider/model, actual risk prompt/schema/contract, artifact digest/versions, rule
+ID/version, complete source, complete path/type shape and every non-normalized value
+participate in the fingerprint.
+
+| Resource | Hard bound / semantics |
+| --- | --- |
+| File | 64 KiB, capped read plus one-byte probe; regular files only |
+| Rules | 1–64; duplicate IDs (even different versions) and potentially overlapping rules rejected |
+| IDs/review labels/source keys | 1–64 ASCII identifier bytes |
+| Source scope | 1–16 exact scalar fields; full equality, no wildcard/subset/workload expansion |
+| Shape | 1–128 nodes, depth ≤8, root object; includes every object, array, index and empty container |
+| Paths | ≤128 bytes, restricted JSON pointers with nonempty ASCII alphanumeric/underscore/hyphen segments; escape sequences unsupported |
+| Literals/normalization | 1–32 required literals, 1–32 normalize paths, 0–32 protected literals; no overlap or duplicate paths |
+| Strings | ≤256 bytes per scalar; no control characters or recognized redaction/secret values |
+| Expiry | Reviewed time positive and not in the future, expiry strictly future, validity ≤366 days |
+| Matched event | ≤2 KiB, single complete non-sensitive JSON object; no truncation/redaction/private/multiline/parse ambiguity |
+| Session cache | `--template-capacity` 1–256 (default 64) fingerprints; full cache falls back to classification |
+| Verdict TTL | `--template-ttl` 1–3600 seconds, default 300; controller also caps by `--verdict-ttl` |
+
+Credential loaders already allow Kubernetes projected symlinks to regular files; the
+rule loader follows the same policy and rejects directories/devices/non-regular targets.
+Keep files and parent directories private and stable against untrusted replacement;
+existing permissions are not changed. All rule decoding/validation and bounded loading
+finish **before** input, credentials, state creation or Kubernetes access. A malformed
+artifact aborts startup. A mismatched/expired event or rule falls back to classification.
+Rules load once; restart to load changes. The digest binds the loaded snapshot, and
+restarts always start with an empty verdict cache.
+
+Normalization replaces only explicitly approved scalar values with deterministic
+markers. Complete type shape remains part of identity; arrays, object keys, ordering
+of arrays, empty containers and all non-normalized values remain exact. Outcome,
+status, code, error, auth/authorization, security, fraud, category, importance, severity,
+level, result, success, denied/deny, permission, role and failure-like names (including
+case/separator variants and ancestors; access/allow/permit/privilege/denial and
+recognized credential names are also blocked) can never normalize. They remain literal even
+if omitted from `protected_literals`. Required and protected literals additionally
+restrict which values can match a rule. Unknown/new/missing keys, changed types,
+source or structure always miss. No similarity, embeddings or fine-tuning participates.
+
+Only a completed, independently classified, baseline-clean, cacheable routine judgment
+(category routine; severity info/noise; all three finite confidences ≥0.85) can seed a
+fingerprint. Failed, important, uncertain, security/fraud and non-cacheable judgments
+cannot seed it. Any unsafe sibling in the same batch invalidates pending publication
+for that fingerprint regardless of completion order. A later independent classification
+may retry. Generation tickets reject stale completions after TTL/recreation; cache hits
+do not extend TTL. `--rescore` bypasses all reviewed reads. Rule expiry is checked on
+every lookup and publication. Capacity, TTL and restart losses increase classification
+work; they never imply routine judgments.
+
+Reports separate advisory `template_learning` from `reviewed_template_rules`, whose
+mode is `reviewed-session-only`, with artifact digest/version, reviewed metadata, rule
+constraints, risk contract and bounds. `reviewed_*` metrics expose misses, fallbacks,
+publications, capacity misses, stale tickets, expirations and entries. Semantic avoided
+classifications count actual hits; automatic promotions remain zero. Numeric metrics
+are exposed by the existing controller health service. Expiry gauges refresh on work
+and final report (they can be stale while idle).
+
+SQLite schema, durable incidents, novelty, recurrence, outbox, delivery, health,
+shutdown, queue/drop bounds and read-only Kubernetes collection are unchanged.
+Reviewed verdicts are session-only across the continuous controller's entire analysis
+lane; restart requires reclassification. Every event still enters the existing policy
+transaction, including variants and reused routine observations. Retention bounds and
+existing crash/partial-coverage limitations still apply.
 
 Run the wholly synthetic, socket-free structural example:
 

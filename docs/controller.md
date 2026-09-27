@@ -123,11 +123,14 @@ state creation or cluster collection. TypeSafe stays the default; no template ke
 required with learning off. Optional OpenAI/Anthropic Secret projections in the base
 are inert until selected. Use `*_API_KEY_FILE` and restart for rotation.
 
-Semantic mode is shadow-only: it bypasses exact verdict reads/writes, classifies every
-occurrence, and retains normal policy/novelty/incident/outbox transactions. Candidates
+Without `--template-rules`, semantic mode is shadow-only: it bypasses exact verdict
+reads/writes, classifies every occurrence, and retains normal policy/novelty/incident/outbox transactions. Candidates
 are bounded in memory and included in the final `--output` report; they are not restored
-from SQLite or imported from reports. Existing schema 2 state is unchanged. No active
-semantic template exists and no classification is avoided. Numeric `semantic_*` and
+from SQLite or imported from reports. Existing schema 2 state is unchanged. Only a separately reviewed artifact activates session-only semantic reuse.
+Use `--template-rules PATH` with semantic grouping; no template provider/key is required.
+Rule files fully validate before input/state/credentials/cluster access. The cache lives
+for the continuous analysis lane, honors capacity, non-sliding TTL, expiry and `--rescore`,
+and starts empty on restart. Every reused occurrence still enters policy/recurrence/outbox. Numeric `semantic_*` and
 `template_*` counters are exposed by `/metrics`; full rejection reasons and provenance
 are in JSON reports. Budget/cost counters remain per-process and role-specific.
-See [configuration, safety gates and deferred activation](provider-template-learning.md).
+See [configuration, safety gates and reviewed activation](provider-template-learning.md).

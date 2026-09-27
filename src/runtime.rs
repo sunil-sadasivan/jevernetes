@@ -88,15 +88,62 @@ pub async fn analyze_controlled(
 ) -> (Report, Option<Jev>) {
     analyze_with_learning(rx, sender_metrics, client, opts, stop, controller, None).await
 }
+pub struct Templates {
+    pub learner: Option<crate::semantic::Learner>,
+    pub reviewed: Option<(crate::reviewed::Rules, usize, Duration)>,
+}
 pub async fn analyze_with_learning(
+    rx: mpsc::Receiver<Event>,
+    sender_metrics: SharedMetrics,
+    client: Option<Jev>,
+    opts: AnalyzeOptions,
+    stop: CancellationToken,
+    controller: Option<crate::controller::Controller>,
+    learner: Option<crate::semantic::Learner>,
+) -> (Report, Option<Jev>) {
+    analyze_with_templates(
+        rx,
+        sender_metrics,
+        client,
+        opts,
+        stop,
+        controller,
+        Templates {
+            learner,
+            reviewed: None,
+        },
+    )
+    .await
+}
+pub async fn analyze_with_templates(
     mut rx: mpsc::Receiver<Event>,
     sender_metrics: SharedMetrics,
     mut client: Option<Jev>,
     opts: AnalyzeOptions,
     stop: CancellationToken,
     controller: Option<crate::controller::Controller>,
-    mut learner: Option<crate::semantic::Learner>,
+    templates: Templates,
 ) -> (Report, Option<Jev>) {
+    let mut learner = templates.learner;
+    let mut reviewed = templates
+        .reviewed
+        .filter(|_| opts.grouping == Strategy::Semantic)
+        .map(|(rules, capacity, ttl)| {
+            let contract =
+                client
+                    .as_ref()
+                    .map(Jev::contract)
+                    .unwrap_or_else(|| crate::controller::Contract {
+                        provider: "offline-local".into(),
+                        model: "none".into(),
+                        version: "local-unscored-v1".into(),
+                    });
+            let ttl = controller
+                .as_ref()
+                .map_or(ttl, |c| ttl.min(Duration::from_secs(c.ttl as u64)));
+            crate::reviewed::Matcher::new(rules, contract, capacity, ttl, sender_metrics.clone())
+                .expect("validated reviewed bounds")
+        });
     let mut report = Report::new(opts.retain);
     report.risk_contract = client.as_ref().map(Jev::contract);
     let mut cache = Cache::new(
@@ -145,6 +192,7 @@ pub async fn analyze_with_learning(
         sender_metrics.lock().expect("metrics lock").queue_depth = rx.len();
         let mut owned = Vec::new();
         let mut drain_tickets = HashMap::new();
+        let mut reviewed_tickets = HashMap::new();
         let mut references = HashMap::new();
         let mut duplicate_of = HashMap::new();
         for (i, event) in batch.iter_mut().enumerate() {
@@ -169,6 +217,19 @@ pub async fn analyze_with_learning(
                         stop.cancel();
                         continue;
                     }
+                }
+            }
+            if let Some(matcher) = &mut reviewed {
+                if let Some(ticket) = matcher.prepare(
+                    event,
+                    Instant::now(),
+                    crate::controller::now(),
+                    controller.as_ref().is_some_and(|c| c.rescore),
+                ) {
+                    reviewed_tickets.insert(i, ticket);
+                }
+                if event.analysis_reused {
+                    continue;
                 }
             }
             if client.is_none() {
@@ -280,9 +341,9 @@ pub async fn analyze_with_learning(
             m.provider_unmetered_requests = client.usage.unmetered_requests;
             m.estimated_cost_usd = client.usage.estimated_cost_usd;
         }
-        for mut event in batch {
+        for event in &mut batch {
             if let Some(c) = &controller
-                && c.apply_with_verdict_cache(&event, opts.grouping == Strategy::Exact)
+                && c.apply_with_verdict_cache(event, opts.grouping == Strategy::Exact)
                     .await
                     .is_err()
             {
@@ -314,12 +375,25 @@ pub async fn analyze_with_learning(
                 );
             }
             if let Some(learner) = &mut learner {
-                learner.observe(&event, &stop).await;
+                learner.observe(event, &stop).await;
             }
+        }
+        if let Some(matcher) = &mut reviewed {
+            matcher.complete_batch(
+                reviewed_tickets
+                    .into_iter()
+                    .map(|(i, t)| (t, &batch[i]))
+                    .collect(),
+                Instant::now(),
+                crate::controller::now(),
+            );
+        }
+        for event in batch {
             report.record(event);
         }
     }
     sender_metrics.lock().expect("metrics lock").queue_depth = 0;
+    report.reviewed = reviewed.map(|m| m.report(Instant::now(), crate::controller::now()));
     report.learning = learner.map(crate::semantic::Learner::report);
     (report, client)
 }

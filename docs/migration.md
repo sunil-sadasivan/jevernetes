@@ -38,8 +38,10 @@ Existing TypeSafe exact cache identity remains compatible. New providers/models/
 contracts invalidate reuse; no SQLite migration is needed. Reports retain schema 2
 with additive `risk_contract` and `template_learning` fields and role metrics.
 
-This is the coherent **shadow-only** first stage: no automatic promotion, persistent
-candidate restoration, active semantic reuse, or reduction to one classification for
-varying structured events. The next activation contract and required checks are
-[documented explicitly](provider-template-learning.md). Exact defaults and conservative
-Drain behavior remain in force; report candidates must not be treated as active rules.
+The second stage adds `--template-rules PATH`, a default-off strict loader for
+separately operator-reviewed compiled rules and session-only active judgment reuse.
+LLM candidates stay shadow-only, cannot self-promote, and are never imported from
+reports. Reports add a distinct `reviewed_template_rules` section. No SQLite migration
+or durable semantic cache is introduced; restart reclassifies. Exact defaults and
+conservative Drain behavior remain in force. See the
+[reviewed contract and validation boundaries](provider-template-learning.md).

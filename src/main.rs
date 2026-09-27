@@ -61,7 +61,7 @@ struct Cli {
     output: Option<PathBuf>,
     #[arg(long, global = true)]
     no_grouping: bool,
-    /// Classification strategy: exact (default), off, drain, or semantic (shadow only).
+    /// Classification strategy: exact (default), off, drain, or semantic.
     #[arg(
         long,
         global = true,
@@ -83,6 +83,9 @@ struct Cli {
     template_provider: TemplateProvider,
     #[arg(long, global = true)]
     template_model: Option<String>,
+    /// Separately operator-reviewed compiled rules; requires semantic grouping.
+    #[arg(long, global = true)]
+    template_rules: Option<PathBuf>,
     #[arg(long, global = true, default_value = "4", value_parser = clap::value_parser!(u8).range(2..=16))]
     template_min_support: u8,
     #[arg(long, global = true, default_value = "64", value_parser = clap::value_parser!(u16).range(1..=256))]
@@ -144,6 +147,11 @@ impl Cli {
                 "OpenAI/Anthropic require explicit --model, --input-price and --output-price",
             );
         }
+        if self.template_rules.is_some()
+            && (self.grouping_strategy != Strategy::Semantic || self.no_grouping)
+        {
+            return Err("Reviewed template rules require --grouping-strategy semantic");
+        }
         if self.template_provider != TemplateProvider::Off {
             if self.offline || self.grouping_strategy != Strategy::Semantic || self.no_grouping {
                 return Err(
@@ -163,9 +171,12 @@ impl Cli {
             || self.template_output_price.is_some()
         {
             return Err("Template model/prices require a template provider");
-        } else if self.grouping_strategy == Strategy::Semantic && !self.offline {
+        } else if self.grouping_strategy == Strategy::Semantic
+            && !self.offline
+            && self.template_rules.is_none()
+        {
             return Err(
-                "Online semantic shadow mode requires --template-provider openai or anthropic",
+                "Online semantic mode requires --template-rules or --template-provider openai or anthropic",
             );
         }
         Ok(())
@@ -292,7 +303,11 @@ struct ControllerArgs {
     #[arg(long, default_value = "0")]
     duration: u64,
 }
-async fn run_controller(cli: &Cli, args: &ControllerArgs) -> Result<i32, &'static str> {
+async fn run_controller(
+    cli: &Cli,
+    args: &ControllerArgs,
+    rules: Option<jevernetes::reviewed::Rules>,
+) -> Result<i32, &'static str> {
     use jevernetes::controller::{
         Contract, Controller, health,
         policy::Policy,
@@ -398,14 +413,23 @@ async fn run_controller(cli: &Cli, args: &ControllerArgs) -> Result<i32, &'stati
         live: true,
         print_events: false,
     };
-    let mut consumer = tokio::spawn(runtime::analyze_with_learning(
+    let mut consumer = tokio::spawn(runtime::analyze_with_templates(
         rx,
         metrics.clone(),
         client,
         opts,
         stop.clone(),
         Some(controller.clone()),
-        learner,
+        runtime::Templates {
+            learner,
+            reviewed: rules.map(|r| {
+                (
+                    r,
+                    usize::from(cli.template_capacity),
+                    Duration::from_secs(u64::from(cli.template_ttl)),
+                )
+            }),
+        },
     ));
     eprintln!("[controller] advisory monitoring started; coverage is partial; one local writer");
     let started = Instant::now();
@@ -496,8 +520,14 @@ fn signal(stop: CancellationToken) -> Result<tokio::task::JoinHandle<()>, &'stat
 
 async fn run(cli: Cli) -> Result<i32, &'static str> {
     cli.validate()?;
+    // Validate the entire artifact before credentials, input, state, or cluster access.
+    let rules = cli
+        .template_rules
+        .as_ref()
+        .map(|p| jevernetes::reviewed::Rules::load(p, jevernetes::controller::now()))
+        .transpose()?;
     if let Command::Controller(args) = &cli.command {
-        return run_controller(&cli, args).await;
+        return run_controller(&cli, args, rules).await;
     }
     let started = Instant::now();
     let metrics = Arc::new(Mutex::new(Metrics::default()));
@@ -563,14 +593,23 @@ async fn run(cli: Cli) -> Result<i32, &'static str> {
         None
     };
     let signals = signal(stop.clone())?;
-    let consumer = tokio::spawn(runtime::analyze_with_learning(
+    let consumer = tokio::spawn(runtime::analyze_with_templates(
         rx,
         metrics.clone(),
         client,
         opts,
         stop.clone(),
         None,
-        learner,
+        runtime::Templates {
+            learner,
+            reviewed: rules.map(|r| {
+                (
+                    r,
+                    usize::from(cli.template_capacity),
+                    Duration::from_secs(u64::from(cli.template_ttl)),
+                )
+            }),
+        },
     ));
     let producer_stop = stop.clone();
     let producer_metrics = metrics.clone();

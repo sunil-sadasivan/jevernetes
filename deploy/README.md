@@ -34,3 +34,17 @@ Review [provider/learning behavior](../docs/provider-template-learning.md) and
 [controller operation](../docs/controller.md) before preparing an overlay. Set approved
 egress to only the selected provider and existing notification destination. Preserve
 non-root/read-only filesystem settings, self-log exclusion and read-only RBAC.
+
+For operator-reviewed activation, `reviewed-rules.patch.json` is an **optional**
+strategic merge patch for a separately managed overlay, not part of the base. It adds
+semantic grouping and a read-only 0440 ConfigMap file reference named
+`controller-reviewed-rules`, key `rules.json`. Supply a deliberately compiled/reviewed
+artifact through your approved configuration process; no ConfigMap contents or live
+rules are provided. A Secret volume can replace the ConfigMap projection if local
+policy requires it. Do not grant Secret/ConfigMap API reads to the controller.
+
+The patch preserves the base command and does not enable a template provider. Restart
+to load a new artifact; projected updates do not hot-reload. The loader accepts trusted
+projected symlinks to regular files, hashes the loaded bytes, and rejects invalid or
+expired artifacts before state/cluster access. Keep source scopes exact, mount and
+parent directories trusted, and the base's read-only RBAC and self-log exclusion intact.

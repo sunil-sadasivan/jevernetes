@@ -85,7 +85,8 @@ use the selected provider's environment or mounted `*_API_KEY_FILE`; nothing is 
 as a CLI credential. Template selection requires `--grouping-strategy semantic`
 (alias `learned`), `--template-model` and explicit template prices.
 
-Semantic means shadow-only in this release. It classifies every occurrence and only
+Semantic learning is shadow-only; separately reviewed artifacts can enable reuse with
+`--template-rules PATH`. Without such an artifact, it classifies every occurrence and only
 reports candidate replay matches; it does not save classifications. Exact and Drain
 are unchanged. Ordinary `--offline` never loads provider credentials or learns templates.
 See [all flags, budgets, response contracts and the synthetic example](provider-template-learning.md).

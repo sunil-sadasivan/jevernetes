@@ -125,5 +125,12 @@ to the shared runtime lane. Deterministic identity is full source plus observed 
 path/type shape; proposals never choose identity or authorize reuse. Classified events
 pass through controller policy before shadow observation. No new database table,
 cluster mutation or model-selected action exists. Reports carry versioned provenance,
-replay results and role usage. Automatic promotion and durable restoration are deferred;
+replay results and role usage. Automatic promotion is prohibited; durable candidate restoration is absent;
 see [the complete contract and bounds](provider-template-learning.md).
+
+Reviewed semantic activation is an independent immutable artifact loader and bounded
+session matcher in the shared files/snapshot/controller lane. It hashes the validated
+file bytes and exact provider/risk contract into deterministic structural fingerprints.
+It publishes only completed routine judgments after batch classification and controller
+transactions; no SQLite verdict migration is needed. Shadow proposals have no activation
+API. See [the strict schema and safety boundary](provider-template-learning.md#reviewed-artifact-activation).

@@ -1,3 +1,83 @@
+# Reviewed compiled-rule activation (2026-09-27)
+
+Implemented the second stage on top of reviewed parent `36b7570`: default-off
+`--template-rules PATH`, strict bounded versioned artifacts, computed byte digests,
+full-source/complete-shape deterministic scalar normalization, protected literals,
+and bounded session-only verdict publication/reuse in files, snapshots and the
+continuous controller. Exact defaults, Drain, provider adapters and SQLite schema 2
+are unchanged. The optional reviewed-rule mount patch is outside the base.
+
+**LLMs learn candidates in shadow; a separately reviewed artifact activates reuse.**
+No proposal/report import, automatic promotion or confidence-as-approval exists.
+Embeddings and fine-tuning are unnecessary and never authorization. The human/offline
+compilation and review boundary is documented in
+[the artifact contract](docs/provider-template-learning.md#reviewed-artifact-activation).
+
+The exact sample-17 regression now permanently rejects pending replay as incomplete.
+Unsafe/ineligible evidence invalidates its proven source/shape family before return,
+including private and malformed continuation evidence whose nonserialized original
+shape hash survives parsing. Entirely unparseable new evidence with no provable family
+never matches; unrelated families are not merged by source alone. Shadow contract is
+now `template-shadow-v2`; proposals remain advisory regardless of replay result.
+
+New tests cover strict unknown/missing/duplicate fields, bounded file/rule/string/path/
+source counts, unsupported versions, expiry, protected names and close variants at
+any depth, overlapping/ambiguous rules, computed digests, regular-file/projected-link
+policy, scalar-only normalization, nested arrays and empty containers, literal/type/
+source changes, same-batch independent misses and unsafe siblings, failed/uncertain/
+non-cacheable retry, TTL/capacity/expiry, rescore, stale/restarted tickets, changed
+artifact/provider/model identity and separate reports. CLI regressions prove invalid
+artifacts fail before credentials/input/state/cluster access and reviewed activation
+does not require a template role. Controller checks preserve policy transactions,
+notification intents, recurrence and zero semantic writes to the durable verdict cache.
+
+Synthetic results (zero provider or Kubernetes calls): 300 routine occurrences retain
+all 300 events, require **one classification and 299 reuses** at batch size 1; batch
+size 8 requires eight independent warm-up classifications. Nine status/outcome/error/
+authorization/security/fraud/new-field/type/source variants classify independently and
+produce nine controller Notify/outbox intents. Failed verdicts retry, rescore bypasses
+reuse, controller TTL caps apply, and repeated security observations advance existing
+incident recurrence. Ordinary offline baseline judgments have no synthetic confidence
+and cannot seed reuse. The standalone example uses a fixed synthetic review time.
+
+All Cargo operations used cached dependencies with `CARGO_NET_OFFLINE=true`.
+`Cargo.lock` is unchanged. Work was confined to this worktree; no credentials, live
+providers, cluster API, network escalation or private Pingdex reports were accessed.
+Kustomize was local rendering with `KUBECONFIG=/dev/null`. No push, PR or deployment.
+
+| Check | Result |
+| --- | --- |
+| `cargo fmt --all --check`, `git diff --check` | Passed. |
+| `cargo clippy --locked --all-targets --all-features -- -D warnings` | Passed. |
+| `cargo test --locked --all-features` | **90 library tests passed, 17 existing loopback fixtures blocked at bind with OS code 1 / PermissionDenied. Not a passing full suite.** Same fixture names as the parent section below. |
+| Socket-free all-feature suite (only those 17 fixture names skipped) | Passed: 90 library tests, 15 CLI tests, main target and doctests (0). |
+| Reviewed-rule / shadow tests | All 11 reviewed-rule tests and all shadow regressions passed. |
+| `cargo build --locked --release` | Passed. |
+| Release CLI offline synthetic smoke | Passed: 2 retained events, 1 important, 1 uncertain, zero provider requests. |
+| All three Rust examples | Reviewed: 300 retained / 1 classification / 299 reuses; shadow: 304 retained / 304 classifications / 0 reuses; unchanged Drain: 1,000 retained / 2 classifications / 998 reuses. |
+| `python3 -m unittest discover -s tests -v` | 113 tests ran; existing dashboard HTTP setup failed on denied loopback bind. Other executed tests passed. **Not a passing full suite.** |
+| `python3 -m compileall -q jevernetes` | Passed. |
+| Five JavaScript helper suites and app/search syntax checks | Passed. |
+| `python3 tools/check_controller_artifacts.py` | Passed, including base default-off and optional read-only reviewed-rule mount assertions. |
+| `KUBECONFIG=/dev/null kubectl kustomize deploy/base` | Passed; local rendering only. |
+| `python3 tools/check_release.py` | Passed, including newly staged synthetic example and rule source. |
+| `cargo tree --locked` | Passed offline, no dependency changes. |
+| TruffleHog 3.97.1 source-snapshot filesystem scan (`--no-verification --no-update --fail --fail-on-scan-errors`) | Exit 0, zero verified/unverified findings. Scanner reported a sandbox process-cleanup permission error; **not an unqualified scanner pass**. |
+| Dependency advisory/Python security tools | cargo-audit, Bandit and pip-audit unavailable locally. No installation, advisory fetch or network audit attempted. |
+
+Limits: rule files load once at startup; restart is required to load changes and always
+starts an empty active verdict cache. No durable semantic restoration or hot reload.
+Projected symlinks to regular files follow the existing credential policy; trusted
+private directories/mounts remain the operator's responsibility. Review labels are
+metadata, not cryptographic attestation. Event retention/queue bounds and controller
+crash/partial-coverage guarantees remain unchanged. These synthetic checks establish
+mechanical reuse and notification behavior, not real model accuracy or production
+security equivalence. The user reports that the parent host matrix passed; this child
+snapshot still needs its socket-dependent checks in an authorized host environment.
+
+The historical stage-one and earlier results below describe their respective snapshots;
+the stage-one absence of active reuse is superseded by this section.
+
 # Provider adapters and semantic shadow learning (2026-09-27)
 
 Implemented the explicitly permitted conservative **shadow-only** stage: TypeSafe/Jev,

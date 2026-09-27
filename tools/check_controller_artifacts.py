@@ -51,3 +51,19 @@ for provider in ('openai', 'anthropic'):
     assert source['optional'] is True
     assert source['items'] == [{'key': 'api-key', 'path': provider + '-key'}]
     assert {'name': provider.upper() + '_API_KEY_FILE', 'value': '/var/run/jevernetes-secrets/' + provider + '-key'} in container['env']
+
+assert '--template-rules' not in container['args']
+reviewed = json.loads((root / 'deploy/reviewed-rules.patch.json').read_text())
+reviewed_pod = reviewed['spec']['template']['spec']
+reviewed_container = reviewed_pod['containers'][0]
+assert reviewed_container['args'] == container['args'] + [
+    '--grouping-strategy', 'semantic', '--template-rules', '/etc/jevernetes-reviewed/rules.json',
+]
+assert reviewed_container['volumeMounts'] == [
+    {'name': 'reviewed-rules', 'mountPath': '/etc/jevernetes-reviewed', 'readOnly': True},
+]
+assert reviewed_pod['volumes'][0]['configMap'] == {
+    'name': 'controller-reviewed-rules', 'defaultMode': 0o440,
+    'items': [{'key': 'rules.json', 'path': 'rules.json'}],
+}
+assert '--template-provider' not in reviewed_container['args']

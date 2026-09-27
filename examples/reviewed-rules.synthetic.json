@@ -1,0 +1,40 @@
+{
+  "artifact_version": 1,
+  "schema_version": 1,
+  "rules": [
+    {
+      "id": "synthetic-session",
+      "version": 1,
+      "expires_at": 1800000000,
+      "source_scope": {
+        "type": "file",
+        "path": "-"
+      },
+      "shape": {
+        "": "object",
+        "/operation": "string",
+        "/outcome": "string",
+        "/payload_id": "string",
+        "/request_id": "string",
+        "/status": "number"
+      },
+      "required_literals": {
+        "/operation": "getPhoneCalloutSessionDetails"
+      },
+      "normalize_paths": [
+        "/request_id",
+        "/payload_id"
+      ],
+      "protected_literals": {
+        "/outcome": "success",
+        "/status": 200
+      },
+      "review": {
+        "reviewer": "synthetic-reviewer",
+        "review_id": "synthetic-review-1",
+        "compiler": "manual-v1",
+        "reviewed_at": 1780000000
+      }
+    }
+  ]
+}

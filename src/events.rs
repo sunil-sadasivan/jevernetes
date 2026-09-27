@@ -116,6 +116,9 @@ pub struct Event {
     /// Redacted/private evidence must never seed template reuse.
     #[serde(default)]
     pub sensitive: bool,
+    /// Internal pre-redaction shape only; never restored from reports.
+    #[serde(skip)]
+    pub(crate) semantic_family: Option<String>,
     pub group_id: String,
     #[serde(flatten)]
     pub judgment: crate::jev::Judgment,
@@ -257,6 +260,7 @@ impl Parser {
             line_count: 1,
             truncated,
             sensitive,
+            semantic_family: crate::structured::family(&self.source, body),
             group_id: String::new(),
             judgment: Default::default(),
             baseline: Default::default(),
