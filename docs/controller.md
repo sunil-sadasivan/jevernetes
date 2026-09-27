@@ -114,3 +114,20 @@ cargo test --all-features controller::tests::offline_controller_smoke_and_shutdo
 These commands do not deploy. Image build, target-cluster schema/admission validation, filesystem durability and resource sizing still require an authorized environment. Use a filesystem supporting local advisory locks and SQLite durability; no NFS/shared SQLite volume. RWO alone is not a multiwriter protocol. Scale by exclusive source shards with independent volumes, or migrate incident/outbox ownership into a transactional server database with leases before adding replicas. Do not copy live database files; use SQLite backup support or stop the process before backing up the database and sidecars. Storage encryption, access controls and secure deletion are operator responsibilities.
 
 For dead-letter visibility, inspect a **private, stopped copy** with SQLite: `SELECT id,incident,attempts,updated FROM outbox WHERE status='dead';`. After fixing the receiver, an operator can deliberately requeue selected IDs with `status='pending', attempts=0, due=0`; preserving IDs makes retries deduplicable. Back up first, never modify a running store, and never bulk-delete pending/dead rows to clear capacity. No built-in requeue/acknowledgment, incident archive/migration or outcome-feedback CLI is included yet. Deleting the database resets novelty and incident identity history and is not ordinary pruning.
+
+## Provider selection and semantic shadow mode
+
+Controller accepts the same explicit risk/template provider options as files and
+snapshots. All new configuration validates, and selected credentials load, before
+state creation or cluster collection. TypeSafe stays the default; no template key is
+required with learning off. Optional OpenAI/Anthropic Secret projections in the base
+are inert until selected. Use `*_API_KEY_FILE` and restart for rotation.
+
+Semantic mode is shadow-only: it bypasses exact verdict reads/writes, classifies every
+occurrence, and retains normal policy/novelty/incident/outbox transactions. Candidates
+are bounded in memory and included in the final `--output` report; they are not restored
+from SQLite or imported from reports. Existing schema 2 state is unchanged. No active
+semantic template exists and no classification is avoided. Numeric `semantic_*` and
+`template_*` counters are exposed by `/metrics`; full rejection reasons and provenance
+are in JSON reports. Budget/cost counters remain per-process and role-specific.
+See [configuration, safety gates and deferred activation](provider-template-learning.md).

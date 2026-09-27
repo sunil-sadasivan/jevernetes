@@ -23,19 +23,31 @@ pub fn group_id(event: &Event) -> String {
 pub struct Cache {
     entries: LruCache<String, (Instant, Judgment, String)>,
     ttl: Duration,
+    identity: String,
 }
 impl Cache {
     pub fn new(limit: NonZeroUsize, ttl: Duration) -> Self {
         Self {
             entries: LruCache::new(limit),
             ttl,
+            identity: String::new(),
         }
+    }
+    pub fn bind_contract(&mut self, contract: &crate::controller::Contract) {
+        let identity = crate::controller::digest(contract);
+        if self.identity != identity {
+            self.entries.clear();
+            self.identity = identity;
+        }
+    }
+    fn key(&self, event: &Event) -> String {
+        format!("{}:{}", self.identity, group_id(event))
     }
     pub fn get(&mut self, event: &Event, now: Instant) -> Option<(Judgment, String)> {
         if event.truncated {
             return None;
         }
-        let key = group_id(event);
+        let key = self.key(event);
         let (at, judgment, id) = self.entries.get(&key)?;
         if now.duration_since(*at) >= self.ttl {
             self.entries.pop(&key);
@@ -47,7 +59,7 @@ impl Cache {
     pub fn insert(&mut self, event: &Event, now: Instant) {
         if !event.truncated && event.judgment.reusable() {
             self.entries.put(
-                group_id(event),
+                self.key(event),
                 (now, event.judgment.clone(), event.id.clone()),
             );
         }

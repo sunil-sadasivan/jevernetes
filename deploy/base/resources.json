@@ -157,6 +157,14 @@
                   {
                     "name": "JEV_WEBHOOK_URL_FILE",
                     "value": "/var/run/jevernetes-secrets/webhook-url"
+                  },
+                  {
+                    "name": "OPENAI_API_KEY_FILE",
+                    "value": "/var/run/jevernetes-secrets/openai-key"
+                  },
+                  {
+                    "name": "ANTHROPIC_API_KEY_FILE",
+                    "value": "/var/run/jevernetes-secrets/anthropic-key"
                   }
                 ],
                 "ports": [
@@ -264,6 +272,30 @@
                           {
                             "key": "token",
                             "path": "webhook-token"
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "secret": {
+                        "name": "controller-openai",
+                        "optional": true,
+                        "items": [
+                          {
+                            "key": "api-key",
+                            "path": "openai-key"
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "secret": {
+                        "name": "controller-anthropic",
+                        "optional": true,
+                        "items": [
+                          {
+                            "key": "api-key",
+                            "path": "anthropic-key"
                           }
                         ]
                       }

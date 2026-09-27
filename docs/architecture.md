@@ -111,3 +111,19 @@ cargo test --locked --all-features drain
 The deterministic fixture retains 1,000 events while selecting 2 synthetic
 representatives (998 avoided classifications); it measures neither live model
 accuracy nor provider billing.
+
+## Provider-neutral classification and shadow registry
+
+`provider` defines explicit TypeSafe, OpenAI Responses and Anthropic Messages
+contracts, a canonical Judgment JSON schema for structured adapters, safe credential
+discovery and controlled decoding. `jev::ProviderClient` owns shared bounded transport
+and usage; `Jev` remains a source-compatible alias. Provider/model/contract identity
+binds session and persistent caches. The TypeSafe choice request remains unchanged.
+
+`semantic` adds a bounded, process-local candidate registry and separate proposal role
+to the shared runtime lane. Deterministic identity is full source plus observed JSON
+path/type shape; proposals never choose identity or authorize reuse. Classified events
+pass through controller policy before shadow observation. No new database table,
+cluster mutation or model-selected action exists. Reports carry versioned provenance,
+replay results and role usage. Automatic promotion and durable restoration are deferred;
+see [the complete contract and bounds](provider-template-learning.md).

@@ -59,3 +59,19 @@ cover cancellation, repeated retries, state progress, dead letters and runtime s
 Migration tests cover pruned payloads, already-suppressed replay, rollback and unsupported
 versions. Path validation assumes private directories without hostile concurrent mutation.
 No live cluster, credentials, deployment or external notification destination was used.
+
+## Provider/template shadow snapshot (2026-09-27)
+
+Provider keys stay outside payloads, identity and diagnostic types. New adapters use
+fixed HTTPS endpoints, sensitive headers, no proxies/redirects, bounded requests and
+responses, cancellation and the existing capped retries. OpenAI and Anthropic have
+separate contracts and usage decoders; prices are explicit for each new provider role.
+Model proposals cannot execute actions, choose sinks or activate rules. Local replay
+only labels shadow candidates; no learned verdict is reused. Candidate state remains
+bounded and process-local, with report-only persistence and no import path.
+
+Offline regression, CLI, lint/build, artifact and source scan results and their sandbox
+limitations are recorded in [VALIDATION.md](VALIDATION.md). The secret scan found no
+secrets but emitted a process-cleanup permission error. Loopback HTTP/Python tests and
+unavailable dependency-audit tooling prevent an unqualified full-validation claim.
+This is not an independent audit, live-provider evaluation or deployed-cluster review.

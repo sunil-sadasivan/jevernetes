@@ -42,3 +42,12 @@ assert 'cargo build --locked --release' in text
 assert 'COPY --from=build' in text and 'USER 65532:65532' in text
 assert json.loads(text.split('ENTRYPOINT ', 1)[1].strip()) == ['/usr/local/bin/jevernetes']
 print('Controller manifests/Dockerfile static invariants passed (no deployment).')
+
+assert '--grouping-strategy' not in container['args']
+assert '--template-provider' not in container['args']
+secret_sources = pod['volumes'][2]['projected']['sources']
+for provider in ('openai', 'anthropic'):
+    source = next(s['secret'] for s in secret_sources if s['secret']['name'] == 'controller-' + provider)
+    assert source['optional'] is True
+    assert source['items'] == [{'key': 'api-key', 'path': provider + '-key'}]
+    assert {'name': provider.upper() + '_API_KEY_FILE', 'value': '/var/run/jevernetes-secrets/' + provider + '-key'} in container['env']

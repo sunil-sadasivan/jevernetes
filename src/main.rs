@@ -4,8 +4,10 @@ use jevernetes::{
     events::{MAX_INPUT, Source, console},
     jev::{Jev, Usage},
     kubernetes::{self, Options},
+    provider::ProviderKind,
     report::{Metrics, gap, write_report},
     runtime::{self, AnalyzeOptions, Sender},
+    semantic::{Learner, Registry},
 };
 use serde_json::json;
 use std::{
@@ -59,7 +61,7 @@ struct Cli {
     output: Option<PathBuf>,
     #[arg(long, global = true)]
     no_grouping: bool,
-    /// Classification reuse: exact (default), off, or Drain (strict logger clocks and opaque UUID/hex IDs).
+    /// Classification strategy: exact (default), off, drain, or semantic (shadow only).
     #[arg(
         long,
         global = true,
@@ -71,8 +73,30 @@ struct Cli {
     /// Global bound on Drain partitions (one template per partition).
     #[arg(long, global = true, default_value = "256", value_parser = clap::value_parser!(u16).range(1..=1024))]
     drain_capacity: u16,
-    #[arg(long, global = true, default_value = "jev-latest")]
-    model: String,
+    #[arg(long, global = true, value_enum, default_value = "typesafe")]
+    risk_provider: ProviderKind,
+    /// Required for OpenAI/Anthropic. TypeSafe defaults to jev-latest.
+    #[arg(long, global = true)]
+    model: Option<String>,
+    /// Shadow learning only; requires semantic grouping. TypeSafe proposals are unsupported.
+    #[arg(long, global = true, value_enum, default_value = "off")]
+    template_provider: TemplateProvider,
+    #[arg(long, global = true)]
+    template_model: Option<String>,
+    #[arg(long, global = true, default_value = "4", value_parser = clap::value_parser!(u8).range(2..=16))]
+    template_min_support: u8,
+    #[arg(long, global = true, default_value = "64", value_parser = clap::value_parser!(u16).range(1..=256))]
+    template_capacity: u16,
+    #[arg(long, global = true, default_value = "300", value_parser = clap::value_parser!(u16).range(1..=3600))]
+    template_ttl: u16,
+    #[arg(long, global = true, default_value = "10", value_parser = clap::value_parser!(u16).range(1..=1000))]
+    template_max_requests: u16,
+    #[arg(long, global = true, default_value = "0.05", value_parser = price)]
+    template_max_cost: f64,
+    #[arg(long, global = true, value_parser = price)]
+    template_input_price: Option<f64>,
+    #[arg(long, global = true, value_parser = price)]
+    template_output_price: Option<f64>,
     /// Maximum events per request in every strategy; pending Drain misses classify independently.
     #[arg(long,global=true,default_value="8",value_parser=clap::value_parser!(u8).range(1..=64))]
     batch_size: u8,
@@ -87,10 +111,112 @@ struct Cli {
     retain_events: usize,
     #[arg(long,global=true,default_value="0.25",value_parser=price)]
     max_cost: f64,
-    #[arg(long,global=true,default_value="0.042",value_parser=price)]
-    input_price: f64,
-    #[arg(long,global=true,default_value="0",value_parser=price)]
-    output_price: f64,
+    #[arg(long,global=true,value_parser=price)]
+    input_price: Option<f64>,
+    #[arg(long,global=true,value_parser=price)]
+    output_price: Option<f64>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum TemplateProvider {
+    Off,
+    Openai,
+    Anthropic,
+}
+impl Cli {
+    fn model(&self) -> String {
+        self.model.clone().unwrap_or_else(|| "jev-latest".into())
+    }
+    fn usage(&self) -> Usage {
+        Usage::new(
+            self.input_price.unwrap_or(0.042),
+            self.output_price.unwrap_or(0.0),
+        )
+    }
+    fn validate(&self) -> Result<(), &'static str> {
+        jevernetes::provider::validate_model(&self.model())?;
+        if let Some(model) = &self.template_model {
+            jevernetes::provider::validate_model(model)?;
+        }
+        if self.risk_provider != ProviderKind::Typesafe
+            && (self.model.is_none() || self.input_price.is_none() || self.output_price.is_none())
+        {
+            return Err(
+                "OpenAI/Anthropic require explicit --model, --input-price and --output-price",
+            );
+        }
+        if self.template_provider != TemplateProvider::Off {
+            if self.offline || self.grouping_strategy != Strategy::Semantic || self.no_grouping {
+                return Err(
+                    "Template providers require online --grouping-strategy semantic (shadow only)",
+                );
+            }
+            if self.template_model.is_none()
+                || self.template_input_price.is_none()
+                || self.template_output_price.is_none()
+            {
+                return Err(
+                    "Template provider requires explicit --template-model, --template-input-price and --template-output-price",
+                );
+            }
+        } else if self.template_model.is_some()
+            || self.template_input_price.is_some()
+            || self.template_output_price.is_some()
+        {
+            return Err("Template model/prices require a template provider");
+        } else if self.grouping_strategy == Strategy::Semantic && !self.offline {
+            return Err(
+                "Online semantic shadow mode requires --template-provider openai or anthropic",
+            );
+        }
+        Ok(())
+    }
+    fn clients(
+        &self,
+        metrics: &Arc<Mutex<Metrics>>,
+    ) -> Result<(Option<Jev>, Option<Learner>), &'static str> {
+        let risk = if self.offline {
+            None
+        } else {
+            Some(Jev::new_for(
+                self.risk_provider,
+                &self.risk_provider.credential()?,
+                self.model(),
+                self.usage(),
+            )?)
+        };
+        let template = match self.template_provider {
+            TemplateProvider::Off => None,
+            TemplateProvider::Openai => Some(ProviderKind::Openai),
+            TemplateProvider::Anthropic => Some(ProviderKind::Anthropic),
+        };
+        let learner = if let Some(provider) = template {
+            let client = Jev::new_for(
+                provider,
+                &provider.credential()?,
+                self.template_model.clone().expect("validated model"),
+                Usage::new(
+                    self.template_input_price.expect("validated price"),
+                    self.template_output_price.expect("validated price"),
+                ),
+            )?;
+            Some(Learner::new(
+                Registry::new(
+                    usize::from(self.template_capacity),
+                    usize::from(self.template_min_support),
+                    Duration::from_secs(u64::from(self.template_ttl)),
+                    metrics.clone(),
+                )?,
+                client,
+                jevernetes::controller::Contract::provider(self.risk_provider, self.model()),
+                u64::from(self.template_max_requests),
+                self.template_max_cost,
+                metrics.clone(),
+            )?)
+        } else {
+            None
+        };
+        Ok((risk, learner))
+    }
 }
 #[derive(Subcommand)]
 enum Command {
@@ -182,6 +308,8 @@ async fn run_controller(cli: &Cli, args: &ControllerArgs) -> Result<i32, &'stati
     if let Some(output) = &cli.output {
         jevernetes::controller::paths::validate(&args.state, output)?;
     }
+    let metrics = Arc::new(Mutex::new(Metrics::default()));
+    let (client, learner) = cli.clients(&metrics)?;
     let policy = if let Some(path) = &args.policy {
         use std::io::Read;
         let file = std::fs::File::open(path).map_err(|_| "Cannot read controller policy")?;
@@ -197,10 +325,9 @@ async fn run_controller(cli: &Cli, args: &ControllerArgs) -> Result<i32, &'stati
         Policy::default()
     };
     policy.validate()?;
-    let metrics = Arc::new(Mutex::new(Metrics::default()));
     let controller = Controller::new(
         Store::open(&args.state)?,
-        Contract::jev(cli.model.clone()),
+        Contract::provider(cli.risk_provider, cli.model()),
         policy,
         args.verdict_ttl,
         args.rescore,
@@ -210,12 +337,7 @@ async fn run_controller(cli: &Cli, args: &ControllerArgs) -> Result<i32, &'stati
         SinkKind::Stdout => Arc::new(Stdout::new()?),
         SinkKind::Webhook => Arc::new(Webhook::from_env()?),
     };
-    let usage = Usage::new(cli.input_price, cli.output_price);
-    let client = if cli.offline {
-        None
-    } else {
-        Some(Jev::new(&key()?, cli.model.clone(), usage.clone())?)
-    };
+    let usage = cli.usage();
     let options = Options {
         context: None,
         namespace: Some(args.namespace.clone()),
@@ -276,13 +398,14 @@ async fn run_controller(cli: &Cli, args: &ControllerArgs) -> Result<i32, &'stati
         live: true,
         print_events: false,
     };
-    let mut consumer = tokio::spawn(runtime::analyze_controlled(
+    let mut consumer = tokio::spawn(runtime::analyze_with_learning(
         rx,
         metrics.clone(),
         client,
         opts,
         stop.clone(),
         Some(controller.clone()),
+        learner,
     ));
     eprintln!("[controller] advisory monitoring started; coverage is partial; one local writer");
     let started = Instant::now();
@@ -371,46 +494,16 @@ fn signal(stop: CancellationToken) -> Result<tokio::task::JoinHandle<()>, &'stat
     }
 }
 
-fn key() -> Result<String, &'static str> {
-    for name in ["TYPESAFE_API_KEY", "TYPESAFEAI_API_KEY"] {
-        if let Ok(s) = std::env::var(name)
-            && !s.trim().is_empty()
-        {
-            return Ok(s);
-        }
-    }
-    if let Ok(path) = std::env::var("TYPESAFE_API_KEY_FILE") {
-        use std::io::Read;
-        let file = std::fs::File::open(path).map_err(|_| "Cannot read TYPESAFE_API_KEY_FILE")?;
-        let mut bytes = Vec::new();
-        file.take(16385)
-            .read_to_end(&mut bytes)
-            .map_err(|_| "Cannot read TYPESAFE_API_KEY_FILE")?;
-        if bytes.len() > 16384 {
-            return Err("Jev key file exceeds limit");
-        }
-        let value = String::from_utf8(bytes).map_err(|_| "Invalid Jev key file")?;
-        if !value.trim().is_empty() {
-            return Ok(value);
-        }
-    }
-    Err(
-        "Set TYPESAFE_API_KEY, TYPESAFEAI_API_KEY or TYPESAFE_API_KEY_FILE; use --offline for local rules",
-    )
-}
 async fn run(cli: Cli) -> Result<i32, &'static str> {
+    cli.validate()?;
     if let Command::Controller(args) = &cli.command {
         return run_controller(&cli, args).await;
     }
     let started = Instant::now();
     let metrics = Arc::new(Mutex::new(Metrics::default()));
     let stop = CancellationToken::new();
-    let usage = Usage::new(cli.input_price, cli.output_price);
-    let client = if cli.offline {
-        None
-    } else {
-        Some(Jev::new(&key()?, cli.model.clone(), usage.clone())?)
-    };
+    let usage = cli.usage();
+    let (client, learner) = cli.clients(&metrics)?;
     let (tx, rx) = mpsc::channel(cli.queue_size);
     let sender = Sender {
         tx,
@@ -470,12 +563,14 @@ async fn run(cli: Cli) -> Result<i32, &'static str> {
         None
     };
     let signals = signal(stop.clone())?;
-    let consumer = tokio::spawn(runtime::analyze(
+    let consumer = tokio::spawn(runtime::analyze_with_learning(
         rx,
         metrics.clone(),
         client,
         opts,
         stop.clone(),
+        None,
+        learner,
     ));
     let producer_stop = stop.clone();
     let producer_metrics = metrics.clone();
@@ -606,7 +701,7 @@ async fn run(cli: Cli) -> Result<i32, &'static str> {
     } else {
         println!(
             "jevernetes · {}\n{} events / {} lines · important {} · uncertain {} · unknown {}\ncoverage gaps {} · dropped {} · estimated ${:.8}",
-            if cli.offline { "offline-rules" } else { "jev" },
+            value["mode"].as_str().unwrap_or("provider"),
             report.total,
             report.lines,
             report.counts.get("important").unwrap_or(&0),
@@ -614,7 +709,9 @@ async fn run(cli: Cli) -> Result<i32, &'static str> {
             report.counts.get("unknown").unwrap_or(&0),
             value["summary"]["coverage_gaps"],
             value["metrics"]["dropped"],
-            usage.estimated_cost_usd
+            value["summary"]["total_estimated_cost_usd"]
+                .as_f64()
+                .unwrap_or(usage.estimated_cost_usd)
         );
         if let Some(groups) = value["important_groups"].as_array() {
             for group in groups.iter().take(15) {

@@ -1,5 +1,6 @@
-//! System One choice contract. Response bodies, URLs and transport errors never reach reports.
-use crate::events::Event;
+//! Shared bounded provider transport and typed judgments; preserved System One choice contract.
+//! Credentials, response bodies and transport details never reach reports.
+use crate::{events::Event, provider::ProviderKind};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -162,9 +163,24 @@ impl Usage {
         }
     }
     pub fn record(&mut self, raw: &[u8]) {
+        self.record_for(ProviderKind::Typesafe, raw);
+    }
+    pub fn record_for(&mut self, provider: ProviderKind, raw: &[u8]) {
         self.requests_finished += 1;
         let v: Value = serde_json::from_slice(raw).unwrap_or(Value::Null);
         if let Some(n) = v["usage"]["input_tokens"].as_u64() {
+            let mut n = n;
+            if provider == ProviderKind::Anthropic {
+                for field in ["cache_creation_input_tokens", "cache_read_input_tokens"] {
+                    if let Some(cached) = v["usage"].get(field) {
+                        if let Some(tokens) = cached.as_u64() {
+                            n = n.saturating_add(tokens);
+                        } else {
+                            self.unmetered_requests += 1;
+                        }
+                    }
+                }
+            }
             self.input_tokens = self.input_tokens.saturating_add(n);
             self.metered_requests += 1;
         } else {
@@ -184,16 +200,20 @@ impl Usage {
     }
 }
 /// A single scheduling lane shares backoff and never multiplies in-flight budgets.
-pub struct Jev {
+pub type Jev = ProviderClient;
+pub struct ProviderClient {
+    provider: ProviderKind,
     http: reqwest::Client,
     key: reqwest::header::HeaderValue,
     endpoint: String,
     model: String,
     pub usage: Usage,
     #[cfg(test)]
+    pub(crate) synthetic_proposals: Option<std::collections::VecDeque<Vec<u8>>>,
+    #[cfg(test)]
     pub(crate) synthetic: Option<std::collections::VecDeque<Result<Judgment, String>>>,
 }
-impl Jev {
+impl ProviderClient {
     #[cfg(test)]
     pub(crate) fn test_client(endpoint: String) -> Self {
         let mut client =
@@ -202,23 +222,42 @@ impl Jev {
         client
     }
     pub fn new(key: &str, model: String, usage: Usage) -> Result<Self, &'static str> {
-        let mut header = reqwest::header::HeaderValue::from_str(&format!("Bearer {}", key.trim()))
-            .map_err(|_| "Invalid Jev key configuration")?;
+        Self::new_for(ProviderKind::Typesafe, key, model, usage)
+    }
+    pub fn new_for(
+        provider: ProviderKind,
+        key: &str,
+        model: String,
+        usage: Usage,
+    ) -> Result<Self, &'static str> {
+        crate::provider::validate_model(&model)?;
+        let key = crate::provider::validate_key(key)?;
+        let value = if provider == ProviderKind::Anthropic {
+            key
+        } else {
+            format!("Bearer {key}")
+        };
+        let mut header = reqwest::header::HeaderValue::from_str(&value)
+            .map_err(|_| "Invalid provider key configuration")?;
         header.set_sensitive(true);
         let http = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
+            .no_proxy()
             .timeout(Duration::from_secs(30))
             .connect_timeout(Duration::from_secs(10))
             .build()
-            .map_err(|_| "Cannot initialize Jev TLS client")?;
+            .map_err(|_| "Cannot initialize provider TLS client")?;
         Ok(Self {
+            provider,
             http,
             key: header,
-            endpoint: "https://api.typesafe.ai/v1/systemone".into(),
+            endpoint: provider.endpoint().into(),
             model,
             usage,
             #[cfg(test)]
             synthetic: None,
+            #[cfg(test)]
+            synthetic_proposals: None,
         })
     }
     pub async fn judge(
@@ -237,21 +276,75 @@ impl Jev {
                 })
                 .collect();
         }
-        let body = build_request(events, &self.model);
+        let body = self.provider.risk_request(events, &self.model);
+        let raw = self.execute(body, stop).await?;
+        self.provider
+            .decode(&raw, events.len())
+            .map_err(str::to_owned)
+    }
+    pub fn contract(&self) -> crate::controller::Contract {
+        crate::controller::Contract::provider(self.provider, self.model.clone())
+    }
+    pub async fn propose(
+        &mut self,
+        evidence: Value,
+        stop: &CancellationToken,
+    ) -> Result<crate::semantic::TemplateProposal, String> {
+        if self.provider == ProviderKind::Typesafe {
+            return Err("TypeSafe does not support template proposals".into());
+        }
+        let body = self.provider.structured_request(
+            &self.model,
+            "template_proposal",
+            crate::semantic::schema(),
+            crate::semantic::INSTRUCTIONS,
+            evidence,
+            2048,
+        );
+        #[cfg(test)]
+        let raw = if let Some(fixtures) = &mut self.synthetic_proposals {
+            let raw = fixtures.pop_front().expect("proposal fixture");
+            self.usage.request_attempts += 1;
+            self.usage.record_for(self.provider, &raw);
+            raw
+        } else {
+            self.execute(body, stop).await?
+        };
+        #[cfg(not(test))]
+        let raw = self.execute(body, stop).await?;
+        let output = self.provider.output(&raw).map_err(str::to_owned)?;
+        crate::semantic::TemplateProposal::decode(output.as_bytes()).map_err(str::to_owned)
+    }
+    fn request(&self) -> reqwest::RequestBuilder {
+        let request = self.http.post(&self.endpoint);
+        if self.provider == ProviderKind::Anthropic {
+            request
+                .header("x-api-key", self.key.clone())
+                .header("anthropic-version", "2023-06-01")
+        } else {
+            request.header(reqwest::header::AUTHORIZATION, self.key.clone())
+        }
+    }
+    async fn execute(&mut self, body: Value, stop: &CancellationToken) -> Result<Vec<u8>, String> {
+        if serde_json::to_vec(&body)
+            .map_err(|_| "Invalid provider request")?
+            .len()
+            > 2_097_152
+        {
+            return Err("Provider request exceeds 2 MiB".into());
+        }
         for attempt in 0..3 {
             if stop.is_cancelled() {
                 return Err("Analysis stopped before request".into());
             }
             self.usage.request_attempts += 1;
             let operation = async {
-                let mut response = self
-                    .http
-                    .post(&self.endpoint)
-                    .header(reqwest::header::AUTHORIZATION, self.key.clone())
+                let request = self.request();
+                let mut response = request
                     .json(&body)
                     .send()
                     .await
-                    .map_err(|_| "Jev network/TLS/timeout failure")?;
+                    .map_err(|_| "Provider network/TLS/timeout failure")?;
                 let status = response.status().as_u16();
                 let delay = response
                     .headers()
@@ -265,10 +358,10 @@ impl Jev {
                 while let Some(chunk) = response
                     .chunk()
                     .await
-                    .map_err(|_| "Jev network/TLS/timeout failure")?
+                    .map_err(|_| "Provider network/TLS/timeout failure")?
                 {
                     if raw.len() + chunk.len() > 1_048_576 {
-                        return Err("Jev response exceeds 1 MiB");
+                        return Err("Provider response exceeds 1 MiB");
                     }
                     raw.extend_from_slice(&chunk);
                 }
@@ -282,12 +375,12 @@ impl Jev {
                     return Err(e.into());
                 }
             };
-            self.usage.record(&raw);
+            self.usage.record_for(self.provider, &raw);
             if (200..300).contains(&status) {
-                return decode(&raw, events.len()).map_err(str::to_owned);
+                return Ok(raw);
             }
             if ![429, 500, 502, 503, 504].contains(&status) || attempt == 2 {
-                return Err(format!("Jev HTTP {status}"));
+                return Err(format!("Provider HTTP {status}"));
             }
             let jitter = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -297,7 +390,7 @@ impl Jev {
             let pause = Duration::from_secs_f64(delay.max((1 << attempt) as f64 + jitter));
             tokio::select! { _ = stop.cancelled() => return Err("Analysis stopped during backoff".into()), _ = tokio::time::sleep(pause) => () }
         }
-        Err("Jev retry budget exhausted".into())
+        Err("Provider retry budget exhausted".into())
     }
 }
 
@@ -350,7 +443,7 @@ mod tests {
         assert_eq!(u.unmetered_requests, 1);
         assert!(!u.cost_complete);
     }
-    async fn server(responses: Vec<String>) -> (String, tokio::task::JoinHandle<usize>) {
+    pub(super) async fn server(responses: Vec<String>) -> (String, tokio::task::JoinHandle<usize>) {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -391,7 +484,7 @@ mod tests {
             j.judge(&events, &CancellationToken::new())
                 .await
                 .unwrap_err(),
-            "Jev HTTP 302"
+            "Provider HTTP 302"
         );
         task.await.unwrap();
         let stop = CancellationToken::new();
@@ -409,7 +502,7 @@ mod tests {
                 .judge(&[], &CancellationToken::new())
                 .await
                 .unwrap_err(),
-            "Jev response exceeds 1 MiB"
+            "Provider response exceeds 1 MiB"
         );
         assert_eq!(client.usage.unmetered_requests, 1);
         server.await.unwrap();
@@ -437,50 +530,63 @@ mod tests {
     #[tokio::test]
     async fn request_timeout_is_safe_and_cancellation_accounts_inflight_attempt() {
         use tokio::io::AsyncReadExt;
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let endpoint = format!("http://{}", listener.local_addr().unwrap());
-        let server = tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.unwrap();
-            let mut bytes = [0; 4096];
-            let _ = socket.read(&mut bytes).await;
-            tokio::time::sleep(Duration::from_secs(10)).await;
-        });
-        let mut client = Jev::test_client(endpoint);
-        client.http = reqwest::Client::builder()
-            .timeout(Duration::from_millis(25))
-            .build()
+        for provider in [
+            ProviderKind::Typesafe,
+            ProviderKind::Openai,
+            ProviderKind::Anthropic,
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let endpoint = format!("http://{}", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut bytes = [0; 4096];
+                let _ = socket.read(&mut bytes).await;
+                tokio::time::sleep(Duration::from_secs(10)).await;
+            });
+            let mut client = Jev::new_for(
+                provider,
+                "synthetic",
+                "synthetic".into(),
+                Usage::new(0.0, 0.0),
+            )
             .unwrap();
-        assert_eq!(
-            client
-                .judge(&[], &CancellationToken::new())
-                .await
-                .unwrap_err(),
-            "Jev network/TLS/timeout failure"
-        );
-        assert_eq!(client.usage.unmetered_requests, 1);
-        server.abort();
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        client.endpoint = format!("http://{}", listener.local_addr().unwrap());
-        client.http = reqwest::Client::new();
-        let stop = CancellationToken::new();
-        let signal = stop.clone();
-        let server = tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.unwrap();
-            let mut bytes = [0; 4096];
-            let _ = socket.read(&mut bytes).await;
-            signal.cancel();
-        });
-        assert!(
-            client
-                .judge(&[], &stop)
-                .await
-                .unwrap_err()
-                .contains("stopped")
-        );
-        assert_eq!(client.usage.request_attempts, 2);
-        assert_eq!(client.usage.requests_finished, 2);
-        assert_eq!(client.usage.unmetered_requests, 2);
-        server.await.unwrap();
+            client.endpoint = endpoint;
+            client.http = reqwest::Client::builder()
+                .timeout(Duration::from_millis(25))
+                .build()
+                .unwrap();
+            assert_eq!(
+                client
+                    .judge(&[], &CancellationToken::new())
+                    .await
+                    .unwrap_err(),
+                "Provider network/TLS/timeout failure"
+            );
+            assert_eq!(client.usage.unmetered_requests, 1);
+            server.abort();
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            client.endpoint = format!("http://{}", listener.local_addr().unwrap());
+            client.http = reqwest::Client::new();
+            let stop = CancellationToken::new();
+            let signal = stop.clone();
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut bytes = [0; 4096];
+                let _ = socket.read(&mut bytes).await;
+                signal.cancel();
+            });
+            assert!(
+                client
+                    .judge(&[], &stop)
+                    .await
+                    .unwrap_err()
+                    .contains("stopped")
+            );
+            assert_eq!(client.usage.request_attempts, 2);
+            assert_eq!(client.usage.requests_finished, 2);
+            assert_eq!(client.usage.unmetered_requests, 2);
+            server.await.unwrap();
+        }
     }
     #[test]
     fn prompt_boundaries_keep_instructions_separate_from_evidence() {
@@ -507,5 +613,168 @@ mod tests {
                 .unwrap()
                 .contains("do not infer intent")
         );
+    }
+}
+
+#[cfg(test)]
+mod provider_transport_tests {
+    use super::*;
+    #[test]
+    fn authentication_headers_are_sensitive_and_never_in_payloads() {
+        for p in [
+            ProviderKind::Typesafe,
+            ProviderKind::Openai,
+            ProviderKind::Anthropic,
+        ] {
+            let c = ProviderClient::new_for(
+                p,
+                "synthetic-auth-only",
+                "synthetic".into(),
+                Usage::new(0.0, 0.0),
+            )
+            .unwrap();
+            let req = c
+                .request()
+                .json(&p.risk_request(&[], "synthetic"))
+                .build()
+                .unwrap();
+            assert_eq!(req.url().as_str(), p.endpoint());
+            assert_eq!(req.method(), reqwest::Method::POST);
+            let name = if p == ProviderKind::Anthropic {
+                "x-api-key"
+            } else {
+                "authorization"
+            };
+            let header = req.headers().get(name).unwrap();
+            assert!(header.is_sensitive());
+            assert!(!format!("{header:?}").contains("synthetic-auth-only"));
+            assert!(
+                !String::from_utf8_lossy(req.body().unwrap().as_bytes().unwrap())
+                    .contains("synthetic-auth-only")
+            );
+            if p == ProviderKind::Anthropic {
+                assert_eq!(req.headers()["anthropic-version"], "2023-06-01");
+                assert!(req.headers().get("authorization").is_none());
+            } else {
+                assert!(req.headers().get("x-api-key").is_none());
+            }
+        }
+    }
+    #[tokio::test]
+    async fn all_providers_cancel_before_requests_and_enforce_request_size() {
+        for p in [
+            ProviderKind::Typesafe,
+            ProviderKind::Openai,
+            ProviderKind::Anthropic,
+        ] {
+            let mut c =
+                ProviderClient::new_for(p, "synthetic", "synthetic".into(), Usage::new(0.0, 0.0))
+                    .unwrap();
+            let stop = CancellationToken::new();
+            stop.cancel();
+            assert!(c.judge(&[], &stop).await.unwrap_err().contains("stopped"));
+            assert_eq!(c.usage.request_attempts, 0);
+            assert!(
+                c.execute(
+                    json!({"evidence":"x".repeat(2_097_152)}),
+                    &CancellationToken::new()
+                )
+                .await
+                .unwrap_err()
+                .contains("2 MiB")
+            );
+            assert_eq!(c.usage.request_attempts, 0);
+        }
+    }
+    #[tokio::test]
+    async fn all_adapters_bound_retries_and_refuse_redirect_destinations() {
+        use crate::provider::tests::{envelope, judgment};
+        for p in [
+            ProviderKind::Typesafe,
+            ProviderKind::Openai,
+            ProviderKind::Anthropic,
+        ] {
+            let raw = envelope(p, judgment()).to_string();
+            let (url,server)=super::tests::server(vec![
+                "HTTP/1.1 429 Limited\r\nRetry-After: 0\r\nContent-Length: 7\r\nConnection: close\r\n\r\nprivate".into(),
+                format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{raw}",raw.len()),
+            ]).await;
+            let mut c =
+                ProviderClient::new_for(p, "synthetic", "synthetic".into(), Usage::new(0.0, 0.0))
+                    .unwrap();
+            c.endpoint = url;
+            assert!(
+                c.judge(
+                    &[crate::semantic::tests::event(1)],
+                    &CancellationToken::new()
+                )
+                .await
+                .is_ok()
+            );
+            assert_eq!(server.await.unwrap(), 2);
+            assert_eq!(c.usage.request_attempts, 2);
+            assert_eq!(c.usage.unmetered_requests, 1);
+            let (url,server)=super::tests::server(vec!["HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:1/private\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".into()]).await;
+            c.endpoint = url;
+            assert_eq!(
+                c.judge(&[], &CancellationToken::new()).await.unwrap_err(),
+                "Provider HTTP 302"
+            );
+            assert_eq!(server.await.unwrap(), 1);
+            let (url, server) = super::tests::server(vec![
+                    "HTTP/1.1 503 Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                        .into();
+                    3
+                ])
+            .await;
+            c.endpoint = url;
+            let attempts = c.usage.request_attempts;
+            assert_eq!(
+                c.judge(&[], &CancellationToken::new()).await.unwrap_err(),
+                "Provider HTTP 503"
+            );
+            assert_eq!(c.usage.request_attempts - attempts, 3);
+            assert_eq!(server.await.unwrap(), 3);
+        }
+    }
+    #[tokio::test]
+    async fn adapters_use_real_http_contract_and_reject_redirects_and_oversize() {
+        use crate::provider::tests::{envelope, judgment};
+        for p in [ProviderKind::Openai, ProviderKind::Anthropic] {
+            for (status, raw, expected) in [
+                (200, envelope(p, judgment()).to_string(), true),
+                (302, String::new(), false),
+                (200, "x".repeat(1_048_577), false),
+                (
+                    200,
+                    envelope(p, json!({"malformed":true})).to_string(),
+                    false,
+                ),
+            ] {
+                let (url, server) = crate::test_support::http(vec![(status, raw)]).await;
+                let mut c = ProviderClient::new_for(
+                    p,
+                    "synthetic",
+                    "synthetic".into(),
+                    Usage::new(1.0, 1.0),
+                )
+                .unwrap();
+                c.endpoint = url;
+                let result = c
+                    .judge(
+                        &[crate::semantic::tests::event(1)],
+                        &CancellationToken::new(),
+                    )
+                    .await;
+                assert_eq!(result.is_ok(), expected);
+                assert_eq!(c.usage.request_attempts, 1);
+                if status == 200 && c.usage.metered_requests == 1 {
+                    assert_eq!(c.usage.input_tokens, 10);
+                    assert_eq!(c.usage.output_tokens, 5);
+                }
+                let requests = server.await.unwrap();
+                assert_eq!(requests.len(), 1);
+            }
+        }
     }
 }

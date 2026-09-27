@@ -75,3 +75,17 @@ The legacy `--workers`, `--collect-workers`, `--discovery-interval`, `--top`, `-
 ## Controller
 
 Use `jevernetes controller --help` for the in-cluster-only continuous mode. It requires `--namespace` and `--state`, supports `--policy`, `--sink stdout|webhook`, `--verdict-ttl`, `--rescore`, and `--listen`, and shares bounded analysis/queue/cost flags. See [the controller reference](controller.md) for defaults, secrets, persistence, failure behavior and deployment. `--offline` prevents Jev calls but does not suppress configured notifications.
+
+## New provider and learning options
+
+Use `--risk-provider typesafe|openai|anthropic` independently of
+`--template-provider off|openai|anthropic`. TypeSafe remains the default; OpenAI and
+Anthropic require explicit `--model`, `--input-price` and `--output-price`. Credentials
+use the selected provider's environment or mounted `*_API_KEY_FILE`; nothing is passed
+as a CLI credential. Template selection requires `--grouping-strategy semantic`
+(alias `learned`), `--template-model` and explicit template prices.
+
+Semantic means shadow-only in this release. It classifies every occurrence and only
+reports candidate replay matches; it does not save classifications. Exact and Drain
+are unchanged. Ordinary `--offline` never loads provider credentials or learns templates.
+See [all flags, budgets, response contracts and the synthetic example](provider-template-learning.md).

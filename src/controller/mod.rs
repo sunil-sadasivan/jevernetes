@@ -37,11 +37,29 @@ impl Contract {
             version: CONTRACT_VERSION.into(),
         }
     }
+    pub fn provider(provider: crate::provider::ProviderKind, model: String) -> Self {
+        if provider == crate::provider::ProviderKind::Typesafe {
+            return Self::jev(model);
+        }
+        Self {
+            provider: provider.endpoint().into(),
+            model,
+            version: format!("{}-{}", CONTRACT_VERSION, crate::provider::SCHEMA_VERSION),
+        }
+    }
     pub fn key(&self, event: &Event) -> String {
         // Include actual prompt/taxonomy and full source/text, not the short session group ID.
         digest(&(
             self,
-            crate::jev::build_request(std::slice::from_ref(event), &self.model),
+            if self.provider == crate::provider::ProviderKind::Openai.endpoint() {
+                crate::provider::ProviderKind::Openai
+                    .risk_request(std::slice::from_ref(event), &self.model)
+            } else if self.provider == crate::provider::ProviderKind::Anthropic.endpoint() {
+                crate::provider::ProviderKind::Anthropic
+                    .risk_request(std::slice::from_ref(event), &self.model)
+            } else {
+                crate::jev::build_request(std::slice::from_ref(event), &self.model)
+            },
             event.truncated,
         ))
     }

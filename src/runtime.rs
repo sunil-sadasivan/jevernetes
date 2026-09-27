@@ -1,4 +1,4 @@
-//! One bounded analysis lane: batching, exact reuse, retention, and explicit loss counters.
+//! One bounded analysis lane: providers, explicit grouping, shadow learning, and loss counters.
 use crate::{
     drain::{Drain, Strategy},
     events::{Event, Framer, Parser, Source},
@@ -79,18 +79,33 @@ pub async fn analyze(
     analyze_controlled(rx, sender_metrics, client, opts, stop, None).await
 }
 pub async fn analyze_controlled(
+    rx: mpsc::Receiver<Event>,
+    sender_metrics: SharedMetrics,
+    client: Option<Jev>,
+    opts: AnalyzeOptions,
+    stop: CancellationToken,
+    controller: Option<crate::controller::Controller>,
+) -> (Report, Option<Jev>) {
+    analyze_with_learning(rx, sender_metrics, client, opts, stop, controller, None).await
+}
+pub async fn analyze_with_learning(
     mut rx: mpsc::Receiver<Event>,
     sender_metrics: SharedMetrics,
     mut client: Option<Jev>,
     opts: AnalyzeOptions,
     stop: CancellationToken,
     controller: Option<crate::controller::Controller>,
+    mut learner: Option<crate::semantic::Learner>,
 ) -> (Report, Option<Jev>) {
     let mut report = Report::new(opts.retain);
+    report.risk_contract = client.as_ref().map(Jev::contract);
     let mut cache = Cache::new(
         NonZeroUsize::new(opts.retain).expect("positive retention"),
         Duration::from_secs(300),
     );
+    if let Some(contract) = &report.risk_contract {
+        cache.bind_contract(contract);
+    }
     let mut drain = (opts.grouping == Strategy::Drain)
         .then(|| {
             Drain::new(
@@ -267,7 +282,7 @@ pub async fn analyze_controlled(
         }
         for mut event in batch {
             if let Some(c) = &controller
-                && c.apply_with_verdict_cache(&event, opts.grouping != Strategy::Drain)
+                && c.apply_with_verdict_cache(&event, opts.grouping == Strategy::Exact)
                     .await
                     .is_err()
             {
@@ -298,10 +313,14 @@ pub async fn analyze_controlled(
                     crate::events::console(&event.text)
                 );
             }
+            if let Some(learner) = &mut learner {
+                learner.observe(&event, &stop).await;
+            }
             report.record(event);
         }
     }
     sender_metrics.lock().expect("metrics lock").queue_depth = 0;
+    report.learning = learner.map(crate::semantic::Learner::report);
     (report, client)
 }
 /// Snapshot/file reader: finite decompressed input, backpressure instead of dropping.

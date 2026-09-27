@@ -69,3 +69,12 @@ The unauthenticated metrics/health endpoint exposes aggregate counters only; res
 network access. One writer/replica owns a local persistent volume. See
 [controller limits and maintenance](docs/controller.md) for retention, crash windows,
 clock assumptions, safe backup/requeue practices and incomplete-coverage semantics.
+
+## Additional Rust providers and shadow proposals
+
+Explicitly selected OpenAI/Anthropic modes send redacted evidence to their fixed HTTPS
+APIs; learning adds a separately selected provider role. Keys are environment/file-only,
+headers sensitive, redirects and proxies disabled, requests/responses bounded. No keys
+or transport details appear in reports/errors. Redaction remains best effort. Shadow
+proposals are untrusted bounded typed data, cannot invoke tools, change sinks, mutate
+Kubernetes, or activate rules. See [provider and registry boundaries](docs/provider-template-learning.md).

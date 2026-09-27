@@ -28,3 +28,18 @@ Unsupported flags fail explicitly in Rust. No `--tui`, dashboard, review, search
 3. Port/replace terminal rendering and the loopback HTTP/API implementation, preserving browser Host/Origin/token/CSP controls, safe text rendering, private files and all keyboard/search interactions. Run UI and signal/cleanup regression suites. Provide a documented report/rule migration path, then remove the remaining Python package, Python packaging/dependencies and obsolete CI jobs in a separately reviewed change.
 
 The second stacked deliverable adds [durable probabilistic controller state and notification](controller.md) and the [control-plane product/opportunity design](probabilistic-control-plane.md). These additions do not close the legacy UI/workflow gaps.
+
+## Provider/template-learning snapshot
+
+Rust adds explicit TypeSafe, OpenAI Responses and Anthropic Messages risk adapters,
+independent OpenAI/Anthropic shadow proposal selection, and bounded local replay
+validation in the shared files/snapshot/controller lane. Legacy Python is unchanged.
+Existing TypeSafe exact cache identity remains compatible. New providers/models/schema
+contracts invalidate reuse; no SQLite migration is needed. Reports retain schema 2
+with additive `risk_contract` and `template_learning` fields and role metrics.
+
+This is the coherent **shadow-only** first stage: no automatic promotion, persistent
+candidate restoration, active semantic reuse, or reduction to one classification for
+varying structured events. The next activation contract and required checks are
+[documented explicitly](provider-template-learning.md). Exact defaults and conservative
+Drain behavior remain in force; report candidates must not be treated as active rules.

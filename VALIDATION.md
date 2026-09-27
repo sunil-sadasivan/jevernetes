@@ -1,3 +1,74 @@
+# Provider adapters and semantic shadow learning (2026-09-27)
+
+Implemented the explicitly permitted conservative **shadow-only** stage: TypeSafe/Jev,
+OpenAI Responses and Anthropic Messages risk contracts; independent OpenAI/Anthropic
+proposal roles; bounded typed proposals and deterministic registry replay; shared
+files/snapshot/controller plumbing; report provenance/role usage and optional Secret
+file projections. Exact remains the default and Drain is unchanged. Automatic
+promotion, active semantic reuse and durable candidate restoration are **not implemented**.
+No semantic classification savings or active-template controller validation is claimed.
+See [the next activation step and limitations](docs/provider-template-learning.md).
+
+Validation used cached dependencies (`CARGO_NET_OFFLINE=true`); Cargo.lock and dependency
+versions are unchanged. No live provider, Kubernetes, credentials, private reports or
+external services were accessed. Synthetic HTTP tests attempted only local loopback
+listeners, which this sandbox disallowed. No network escalation was requested.
+
+| Check | Result |
+| --- | --- |
+| `cargo fmt --all --check` | Passed. |
+| `cargo check --locked --all-targets` | Passed. |
+| `cargo clippy --locked --all-targets --all-features -- -D warnings` | Passed. |
+| `cargo test --locked --all-features` | 76 library tests passed; 17 fixtures failed solely at loopback bind with OS code 1 / PermissionDenied. **Not a passing full suite.** |
+| `cargo test --locked --test cli` | All 13 passed, including validation before input/state access and offline semantic behavior. |
+| `cargo test --locked --doc` | Passed (0 doctests). |
+| `cargo test --locked --lib semantic` | 9 passed (8 new semantic tests plus an existing Drain semantic-mutation test). |
+| `cargo test --locked --lib provider::tests` | All 5 provider contract/credential/identity/usage tests passed. |
+| `cargo build --locked --release` | Passed. |
+| Release CLI synthetic offline smoke | Passed: 2 retained events, 1 important, 1 uncertain, zero provider attempts. |
+| `cargo run --locked --example semantic_shadow` | 304 retained events, 304 injected classifications, 296 shadow matches, 4 independently classified security variants; 0 avoided classifications, 0 network calls. |
+| `cargo run --locked --example drain_reduction` | Existing 1,000 retained / 2 classifications / 998 reuses preserved. |
+| `python3 -m unittest discover -s tests -v` | 113 tests ran; dashboard HTTP class setup failed at denied loopback bind. Other executed tests passed. **Not a passing full suite.** |
+| `python3 -m compileall -q jevernetes` | Passed. |
+| Five JavaScript helper suites and app/search syntax checks | Passed. |
+| `python3 tools/check_controller_artifacts.py` | Passed, including optional OpenAI/Anthropic projections and exact/off-learning base defaults. |
+| `KUBECONFIG=/dev/null kubectl kustomize deploy/base` | Passed; local rendering only, no cluster configuration or API access. |
+| `python3 tools/check_release.py` | Passed. |
+| `cargo tree --locked` | Passed offline; no dependency changes. |
+| TruffleHog 3.97.1 filesystem scan, verification/update checks disabled | Exit 0, zero verified/unverified secrets in source snapshot; scanner reported a sandbox process-cleanup permission error. Not an unqualified scanner pass. |
+| `cargo audit --no-fetch --stale --deny warnings` | Unavailable: cargo-audit is not installed. No installation/advisory download attempted. Bandit and pip-audit are also unavailable locally. |
+| `git diff --check` | Passed. |
+
+New synthetic tests cover distinct request schemas and sensitive auth headers, refusal,
+incomplete/max-token/tool responses, malformed or extra judgment fields, confidence and
+usage validation (including cached Anthropic input), credential bounds/aliases/projected
+symlinks, provider/model/version cache invalidation, cancellation before requests and
+request-size limits without sockets. Existing timeout/cancellation tests now enumerate
+all three providers; new HTTP fixtures cover new adapters, retry exhaustion, redirect
+destinations and response-size limits, but those transport tests remain sandbox-blocked.
+
+Shadow tests cover minimum independent support, routine matches without reuse,
+protected/unobserved paths, opaque-ID limits, status/outcome/auth/error/new-field changes,
+security/fraud/failed/private/truncated/multiline/invalid/duplicate-key evidence,
+same-batch pending evidence, replay collisions, stale generation tickets after TTL,
+capacity/restart bounds and budget/cancellation behavior. The shared runtime/controller
+regression retains all 304 events, classifies every occurrence, records four Notify/outbox
+intents for security/fraud, and checks role usage in the final report. It uses injected
+provider envelopes, no sockets and no credentials. Active-template reuse is deliberately
+absent; its future tests must accompany a reviewed activation contract.
+
+The 17 Rust loopback failures are the 15 existing fixtures listed in the earlier
+validation section plus:
+
+- `jev::provider_transport_tests::adapters_use_real_http_contract_and_reject_redirects_and_oversize`
+- `jev::provider_transport_tests::all_adapters_bound_retries_and_refuse_redirect_destinations`
+
+Run the full Rust/Python suites in an authorized environment permitting local synthetic
+listeners, and dependency advisory checks with locally available tooling/database,
+before treating this as a fully validated release. No API/model availability, real
+provider accuracy/cost, cluster deployment or production readiness is established.
+This snapshot is committed locally only; no push, PR or deployment is part of this work.
+
 # Rust validation
 
 ## Logger clock identity (2026-09-27)

@@ -18,6 +18,21 @@ pub struct Coverage {
 }
 #[derive(Default, Serialize)]
 pub struct Metrics {
+    pub semantic_proposals: u64,
+    pub semantic_rejections: u64,
+    pub semantic_rejection_reasons: BTreeMap<String, u64>,
+    pub semantic_replay_passed: u64,
+    pub semantic_shadow_matches: u64,
+    pub semantic_candidates: usize,
+    pub semantic_expirations: u64,
+    pub semantic_promotions: u64,
+    pub semantic_active_templates: u64,
+    pub semantic_classifications_avoided: u64,
+    pub template_provider_attempts: u64,
+    pub template_input_tokens: u64,
+    pub template_output_tokens: u64,
+    pub template_unmetered_requests: u64,
+    pub template_estimated_cost_usd: f64,
     pub drain_templates_created: u64,
     pub drain_templates_changed: u64,
     pub drain_templates_matched: u64,
@@ -107,6 +122,8 @@ fn severity_rank(severity: Severity) -> u8 {
     }
 }
 pub struct Report {
+    pub learning: Option<crate::semantic::LearningReport>,
+    pub risk_contract: Option<crate::controller::Contract>,
     pub events: VecDeque<Event>,
     pub counts: BTreeMap<String, u64>,
     pub total: u64,
@@ -119,6 +136,8 @@ pub struct Report {
 impl Report {
     pub fn new(limit: usize) -> Self {
         Self {
+            learning: None,
+            risk_contract: None,
             events: VecDeque::new(),
             counts: BTreeMap::new(),
             total: 0,
@@ -188,9 +207,15 @@ impl Report {
             && m.dropped == 0
             && self.evicted == 0
             && self.counts.get("unknown").copied().unwrap_or(0) == 0;
-        json!({"schema_version":2,"runtime":"rust","created_at":chrono::Utc::now().to_rfc3339(),"mode":if offline{"offline-rules"}else{"jev"},"scope":scope,
-            "summary":{"events":self.total,"lines":self.lines,"important":self.counts.get("important").unwrap_or(&0),"routine":self.counts.get("routine").unwrap_or(&0),"uncertain":self.counts.get("uncertain").unwrap_or(&0),"unknown":self.counts.get("unknown").unwrap_or(&0),"streams":m.streams_started,"coverage_gaps":m.coverage_gaps,"api_requests":usage.request_attempts,"reused_events":self.reused,"elapsed_seconds":elapsed,"complete_within_window":complete,"retained_events":self.events.len(),"evicted_events":self.evicted},
-            "usage":usage,"coverage":m.coverage,"metrics":&*m,"batches":self.batches,"events":self.events,"important_groups":groups})
+        let template_usage = self.learning.as_ref().map(|l| &l.usage);
+        let total_attempts = usage
+            .request_attempts
+            .saturating_add(template_usage.map_or(0, |u| u.request_attempts));
+        let total_cost =
+            usage.estimated_cost_usd + template_usage.map_or(0.0, |u| u.estimated_cost_usd);
+        json!({"schema_version":2,"runtime":"rust","created_at":chrono::Utc::now().to_rfc3339(),"mode":if offline{"offline-rules"}else{self.risk_contract.as_ref().map_or("jev", |c| if c.provider==crate::provider::ProviderKind::Openai.endpoint(){"openai"}else if c.provider==crate::provider::ProviderKind::Anthropic.endpoint(){"anthropic"}else{"jev"})},"scope":scope,
+            "summary":{"events":self.total,"lines":self.lines,"important":self.counts.get("important").unwrap_or(&0),"routine":self.counts.get("routine").unwrap_or(&0),"uncertain":self.counts.get("uncertain").unwrap_or(&0),"unknown":self.counts.get("unknown").unwrap_or(&0),"streams":m.streams_started,"coverage_gaps":m.coverage_gaps,"api_requests":usage.request_attempts,"total_api_requests":total_attempts,"total_estimated_cost_usd":total_cost,"reused_events":self.reused,"elapsed_seconds":elapsed,"complete_within_window":complete,"retained_events":self.events.len(),"evicted_events":self.evicted},
+            "provider_usage":{"risk":usage,"template":template_usage},"risk_contract":self.risk_contract,"template_learning":self.learning,"usage":usage,"coverage":m.coverage,"metrics":&*m,"batches":self.batches,"events":self.events,"important_groups":groups})
     }
 }
 pub fn write_report(path: &Path, value: &Value) -> Result<(), &'static str> {

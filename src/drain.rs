@@ -16,6 +16,9 @@ pub enum Strategy {
     #[default]
     Exact,
     Drain,
+    /// Shadow proposals only; every occurrence receives independent classification.
+    #[value(alias = "learned")]
+    Semantic,
 }
 
 struct Partition {

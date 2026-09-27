@@ -306,3 +306,93 @@ fn grouping_strategy_validation_and_offline_compatibility() {
         assert!(!run(b"", &args).status.success());
     }
 }
+
+#[test]
+fn provider_and_learning_configuration_fail_before_input_or_state_access() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = dir.path().join("state.db");
+    for extra in [
+        vec!["--risk-provider", "unknown"],
+        vec!["--risk-provider", "openai"],
+        vec!["--risk-provider", "anthropic", "--model", "synthetic"],
+        vec!["--template-provider", "openai"],
+        vec!["--grouping-strategy", "semantic"],
+        vec!["--template-min-support", "1"],
+        vec!["--template-capacity", "257"],
+        vec!["--template-max-requests", "1001"],
+        vec!["--template-ttl", "3601"],
+        vec!["--template-model", "synthetic"],
+        vec!["--model", "bad model"],
+        vec!["--template-provider", "typesafe"],
+        vec![
+            "--risk-provider",
+            "openai",
+            "--model",
+            "synthetic",
+            "--input-price",
+            "1",
+            "--output-price",
+            "1",
+        ],
+        vec![
+            "--risk-provider",
+            "anthropic",
+            "--model",
+            "synthetic",
+            "--input-price",
+            "1",
+            "--output-price",
+            "1",
+        ],
+    ] {
+        let result = Command::new(env!("CARGO_BIN_EXE_jevernetes"))
+            .env_clear()
+            .args(["controller", "--namespace", "synthetic", "--state"])
+            .arg(&state)
+            .args(extra)
+            .output()
+            .unwrap();
+        assert!(!result.status.success());
+        assert!(!state.exists());
+    }
+    for provider in ["typesafe", "openai", "anthropic"] {
+        let result = Command::new(env!("CARGO_BIN_EXE_jevernetes"))
+            .env_clear()
+            .args([
+                "files",
+                "/nonexistent-synthetic-fixture",
+                "--risk-provider",
+                provider,
+                "--model",
+                "synthetic",
+                "--input-price",
+                "0",
+                "--output-price",
+                "0",
+            ])
+            .output()
+            .unwrap();
+        assert_eq!(result.status.code(), Some(1));
+        assert!(String::from_utf8_lossy(&result.stderr).contains("API_KEY"));
+    }
+}
+#[test]
+fn offline_semantic_is_local_and_retains_all_occurrences() {
+    let r=run(b"{\"operation\":\"synthetic\",\"status\":200}\n{\"operation\":\"synthetic\",\"status\":403}\n",&["--grouping-strategy","semantic"]);
+    assert!(r.status.success());
+    let v: serde_json::Value = serde_json::from_slice(&r.stdout).unwrap();
+    assert_eq!(v["summary"]["events"], 2);
+    assert_eq!(v["summary"]["api_requests"], 0);
+    assert_eq!(v["summary"]["reused_events"], 0);
+    assert!(v["template_learning"].is_null());
+    let r = run(
+        b"",
+        &[
+            "--grouping-strategy",
+            "semantic",
+            "--template-provider",
+            "openai",
+        ],
+    );
+    assert!(!r.status.success());
+}

@@ -69,8 +69,27 @@ See [Rust usage](docs/usage.md), [architecture](docs/architecture.md), [exact pa
 
 ## Data and security
 
-Jev mode sends redacted log text and source metadata to TypeSafe over verified HTTPS. Redaction is best effort, including streamed private-key suppression. Use offline mode when evidence must stay local. Logs are untrusted data; neither model answers nor log content can invoke tools or mutate Kubernetes resources. Keep reports, kubeconfigs, real logs, and credentials outside git.
+Online mode sends redacted log text and source metadata to the explicitly selected provider over verified HTTPS (TypeSafe by default). Redaction is best effort, including streamed private-key suppression. Use offline mode when evidence must stay local. Logs are untrusted data; neither model answers nor log content can invoke tools or mutate Kubernetes resources. Keep reports, kubeconfigs, real logs, and credentials outside git.
 
 [Security policy](SECURITY.md) · [Security review scope](SECURITY_REVIEW.md) · [Contributing](CONTRIBUTING.md) · [Validation](VALIDATION.md)
 
 Licensed under Apache 2.0. Inspired by [Log Sentinel](https://github.com/dabit3/jev-experiments/tree/main/log-sentinel).
+
+## Provider choice and structured shadow learning
+
+Rust supports explicit `--risk-provider typesafe|openai|anthropic`, with TypeSafe/Jev
+remaining the default. OpenAI/Anthropic require an explicit model and both operator
+prices. Credentials come only from environment or bounded `*_API_KEY_FILE` reads;
+prefer mounted files in Kubernetes. There is no provider fallback.
+
+`--grouping-strategy semantic --template-provider openai|anthropic` opts into
+**shadow-only** structured template proposals. The template role has an independent
+model, rates and budget. Local validation checks observed paths, protected fields,
+minimum support and deterministic replay, but never promotes or reuses proposals.
+Every event still classifies and reaches controller policy; actual semantic savings
+are zero in this release. Exact defaults and Drain behavior are preserved.
+See [provider contracts, bounds, setup and activation limitations](docs/provider-template-learning.md).
+
+```sh
+CARGO_NET_OFFLINE=true cargo run --locked --example semantic_shadow
+```
