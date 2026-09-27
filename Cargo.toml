@@ -6,7 +6,7 @@ rust-version = "1.89"
 description = "Bounded, read-only Kubernetes log analysis with typed Jev judgments"
 license = "Apache-2.0"
 repository = "https://github.com/sunil-sadasivan/jevernetes"
-include = ["src/**", "tests/rust/**", "Cargo.toml", "Cargo.lock", "README.md", "docs/architecture.md", "docs/migration.md", "docs/usage.md", "docs/controller.md", "docs/probabilistic-control-plane.md", "SECURITY.md", "LICENSE", "NOTICE"]
+include = ["src/**", "tests/rust/**", "Cargo.toml", "Cargo.lock", "README.md", "docs/architecture.md", "docs/migration.md", "docs/usage.md", "docs/controller.md", "docs/drain-template-mining.md", "examples/drain_reduction.rs", "docs/probabilistic-control-plane.md", "SECURITY.md", "LICENSE", "NOTICE"]
 
 [dependencies]
 chrono = { version = "0.4", features = ["serde"] }

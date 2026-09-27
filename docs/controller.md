@@ -9,7 +9,7 @@ jevernetes controller --namespace example --state /var/lib/jevernetes/state.db \
   --selector app!=jevernetes
 ```
 
-`--sink stdout` is the default and writes one notification JSON object per line. Redirect it to a private JSONL file for development. Controller status goes to stderr; `--output` writes the final bounded report. Before state creation/open or cluster access, report paths are checked against the database and its lock/journal/WAL sidecars, including normalized paths, symlinks (even dangling links) and Unix hard-link aliases. Unresolvable paths fail closed. The check repeats before the final report write. Keep both directories private and stable; validation is not a defense against an untrusted process concurrently replacing directory entries. `--json` and `--no-grouping` are rejected in controller mode. `--offline` disables Jev requests and yields review/abstention for uncached events; **it does not disable webhook delivery**. Existing valid durable judgments may still be reused offline. The fully offline test smoke below opens only a synthetic loopback webhook, without Kubernetes or provider configuration.
+`--sink stdout` is the default and writes one notification JSON object per line. Redirect it to a private JSONL file for development. Controller status goes to stderr; `--output` writes the final bounded report. Before state creation/open or cluster access, report paths are checked against the database and its lock/journal/WAL sidecars, including normalized paths, symlinks (even dangling links) and Unix hard-link aliases. Unresolvable paths fail closed. The check repeats before the final report write. Keep both directories private and stable; validation is not a defense against an untrusted process concurrently replacing directory entries. `--json`, `--no-grouping` and `--grouping-strategy off` are rejected in controller mode. `--offline` disables Jev requests and yields review/abstention for uncached events; **it does not disable webhook delivery**. Existing valid durable judgments may still be reused offline. The fully offline test smoke below opens only a synthetic loopback webhook, without Kubernetes or provider configuration.
 
 ## Policy and reuse
 
@@ -20,6 +20,39 @@ Configurable fields: `categories` (up to nine known categories), `severities` (u
 Cache identities use full SHA-256 over the provider identity, requested model, decision/redaction/truncation contract version, actual generated question instructions/taxonomy, every source field, full redacted text and truncation flag. No number, ID, stack frame or whitespace normalization is added. Timestamps are intentionally outside verdict identity; occurrences with identical evidence can reuse classification. Upstream redaction/JSON parsing still transforms input. Pin provider model revisions when available: a provider changing an alias cannot be detected by the local key. Bump `CONTRACT_VERSION` when non-prompt semantics change. `--verdict-ttl` is 1–604,800 seconds, default 300; reads honor both original expiry and the current shorter TTL. Reuse does not slide expiration. `--rescore` bypasses durable reads while preserving exact grouping within a microbatch. Failed, unknown, missing/invalid-confidence and truncated judgments never enter this cache. Successful `uncertain` judgments may be reused as review, never as routine.
 
 Durable novelty fingerprints use exact source/text, timestamp and truncation state. Replayed evidence with the same decision signature is suppressed for seven days. Re-evaluating a changed policy, provider contract or decision can produce a new advisory notification, but does not increment recurrence for already-seen evidence. Changed confidence alone does not manufacture novelty. Keep the node clock synchronized: TTL, recurrence and durable retry times use UTC seconds. Backward clock jumps invalidate future-dated cache entries and can delay pending delivery until the clock catches up. Timestamp-less observations are treated as new because their occurrence identity cannot be proven. Legitimate identical messages at exactly the same timestamp can collapse; count-based escalation may therefore undercount. Conversely, process restarts, replay beyond retention, timestamp changes, or missing timestamps can overcount. This is deliberately **not exactly-once ingestion**. Durable stream cursors and multiplicity-aware occurrence IDs are deferred.
+
+## Opt-in Drain experiment
+
+Add `--grouping-strategy drain --drain-capacity 256` to the controller command to
+select in-repository template mining. The default remains exact persistent reuse. Drain
+uses context/namespace/container/kind across replicas, plus complete baseline and
+conservative literal/variable shape; only allowlisted opaque UUID/hex IDs can vary.
+IPs and all numeric telemetry stay literal; pod UID/restarts remain in original evidence.
+This scope can include different workloads with the same container name. Security,
+fraud, uncertain, failed and otherwise unsafe verdicts never seed template reuse.
+Policy categories remain independently configurable.
+
+New and generalized templates classify again. Unchanged eligible matches reuse
+within `--verdict-ttl`; `--rescore` bypasses all Drain reads. Drain honors `--batch-size`, classifies every pending observation independently,
+and publishes eligible verdicts only after responses. Multiple classifications can
+share one request; `--max-batches` limits requests before retries. Drain does not
+read or write SQLite's exact verdict cache. Every event still enters the durable policy/novelty/incident/outbox
+transaction. Incident identities remain exact source/text: varying events can still
+produce distinct notifications, and repeated exact evidence still advances recurrence
+subject to existing replay rules. Template savings do not suppress notifications.
+
+Templates/verdicts are process-local and retrain after restart. Only classification
+cost is increased by missing template state; existing incidents/outbox remain durable.
+The pre-transaction crash/replay limitation is unchanged. Metrics include all
+`drain_*` counters and the active-template gauge in reports and `/metrics`, alongside
+provider usage. See [Drain bounds and semantics](drain-template-mining.md).
+
+Socket-free controller/reduction checks to run locally:
+
+```sh
+cargo test --locked --all-features drain_preserves_events_policy_recurrence_and_notification_evidence_offline
+cargo run --locked --example drain_reduction
+```
 
 ## Transactions and delivery
 

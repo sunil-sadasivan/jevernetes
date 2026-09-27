@@ -1,139 +1,157 @@
-# Drain-template experiment: blocked before integration
+# Native Drain template-mining experiment
 
-Review date: 2026-09-27. Branch: `feat/drain-template-mining`. Base:
-`b9eeb6c2de48052833c79681b46cb9a0bbd49e3e` (`feat/probabilistic-controller`).
+Drain uses an in-repository clean-room Rust implementation under the repository's
+Apache-2.0 license. It has no mining dependency, vendored/copied third-party source,
+external persistence service or runtime service dependency. `logdrain` and its
+transitive `bincode`/`dashmap` dependencies have been removed.
 
-**This branch does not implement Drain mining yet.** Existing exact grouping,
-controller persistence, policy, and notification behavior are unchanged. There is
-no new CLI option, template metric, or offline cost-reduction fixture. No measured
-reduction is claimed.
+## Select the classification strategy
 
-## Blocking dependency resolution
+`--grouping-strategy exact|off|drain` defaults to `exact`. `--no-grouping` remains an
+alias for disabling session reuse and conflicts with an explicit strategy. The
+controller accepts `exact` or `drain`, preserving its existing requirement for
+grouping. Ordinary `--offline` continues to use local rules without mining or
+inventing cacheable Jev confidence. The synthetic demo below exercises mining
+separately and never loads credentials or opens sockets.
 
-The published `logdrain` 0.3.2 archive and extracted source are present in the local
-Cargo registry. Its manifest declares `Apache-2.0 OR MIT`, edition 2021, and MSRV
-1.85; these are compatible with this repository's Rust 1.89 minimum and the local
-Rust 1.94 toolchain. The source was inspected directly, including `src/miner.rs`,
-`src/options.rs`, `src/cluster.rs`, `src/tokenize.rs`, `src/similarity.rs`, and
-`src/mask.rs`, rather than assuming an API from the crate description.
+Every accepted Event still goes through reporting and, in controller mode, policy,
+novelty, recurrence and durable notification intent. Drain changes only the choice
+of remote representatives. Queue drops, retention eviction and controller capacity
+limits remain explicit existing boundaries; Drain does not deduplicate evidence.
 
-A temporary dependency declaration was evaluated:
+## Safety and identity
 
-```toml
-logdrain = { version = "=0.3.2", default-features = false }
-```
+The minimal online core partitions before mining by the full serialized stable
+source, complete local baseline (`important` and every signal), and a conservative
+token shape. This
+identity is compared exactly, without a shortened hash. It allows only these
+space-separated `name=value` fields to vary:
 
-`cargo generate-lockfile --offline` failed with:
-
-```text
-error: no matching package named `bincode` found
-location searched: crates.io index
-required by package `logdrain v0.3.2`
-```
-
-Neither `bincode` nor `dashmap` has a cached source/archive in this environment.
-Attempting ordinary online resolution also failed:
-
-```text
-failed to download from `https://index.crates.io/config.json`
-[6] Couldn't resolve host name (Could not resolve host: index.crates.io)
-```
-
-The sandbox does not allow approval escalation. The temporary manifest addition
-was removed; **Cargo.toml and Cargo.lock have no changes**. Vendoring an incomplete
-crate, replacing its dependencies, or substituting a homegrown normalization
-algorithm would not establish a validated implementation and was not attempted.
-
-### Expected lockfile impact, not a resolved dependency graph
-
-The crate's mandatory dependencies are `bincode` 1.3, `dashmap` 6, `regex` 1,
-`rustc-hash` 2, `serde` 1 with `derive` and `rc`, `smallvec` 1, and `thiserror` 2.
-The base lockfile already contains all of those except `bincode` and `dashmap`.
-Their transitive additions and selected versions cannot be confirmed until Cargo
-resolves the graph. Inspect the actual lockfile diff before proceeding; do not
-refresh unrelated locked packages. Redis and Kafka are optional upstream features
-and must remain disabled. No runtime network service is needed for the core miner.
-
-## API findings and integration constraints
-
-The crate is a plausible native implementation, but its default configuration is
-not sufficient to meet this experiment's safety requirements. This review does
-not establish that it is fundamentally unsuitable; dependency resolution blocks
-building and testing the necessary adapter.
-
-| Inspected API/behavior | Required integration treatment |
+| Field | Accepted variable |
 | --- | --- |
-| `Miner::builder().build_options()` and `Miner::from_options()` | Validate application limits before construction; make `off`, `exact`, and `drain` explicit strategies, with existing behavior the default. |
-| `Miner::add()` returns cluster ID and `UpdateType::{Created, TemplateChanged, None}` | Classify creation and every changed template. Reuse only an unchanged, validated template version with a fresh cacheable verdict. |
-| `cluster(id)`, `clusters()`, `Cluster::template()` and `tokens()` | Check returned identity and template state; missing or inconsistent state must take the ordinary classification path. |
-| `match_only()` returns only the best cluster; equal-score candidates are not reported as ambiguous | The adapter needs a tested conservative ambiguity check or a partition design that proves uniqueness. Do not treat a best match as proof of an unambiguous match. |
-| `max_clusters_per_leaf` only bounds each leaf; token-count shards and prefix branches can grow | Impose a global limit on templates, scope partitions, and allocated tree growth. A verdict LRU alone does not bound the miner. At capacity, fall back without inserting; any reset must invalidate all related verdicts. |
-| `add_with_member()` retains deduplicated member labels without an application bound | Do not use event IDs, pod identities, or evidence as member labels. Keep bounded representative evidence separately. |
-| `first_line_only(true)` clusters only the first line and captures the initial suffix | A suffix is not a current representative of later stack frames. Preserve the full redacted Event and partition by exact multiline suffix, or conservatively bypass mining for multiline events. Test before enabling first-line reuse. |
-| Generalization replaces any differing token with a wildcard; numeric parametrization affects tree descent | A word change can erase security meaning. Baseline state alone is not a complete semantic guard. Define and test restrictions on reusable wildcard positions and security-sensitive observations. Numeric, IP, and request-ID variation needs explicit coverage. |
-| Snapshot/file persistence and optional external persistence backends | Do not attach upstream persistence to the controller without atomic contract/version checks. For this experiment, process-local templates and verdicts can safely retrain after restart, at additional classification cost. |
+| `request_id`, `request-id`, `trace_id`, `span_id`, `correlation_id` | Exactly 16, 32 or 64 ASCII hex digits, or canonical UUID syntax (8-4-4-4-12 hex digits) |
 
-Use stable Kubernetes scope such as context/cluster, namespace, container, and
-container kind. Pod UID, pod name, restart count, and previous-instance flags must
-remain on each Event, but must not inadvertently prevent reuse across replicas.
-Include the entire deterministic baseline state in the reusable identity. File
-inputs need their own explicit source-scope rule rather than sharing a Kubernetes
-scope accidentally.
+Field name, hex width and UUID/hex format stay distinct. Malformed IDs stay literal.
 
-The current parser represents streamed private keys as redacted text; Event does
-not carry `Line.private` as a separate field. A future adapter must retain or
-conservatively recognize this provenance, including multiline/truncated cases,
-before lookup. Template verdict eligibility must reject private, truncated,
-failed, unknown, invalid-confidence, and otherwise uncacheable evidence. The
-session exact cache's `Judgment::reusable()` is weaker than controller
-`cacheable()` and is not sufficient for template reuse.
+Everything else stays literal, including IP addresses, counts, durations, latencies,
+bytes, attempts, status codes, bare numbers, words, paths, user names and field names.
+In particular, `ip=127.0.0.1` cannot cover `ip=0.0.0.0`, and `duration_ms=1` cannot
+cover `duration_ms=86400000`. Only single-line text with single spaces between tokens
+is eligible. Control characters, irregular whitespace, literal `<*>`, missing stable
+Kubernetes fields, redacted/private provenance, redaction markers, truncation and
+oversized evidence take an ordinary classification miss. This conservative grammar
+intentionally bypasses most JSON and stack traces. The Event `sensitive` flag
+retains private/redaction provenance even when a later truncation removes a marker;
+JSON reserialization changes can conservatively set it too.
 
-## Intended analysis-lane design, not implemented
+Kubernetes reuse scope is `type`, `context`, `namespace`, `container`, `kind`.
+The collector's context includes a hash of the API URL. Pod name, UID, restart
+count and previous/current instance are excluded from template identity, allowing
+replica reuse. **This is a namespace/container-kind/name boundary, not a workload
+owner boundary**: different workloads using the same container name in that scope
+can share a matching template. Full original source, including pod/UID/restart,
+remains on Events and reports; notifications retain the existing source allowlist.
+Files/other sources use every original source field (including file path).
 
-Keep framing, redaction, truncation, and baseline computation before mining.
-Maintain a bounded process-local template cache with a non-sliding verdict TTL
-and explicit template-version identity. Controller `--rescore`, contract changes,
-and TTL reductions must bypass/invalidate template verdicts as appropriate.
+This is an experimental cost optimization, not a semantic-equivalence or accuracy
+guarantee. Only opaque IDs are allowlisted; applications that encode meaningful
+state in these ID fields should use exact/off. Local baseline separation and literal
+guards reduce risk but do not prove equivalence.
+Security, fraud and uncertain verdicts are deliberately not reusable by Drain.
 
-Creation requests should contain bounded representative evidence. Changed-template
-requests should contain the current template plus bounded evidence of the change.
-Use a separate classification representation: never replace `Event.text`, source,
-IDs, or report grouping with the mined template. Snapshot template versions while
-batching so a response for an earlier version cannot populate a later version.
-Pending same-batch representatives with failed or unknown responses must not
-become reusable verdicts.
+## Lifecycle and bounds
 
-Every raw Event still reaches the current policy, incident recurrence, audit,
-metrics, report retention, and durable outbox paths. Existing controller incident
-identity uses original source/text; changing that identity to a template would be
-a separate behavior change. Retain original evidence on each notification and
-test both identical-event recurrence and variable-event notification behavior.
+1. A new partition creates one template and classifies a bounded current
+   observation together with its template.
+2. A template generalization invalidates the old verdict and classifies again.
+3. An unchanged match reuses only the most recent eligible, unexpired verdict.
+   Each successful reuse counts exactly one avoided classification.
+4. Failed/unknown answers, missing/nonfinite/out-of-range confidences, uncertain,
+   security/fraud, sensitive or truncated evidence cannot seed reuse. An unsuccessful
+   representative leaves no cached verdict; the next unchanged event is classified.
+5. Inconsistent template state removes that partition and falls back.
+   Capacity exhaustion refuses new partitions and classifies normally.
 
-Expose template creation, change, match, verdict reuse, avoided classification,
-fallback, capacity, and any eviction/reset counters beside provider calls/tokens
-and estimated cost. Count an avoided classification only after successful reuse;
-matched templates and batched representatives are not themselves saved API calls.
+Each partition has a fixed token count and one cluster. Its exact literal/variable
+shape ensures only allowed opaque-ID positions can differ. The first observation
+supplies literal tokens; subsequent differing ID tokens become wildcards and
+invalidate the cached verdict. Wildcards never revert. Cluster IDs are monotonic,
+process-local and stable through generalization; reset partitions get fresh IDs.
+Tickets snapshot both ID and template version, so late responses cannot populate a
+changed or recreated template. Literal tokens and token counts are checked before
+updates. No member labels or raw-event queues are retained by the miner.
 
-## Resuming safely
+`--drain-capacity` defaults to 256 and validates **1–1024 total partitions/templates**.
+Each eligible input is at most **2,048 bytes and 128 tokens**, the full partition key
+at most **8,192 bytes**, and each partition holds bounded tokens/template text and
+one verdict and representative ID (ID at most 128 bytes). Memory is bounded by capacity
+times these limits plus map/vector overhead, not a byte-perfect RSS cap. Capacity
+misses classify normally without insertion. No automatic LRU rotation occurs;
+invariant failure is the only eviction/reset path. Invalid adapter configuration
+falls back; the CLI rejects invalid limits before input collection.
 
-1. Make the native crate's complete dependency closure and registry metadata
-   available to Cargo, or run dependency resolution in an authorized environment
-   with crates.io access. Fetching build dependencies is separate from runtime
-   Jev/Kubernetes access, which remains unnecessary for validation.
-2. Pin `logdrain` to 0.3.2 with external persistence features disabled, resolve the
-   dependency addition while retaining existing locked versions, and review the
-   actual lockfile diff and security audit before integration.
-3. Implement the bounded adapter and analysis-lane integration with the safety
-   cases above. If ambiguity, global bounds, or evidence safety cannot be proven
-   with this API, stop and document that specific blocker; do not substitute weak
-   normalization.
-4. Add deterministic tests and an offline fixture using synthetic Kubernetes-like
-   events and a synthetic classifier. Exercise number/IP/request-ID variation,
-   source/baseline isolation, version changes, TTL, failed/private/truncated
-   fallback, capacity, raw evidence counts, controller recurrence/notifications,
-   restart retraining, and disabled-mode compatibility. Report raw events,
-   classifier-owned representatives, simulated batches, successful reuses, and
-   fallbacks separately. Do not describe simulated savings as live provider cost.
-5. Run the full validation matrix in [VALIDATION.md](../VALIDATION.md), update
-   usage/controller/architecture documentation for the actual implemented options,
-   and record measured fixture counts before committing implementation.
+Drain honors `--batch-size`. Fallbacks and independent representatives share normal
+requests. Every new/unclassified/changed-template observation in a batch is classified
+independently; no speculative verdict is copied within that batch. Completions are
+applied in observation order after the response, accepting only current tickets.
+An eligible result can serve later batches. This intentionally spends extra
+classifications during warm-up instead of coalescing pending observations.
+
+Eligible remote text is at most twice 2,048 bytes plus fixed labels; it contains the
+current template and current redacted observation. This representation never
+replaces Event text, source, IDs, timestamps or exact report grouping. Ineligible
+fallbacks use the ordinary bounded event representation. Budget/retry/error handling
+stays in the existing single provider lane. `--max-batches` counts provider requests
+before retries, not individual classifications: a request can classify up to
+`--batch-size` representatives. Reuse avoids classifications but need not avoid an
+entire request. Fewer representatives do not prove a live billing reduction.
+
+TTL is non-sliding, 300 seconds for files/k8s and the configured `--verdict-ttl` for
+controller mode. Model, provider and classification contract are fixed for a lane's
+lifetime. `--rescore` bypasses every Drain verdict read. Exact persisted verdict
+reads and writes are disabled in Drain mode: template-context prompts must not
+contaminate the exact cache. Policy/novelty/incidents/outbox still commit normally.
+Switching back to exact uses that mode's original contract and persistence.
+
+**Templates and template verdicts are process-local.** Restart retrains and may
+classify additional representatives; it cannot restore a stale template verdict.
+There is no new persisted evidence dependency. Existing durable controller
+incidents/outbox survive restart; the existing volatile pre-transaction ingestion
+window and replay limitations remain unchanged.
+
+## Metrics and reproducible checks
+
+JSON `metrics` and controller Prometheus `jevernetes_` metrics expose:
+`drain_templates_created`, `drain_templates_changed`, `drain_templates_matched`,
+`drain_verdict_reuses`, `drain_classifications_avoided`, `drain_fallbacks`,
+`drain_capacity_fallbacks`, `drain_evictions`, `drain_expirations`, and
+`drain_active_templates` (gauge). Fallbacks count input/configuration/invariant
+bypasses; capacity is a subset. A template match without an eligible verdict is
+not a reuse. Provider batches/attempts/tokens/cost and report totals remain separate.
+Counters reset on restart and have no per-source labels.
+
+From the repository root, without credentials or cluster access:
+
+```sh
+cargo run --locked --example drain_reduction
+cargo test --locked --all-features drain
+cargo test --locked --all-features exact_reuses_identical_events_but_off_classifies_each_offline
+cargo test --locked --all-features --test cli grouping_strategy_validation_and_offline_compatibility
+cargo fmt --all --check
+cargo clippy --locked --all-targets --all-features -- -D warnings
+cargo test --locked --all-features
+cargo build --locked --release
+git diff --check
+```
+
+Measured deterministic demo: **1,000 raw events → 2 synthetic representatives**,
+**998 successful reuses (99.8%)**, one created template, one generalization, zero
+fallbacks, 1,000 retained events and
+**zero network calls**. Only the opaque request ID varies; IP, telemetry and source metadata remain fixed. The demo completes each synthetic response before
+observing the next event. A prefilled runtime batch of 8 instead classifies its
+first 8 observations and reuses the remaining 992 in this fixture; request counts
+depend on arrival/batching. This uses fixed fixture judgments, not live Jev responses
+or an accuracy/cost benchmark. Focused runtime/controller tests exercise the same
+adapter in the actual analysis lane with an injected in-memory test classifier,
+including notification evidence and exact incident recurrence. See
+[VALIDATION.md](../VALIDATION.md) for full results and host rerun commands.

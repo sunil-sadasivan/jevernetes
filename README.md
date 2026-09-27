@@ -39,9 +39,20 @@ See [controller operation and exact limits](docs/controller.md), the [Kustomize 
 and the [probabilistic control-plane thesis and roadmap](docs/probabilistic-control-plane.md).
 Templates contain placeholder images and Secret references; no deployment is implied.
 
-The isolated Drain-template experiment is blocked before integration; see the
-[source review and dependency blocker](docs/drain-template-mining.md). No Drain option
-or cost-reduction demo is available yet.
+In-repository Drain template mining is opt-in with `--grouping-strategy drain`; exact
+reuse remains the default. It reduces remote representatives while retaining every
+accepted event for reports and controller policy. Run the deterministic offline demo:
+
+```sh
+cargo run --locked --example drain_reduction
+cargo test --locked --all-features drain
+```
+
+The sequential synthetic fixture varies only opaque request IDs and reduces 1,000
+events to 2 classifications with 998 reuses. Drain honors the configured batch size;
+classification savings differ from request savings. IPs and numeric telemetry stay
+literal. The fixture retains all 1,000 events and makes no network calls. See [Drain design and limits](docs/drain-template-mining.md)
+for conservative variable fields, bounded capacity and process-local restart behavior.
 
 ## Compatibility
 

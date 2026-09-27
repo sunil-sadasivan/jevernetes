@@ -1,5 +1,6 @@
 use clap::{Parser as ClapParser, Subcommand};
 use jevernetes::{
+    drain::Strategy,
     events::{MAX_INPUT, Source, console},
     jev::{Jev, Usage},
     kubernetes::{self, Options},
@@ -58,10 +59,24 @@ struct Cli {
     output: Option<PathBuf>,
     #[arg(long, global = true)]
     no_grouping: bool,
+    /// Classification reuse: exact (default), off, or Drain (opaque UUID/hex IDs only).
+    #[arg(
+        long,
+        global = true,
+        value_enum,
+        default_value = "exact",
+        conflicts_with = "no_grouping"
+    )]
+    grouping_strategy: Strategy,
+    /// Global bound on Drain partitions (one template per partition).
+    #[arg(long, global = true, default_value = "256", value_parser = clap::value_parser!(u16).range(1..=1024))]
+    drain_capacity: u16,
     #[arg(long, global = true, default_value = "jev-latest")]
     model: String,
+    /// Maximum events per request in every strategy; pending Drain misses classify independently.
     #[arg(long,global=true,default_value="8",value_parser=clap::value_parser!(u8).range(1..=64))]
     batch_size: u8,
+    /// Request budget before retries, not a limit on individual classifications.
     #[arg(long,global=true,default_value="500",value_parser=positive)]
     max_batches: usize,
     #[arg(long,global=true,default_value="100000",value_parser=positive)]
@@ -135,7 +150,7 @@ struct ControllerArgs {
     listen: std::net::SocketAddr,
     #[arg(long, default_value="300", value_parser=clap::value_parser!(i64).range(1..=604800))]
     verdict_ttl: i64,
-    /// Bypass persisted verdict reads; exact grouping within a batch remains enabled.
+    /// Bypass verdict reads (including Drain); exact within-batch grouping remains enabled.
     #[arg(long)]
     rescore: bool,
     #[arg(long)]
@@ -159,7 +174,7 @@ async fn run_controller(cli: &Cli, args: &ControllerArgs) -> Result<i32, &'stati
         store::Store,
     };
     use std::sync::atomic::Ordering;
-    if cli.no_grouping || cli.json {
+    if cli.no_grouping || cli.grouping_strategy == Strategy::Off || cli.json {
         return Err(
             "Controller requires grouping; use --output for final reports and JSONL notifications on stdout",
         );
@@ -254,7 +269,8 @@ async fn run_controller(cli: &Cli, args: &ControllerArgs) -> Result<i32, &'stati
         batch_size: cli.batch_size.into(),
         max_batches: cli.max_batches as u64,
         max_cost: cli.max_cost,
-        grouping: true,
+        grouping: cli.grouping_strategy,
+        drain_capacity: usize::from(cli.drain_capacity),
         retain: cli.retain_events,
         max_events: cli.max_events as u64,
         live: true,
@@ -405,7 +421,12 @@ async fn run(cli: Cli) -> Result<i32, &'static str> {
         batch_size: usize::from(cli.batch_size),
         max_batches: cli.max_batches as u64,
         max_cost: cli.max_cost,
-        grouping: !cli.no_grouping,
+        grouping: if cli.no_grouping {
+            Strategy::Off
+        } else {
+            cli.grouping_strategy
+        },
+        drain_capacity: usize::from(cli.drain_capacity),
         retain: if live {
             cli.retain_events
         } else {

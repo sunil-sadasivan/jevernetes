@@ -229,13 +229,23 @@ impl Controller {
         }
     }
     pub async fn apply(&self, event: &Event) -> Result<()> {
+        self.apply_with_verdict_cache(event, true).await
+    }
+    /// Template representatives use a different prompt; never seed the exact cache.
+    pub(crate) async fn apply_with_verdict_cache(
+        &self,
+        event: &Event,
+        persist_verdict: bool,
+    ) -> Result<()> {
         let (e, c, p, t) = (
             event.clone(),
             self.contract.clone(),
             self.policy.clone(),
             self.ttl,
         );
-        let result = self.db(move |s| s.apply(&e, &c, &p, now(), t)).await?;
+        let result = self
+            .db(move |s| s.apply_with_verdict_cache(&e, &c, &p, now(), t, persist_verdict))
+            .await?;
         let mut m = self.metrics.lock().expect("metrics");
         m.novelty_duplicates += u64::from(result.duplicate);
         m.notifications_enqueued += u64::from(result.enqueued);

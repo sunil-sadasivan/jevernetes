@@ -113,6 +113,9 @@ pub struct Event {
     pub line_end: u64,
     pub line_count: u64,
     pub truncated: bool,
+    /// Redacted/private evidence must never seed template reuse.
+    #[serde(default)]
+    pub sensitive: bool,
     pub group_id: String,
     #[serde(flatten)]
     pub judgment: crate::jev::Judgment,
@@ -234,12 +237,14 @@ impl Parser {
             pending.line_count += 1;
             pending.text.push('\n');
             pending.text.push_str(&safe);
+            pending.sensitive |= line.private || safe != body;
             pending.truncated |= line.truncated || pending.text.len() > MAX_EVENT;
             truncate(&mut pending.text, MAX_EVENT);
             return None;
         }
         let completed = self.flush();
         let truncated = line.truncated || safe.len() > MAX_EVENT;
+        let sensitive = line.private || safe != body;
         let mut safe = safe;
         truncate(&mut safe, MAX_EVENT);
         self.pending = Some(Event {
@@ -251,6 +256,7 @@ impl Parser {
             line_end: self.line,
             line_count: 1,
             truncated,
+            sensitive,
             group_id: String::new(),
             judgment: Default::default(),
             baseline: Default::default(),
@@ -326,12 +332,28 @@ mod tests {
         assert!(!text.contains("private-fixture"));
         assert!(!text.contains("\\u001b"));
         assert!(text.contains("INFO ready"));
+        assert!(e[..e.len() - 1].iter().all(|event| event.sensitive));
+        assert!(!e.last().unwrap().sensitive);
         let safe = redact(
             r#"{"nested":{"access_key_id":"fake-value","secret":{"x":"hidden"}},"a":"Bearer fake-value"}"#,
         );
         assert!(!safe.contains("fake-value"));
         assert!(!safe.contains("hidden"));
         assert!(!redact(r#"message password="a\"b" done"#).contains("a\\"));
+    }
+    #[test]
+    fn sensitive_provenance_survives_multiline_truncation() {
+        let text = format!(
+            "INFO {}\n  password=synthetic-secret\n",
+            "x".repeat(MAX_EVENT - 5)
+        );
+        let e = parse(text.as_bytes());
+        assert_eq!(e.len(), 1);
+        assert!(e[0].truncated && e[0].sensitive);
+        assert!(
+            !e[0].text.contains("REDACTED"),
+            "marker lies beyond retained text"
+        );
     }
     #[test]
     fn key_marker_in_discarded_oversize_tail() {

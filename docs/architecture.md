@@ -6,6 +6,7 @@ The Rust runtime is one Cargo package with a reusable library and the production
 | --- | --- |
 | `events` | Typed event/source model, incremental byte framing, PEM state, redaction, timestamps, multiline assembly, deterministic IDs, offline rules |
 | `jev` | System One request construction, typed choice decoding, conservative confidence handling, HTTPS policy, retries and usage accounting |
+| `drain` | Opt-in clean-room online template partitions, literal/baseline guards, bounded template/version verdict cache |
 | `grouping` | Exact source/message fingerprints and bounded five-minute LRU of successful judgments |
 | `kubernetes` | Read-only paginated inventory/watch, instance discovery, snapshot/log streams, reconnect cursors and cancellation |
 | `runtime` | Bounded queue, batching, one analysis lane, intra-batch sharing, retention and loss accounting |
@@ -20,7 +21,7 @@ flowchart LR
   L --> B
   B --> C[Redaction + multiline events]
   C --> Q[Bounded event queue]
-  Q --> D[Batch + exact session cache]
+  Q --> D[Exact/off batching or bounded Drain selection]
   D --> E[Offline rules or typed Jev HTTPS]
   E --> R[Bounded retention + cumulative metrics]
   R --> O[Terminal + private JSON report]
@@ -72,3 +73,41 @@ flowchart LR
 ```
 
 The provider call runs outside the database transaction. The notification network call runs after committed intent and a committed attempt reservation. FULL-sync rollback-journal transactions and a serialized connection are adequate for one local writer; no network call holds a state lock. SQLite transaction guarantees inform this boundary ([SQLite transactions](https://www.sqlite.org/lang_transaction.html)). Provider and policy revisions have different reuse semantics: prompts and contract versions invalidate judgments, while policy is reapplied to reusable typed judgments. Incident keys remain stable across both. Model output cannot select a sink or execute an action.
+
+## Native Drain experiment
+
+`--grouping-strategy exact|off|drain` defaults to exact. Drain sits after framing,
+redaction and baseline computation and before remote classification; it never
+changes Event evidence or downstream report/policy/notification processing.
+One clean-room cluster per conservative stable-source/baseline/token-shape partition
+has a fixed token count. At most 256 partitions by default (validated 1–1024),
+2,048 input bytes, 128 tokens, 8,192 key bytes and one cached verdict per partition
+bound map and payload growth. Capacity misses classify without insertion; no
+unbounded member labels or pending verdict queues. Only allowlisted opaque UUID/hex
+IDs can generalize; IPs and numeric telemetry remain literal.
+
+Creation/generalization invalidates reuse; an unchanged match must have a fresh
+cacheable verdict. The lane honors configured batch size and classifies pending
+observations independently. Stable template IDs and version snapshots prevent stale
+responses from seeding reuse; completions happen only after the batch response.
+Classifications and requests are separate: one request can carry many representatives.
+Classification-only text includes a template and current bounded observation;
+original events and exact report/incident identities are preserved. The existing
+persistent exact cache is bypassed in Drain mode to keep prompt contracts separate.
+Baseline and strict literal guards constrain wildcard positions. Kubernetes stable
+scope intentionally excludes pod UID/name/restart and keeps context, namespace,
+container and kind; file sources retain full identity. See [the design](drain-template-mining.md)
+for the variable allowlist, private/truncated/uncacheable bypasses and semantic risks.
+
+State is process-local: restart costs extra classification, while incident/outbox
+persistence continues unchanged. Counter projection uses existing JSON and controller
+Prometheus surfaces. Verify without sockets or credentials:
+
+```sh
+cargo run --locked --example drain_reduction
+cargo test --locked --all-features drain
+```
+
+The deterministic fixture retains 1,000 events while selecting 2 synthetic
+representatives (998 avoided classifications); it measures neither live model
+accuracy nor provider billing.

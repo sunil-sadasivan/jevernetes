@@ -1,45 +1,77 @@
 # Rust validation
 
-## Drain experiment pre-integration check (2026-09-27)
+## Drain release-blocker fixes (2026-09-27)
 
-The [logdrain source review](docs/drain-template-mining.md) records an unresolved
-build-dependency blocker. No mining implementation or fixture was added, and no
-cost reduction was measured. The checks below concern the unchanged base runtime
-plus documentation, not a validated Drain integration. Cargo build/check/test
-commands used `CARGO_NET_OFFLINE=true` after reverting the unresolved dependency.
+The [implemented design](docs/drain-template-mining.md) now uses a clean-room,
+Apache-2.0 in-repository core. `logdrain`, `bincode` and `dashmap` are absent from
+both the lockfile and `cargo tree --locked`. No replacement dependency was added.
+Only allowlisted opaque UUID/hex IDs generalize; IPs and numeric telemetry remain
+literal. Exact grouping remains the default. Drain honors configured batch size
+and classifies pending observations independently, publishing verdicts only after
+responses with current template ID/version tickets.
 
-| Command | Result |
+The sequential socket-free demo measured **1,000 raw events, 2 synthetic
+classifications, 998 reuses (99.8%), 1 created template, 1 changed template,
+998 unchanged matches, 0 fallbacks and 1,000 retained events**. Only request IDs
+vary; source metadata and operational values remain fixed. It makes **zero network
+calls**. This is a classification reduction check, not a request-count, accuracy
+or billing benchmark. A prefilled batch incurs additional warm-up classifications.
+
+All 13 focused Drain tests pass. New controller regressions first establish a
+routine verdict and a successful reuse, then prove `127.0.0.1` → `0.0.0.0` and
+`duration_ms=1` → `86400000` each trigger classification, a non-routine security
+verdict, policy Notify and durable outbox evidence. The `max_batches=2`,
+`batch_size=8` multiline regression classifies/retains all 16 events and produces
+16 policy/incident/outbox records. Tests also cover independent batched templates,
+failed batches, no speculative reuse, ID grammar, stable template IDs, stale
+responses, bounded capacity, TTL/rescore, exact-cache isolation and recurrence.
+
+Cargo dependency operations used `CARGO_NET_OFFLINE=true` (or `--offline` for the
+initial lockfile pruning). All dependencies were cached; no network fetch occurred.
+
+| Exact validation | Result in this session |
 | --- | --- |
 | `cargo fmt --all --check` | Passed. |
 | `cargo clippy --locked --all-targets --all-features -- -D warnings` | Passed. |
-| `cargo test --locked --all-features` | 39 library tests passed; 15 failed at synthetic loopback listener binding with `Operation not permitted`. The sandbox prevents these fixtures from running; the suite is not green. |
-| `cargo test --locked --all-features --test cli` | All 10 CLI tests passed when run separately after the library-test failures. |
-| `cargo build --locked --release` | Passed with the original lockfile. |
-| Release-binary offline CLI smoke below | Passed: 2 raw events, 1 important, 1 uncertain. This is not a template-reduction fixture. |
-| `python3 -m unittest discover -s tests -v` | Ran 113 tests; one class-setup error binding the dashboard loopback listener (`Operation not permitted`). |
-| `node --check jevernetes/web/app.js` and `node --check jevernetes/web/search.js` | Passed. |
-| `node tests/test_context_ui.cjs`, `node tests/test_prompt_ui.cjs`, `node tests/test_review_ui.cjs`, `node tests/test_grouping_ui.cjs`, `node tests/test_search_ui.cjs` | All five passed. |
-| `python3 tools/check_controller_artifacts.py` and `python3 tools/check_release.py` | Passed. |
-| `cargo audit` | Unavailable: Cargo audit subcommand is not installed. |
-| `python3 -m bandit -r jevernetes --severity-level medium --confidence-level medium` | Unavailable: module is not installed. |
-| `python3 -m pip_audit --strict -r requirements-dev.txt` | Unavailable: module is not installed. |
-| `python3 -m build` | Unavailable: module is not installed; distribution-archive validation could not run. |
+| `cargo test --locked --all-features` | 54 library tests passed; 15 existing loopback fixtures failed at bind with `Operation not permitted`. Full suite remains blocked by the sandbox. |
+| `cargo test --locked --all-features drain` | All 13 focused tests passed. |
+| `cargo test --locked --all-features --test cli` | All 11 CLI tests passed separately. |
+| `cargo test --locked --all-features --doc` | Passed (0 doctests). |
+| `cargo build --locked --release` | Passed. |
+| `cargo run --locked --example drain_reduction` | Passed with the counts above. |
+| `cargo test --locked --all-features controller::tests::offline_controller_smoke_and_shutdown` | Blocked at synthetic loopback listener bind, `Operation not permitted`. |
+| Release-binary offline CLI smoke from CI | Passed: 2 events, 1 important, 1 uncertain. |
+| Release-binary Drain offline CLI smoke | Passed: 2 events, 0 reuses/provider attempts; local rules remain unchanged. |
+| `python3 tools/check_controller_artifacts.py` | Passed. |
+| `kubectl kustomize deploy/base` | Passed; local rendering only, no cluster/configuration access. |
+| `python3 tools/check_release.py` | Passed: 102 tracked files checked. |
+| `cargo tree --locked` | Confirmed no `logdrain`, `bincode` or `dashmap`. |
+| `cargo audit --deny warnings` | Unavailable: `cargo-audit` is not installed. No tooling installation or advisory database download was attempted. |
 | `git diff --check` | Passed. |
 
-Toolchains were Cargo/Rust 1.94 and Python 3.14 locally; CI's Python 3.11/3.13 matrix
-was not reproduced. No live Jev or Kubernetes calls, credentials, deployments,
-services, pushes, or PR operations were used. Re-run the complete test and audit
-matrix after making the required build dependencies, security tooling, and local
-fixture port binding available. Hosted CodeQL/TruffleHog jobs were not run locally.
+The 15 full-suite failures are loopback listener bind failures:
+
+- `controller::tests::{health_readiness_is_local_and_shutdown_interrupts_idle, offline_controller_smoke_and_shutdown, persistent_lookup_precedes_jev_and_only_new_groups_are_batched, webhook_never_follows_redirects, webhook_sanitized_request_status_and_bounds}`
+- `jev::tests::{request_timeout_is_safe_and_cancellation_accounts_inflight_attempt, response_bound_and_invalid_verdict_still_account_usage, retries_and_safe_http_errors_no_redirects}`
+- `kubernetes::tests::{live_http_reconnect_deduplicates_and_shutdown_joins, snapshot_backpressure_does_not_expire_transport_deadline, snapshot_cancellation_accounts_for_buffered_evidence, snapshot_http_contract_is_read_only_and_scoped, watch_discovery_starts_bounded_streams_and_cancels}`
+- `runtime::tests::{actual_http_grouping_reuses_across_batches_and_preserves_occurrences, failed_judgments_retry_next_batch_and_never_claim_reuse}`
+
+Rerun the full suite, controller smoke and `cargo audit --deny warnings` in an
+authorized host environment with loopback fixtures and audit tooling available.
+No live Jev/Kubernetes calls, credential reads, deployments, commits, pushes, PRs,
+main-checkout edits or Git-index changes occurred. All edits remain unstaged.
+Legacy Python/JavaScript suites were not rerun for this Rust-only implementation.
+Templates remain process-local, and scope can span workloads sharing the same
+namespace/container name. See the design for scope and equivalence limitations.
 
 ## Required checks
 
 Required checks (CI uses Rust 1.94):
 
 ```sh
-cargo fmt --check
-cargo clippy --all-targets --all-features -- -D warnings
-cargo test --all-features
+cargo fmt --all --check
+cargo clippy --locked --all-targets --all-features -- -D warnings
+cargo test --locked --all-features
 cargo build --release --locked
 printf 'ERROR synthetic failure\nINFO ready\n' | target/release/jevernetes files - --offline --json
 ```
@@ -60,7 +92,7 @@ retries, dead letters and recovery without modifying process-global stdout. Exis
 provider and collector tests remain enabled.
 
 ```sh
-cargo test --all-features controller::tests::offline_controller_smoke_and_shutdown
+cargo test --locked --all-features controller::tests::offline_controller_smoke_and_shutdown
 python3 tools/check_controller_artifacts.py
 kubectl kustomize deploy/base > /tmp/controller-manifests.yaml
 python3 -m unittest discover -s tests -v
@@ -95,7 +127,7 @@ deployment was performed.
 
 Independent-review fix verification (2026-09-23): all three focused defect regressions
 failed before the fixes and passed afterward. The final matrix passed `cargo fmt --check`,
-`cargo clippy --all-targets --all-features -- -D warnings`, `cargo test --all-features`
+`cargo clippy --locked --all-targets --all-features -- -D warnings`, `cargo test --locked --all-features`
 (64 tests: 54 library + 10 CLI), `cargo build --release --locked`, controller artifact checks,
 local `kubectl kustomize deploy/base`, release-content checks, release-binary offline/redaction
 smoke and `git diff --check`. Cargo used cached dependencies with no live service access;

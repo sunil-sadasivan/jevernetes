@@ -20,6 +20,8 @@ jobs:
       - run: cargo clippy --locked --all-targets --all-features -- -D warnings
       - run: cargo test --locked --all-features
       - run: cargo build --locked --release
+      - name: Offline native Drain reduction (no sockets or credentials)
+        run: cargo run --locked --example drain_reduction
       - name: Offline controller smoke (synthetic webhook only)
         run: cargo test --locked --all-features controller::tests::offline_controller_smoke_and_shutdown
       - name: Controller artifact static checks

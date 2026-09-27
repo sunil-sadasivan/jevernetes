@@ -18,6 +18,16 @@ pub struct Coverage {
 }
 #[derive(Default, Serialize)]
 pub struct Metrics {
+    pub drain_templates_created: u64,
+    pub drain_templates_changed: u64,
+    pub drain_templates_matched: u64,
+    pub drain_verdict_reuses: u64,
+    pub drain_classifications_avoided: u64,
+    pub drain_fallbacks: u64,
+    pub drain_capacity_fallbacks: u64,
+    pub drain_evictions: u64,
+    pub drain_expirations: u64,
+    pub drain_active_templates: usize,
     pub verdict_hits: u64,
     pub verdict_misses: u64,
     pub verdict_expirations: u64,

@@ -190,6 +190,8 @@ pub struct Jev {
     endpoint: String,
     model: String,
     pub usage: Usage,
+    #[cfg(test)]
+    pub(crate) synthetic: Option<std::collections::VecDeque<Result<Judgment, String>>>,
 }
 impl Jev {
     #[cfg(test)]
@@ -215,6 +217,8 @@ impl Jev {
             endpoint: "https://api.typesafe.ai/v1/systemone".into(),
             model,
             usage,
+            #[cfg(test)]
+            synthetic: None,
         })
     }
     pub async fn judge(
@@ -222,6 +226,17 @@ impl Jev {
         events: &[Event],
         stop: &CancellationToken,
     ) -> Result<Vec<Judgment>, String> {
+        #[cfg(test)]
+        if let Some(results) = &mut self.synthetic {
+            return events
+                .iter()
+                .map(|_| {
+                    results
+                        .pop_front()
+                        .expect("synthetic verdict for every representative")
+                })
+                .collect();
+        }
         let body = build_request(events, &self.model);
         for attempt in 0..3 {
             if stop.is_cancelled() {

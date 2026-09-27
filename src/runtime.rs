@@ -1,5 +1,6 @@
 //! One bounded analysis lane: batching, exact reuse, retention, and explicit loss counters.
 use crate::{
+    drain::{Drain, Strategy},
     events::{Event, Framer, Parser, Source},
     grouping::Cache,
     jev::{Importance, Jev, Judgment},
@@ -61,7 +62,8 @@ pub struct AnalyzeOptions {
     pub batch_size: usize,
     pub max_batches: u64,
     pub max_cost: f64,
-    pub grouping: bool,
+    pub grouping: Strategy,
+    pub drain_capacity: usize,
     pub retain: usize,
     pub max_events: u64,
     pub live: bool,
@@ -89,6 +91,16 @@ pub async fn analyze_controlled(
         NonZeroUsize::new(opts.retain).expect("positive retention"),
         Duration::from_secs(300),
     );
+    let mut drain = (opts.grouping == Strategy::Drain)
+        .then(|| {
+            Drain::new(
+                opts.drain_capacity,
+                Duration::from_secs(controller.as_ref().map_or(300, |c| c.ttl as u64)),
+                sender_metrics.clone(),
+            )
+            .ok()
+        })
+        .flatten();
     while let Some(first) = rx.recv().await {
         if !opts.live && report.total >= opts.max_events {
             gap(
@@ -117,10 +129,13 @@ pub async fn analyze_controlled(
         }
         sender_metrics.lock().expect("metrics lock").queue_depth = rx.len();
         let mut owned = Vec::new();
+        let mut drain_tickets = HashMap::new();
         let mut references = HashMap::new();
         let mut duplicate_of = HashMap::new();
         for (i, event) in batch.iter_mut().enumerate() {
-            if let Some(c) = &controller {
+            if opts.grouping == Strategy::Exact
+                && let Some(c) = &controller
+            {
                 match c.lookup(event).await {
                     Ok(Some(j)) => {
                         event.judgment = j;
@@ -149,7 +164,25 @@ pub async fn analyze_controlled(
                 };
                 continue;
             }
-            if opts.grouping && !event.truncated {
+            if opts.grouping == Strategy::Drain {
+                if let Some(drain) = &mut drain {
+                    if let Some(ticket) = drain.prepare(
+                        event,
+                        Instant::now(),
+                        controller.as_ref().is_some_and(|c| c.rescore),
+                    ) {
+                        // Classify each miss independently, including same-template
+                        // observations. No verdict is published until the response.
+                        drain_tickets.insert(i, ticket);
+                    }
+                    if event.analysis_reused {
+                        continue;
+                    }
+                } else {
+                    sender_metrics.lock().expect("metrics").drain_fallbacks += 1;
+                }
+            }
+            if opts.grouping == Strategy::Exact && !event.truncated {
                 if controller.is_none()
                     && let Some((judgment, id)) = cache.get(event, Instant::now())
                 {
@@ -184,14 +217,17 @@ pub async fn analyze_controlled(
                 Err(error.to_owned())
             } else {
                 report.batches += 1;
-                let events: Vec<_> = owned.iter().map(|&i| batch[i].clone()).collect();
+                let events: Vec<_> = owned
+                    .iter()
+                    .map(|&i| Drain::representative(&batch[i], drain_tickets.get(&i)))
+                    .collect();
                 client.judge(&events, &stop).await
             };
             match result {
                 Ok(judgments) => {
                     for (&i, judgment) in owned.iter().zip(judgments) {
                         batch[i].judgment = judgment.conservative(batch[i].truncated);
-                        if opts.grouping && controller.is_none() {
+                        if opts.grouping == Strategy::Exact && controller.is_none() {
                             cache.insert(&batch[i], Instant::now());
                         }
                     }
@@ -204,6 +240,13 @@ pub async fn analyze_controlled(
             }
             if opts.live && (error.is_some() || client.usage.estimated_cost_usd >= opts.max_cost) {
                 stop.cancel();
+            }
+        }
+        if let Some(drain) = &mut drain {
+            for &i in &owned {
+                if let Some(ticket) = drain_tickets.remove(&i) {
+                    drain.complete(ticket, &batch[i], Instant::now());
+                }
             }
         }
         for (i, representative) in duplicate_of {
@@ -224,7 +267,9 @@ pub async fn analyze_controlled(
         }
         for mut event in batch {
             if let Some(c) = &controller
-                && c.apply(&event).await.is_err()
+                && c.apply_with_verdict_cache(&event, opts.grouping != Strategy::Drain)
+                    .await
+                    .is_err()
             {
                 gap(
                     &sender_metrics,
@@ -564,7 +609,8 @@ mod tests {
             batch_size: 2,
             max_batches: 1,
             max_cost: 1.0,
-            grouping: true,
+            grouping: Strategy::Exact,
+            drain_capacity: crate::drain::DEFAULT_CAPACITY,
             retain: 2,
             max_events: 100,
             live: false,
@@ -600,7 +646,8 @@ mod tests {
             batch_size: 2,
             max_batches: 1,
             max_cost: 1.0,
-            grouping: true,
+            grouping: Strategy::Exact,
+            drain_capacity: crate::drain::DEFAULT_CAPACITY,
             retain: 4,
             max_events: 100,
             live: true,
@@ -657,7 +704,8 @@ mod tests {
             batch_size: 2,
             max_batches: 2,
             max_cost: 1.0,
-            grouping: true,
+            grouping: Strategy::Exact,
+            drain_capacity: crate::drain::DEFAULT_CAPACITY,
             retain: 4,
             max_events: 100,
             live: false,
@@ -674,6 +722,151 @@ mod tests {
                 .all(|e| !format!("{:?}", e.judgment).contains("private"))
         );
         assert_eq!(server.await.unwrap().len(), 2);
+    }
+    #[tokio::test]
+    async fn drain_failed_representatives_retry_and_modes_remain_distinct_offline() {
+        use crate::drain::tests::{event, verdict};
+        for strategy in [Strategy::Drain, Strategy::Exact, Strategy::Off] {
+            let metrics = Arc::new(Mutex::new(Metrics::default()));
+            let (tx, rx) = mpsc::channel(8);
+            for i in 1..=5 {
+                tx.send(event(i)).await.unwrap();
+            }
+            drop(tx);
+            let responses = if strategy == Strategy::Drain { 3 } else { 5 };
+            let mut outcomes = vec![Ok(verdict()); responses];
+            outcomes[1] = Err("synthetic failure".into());
+            let mut client = Jev::test_client("unused-offline".into());
+            client.synthetic = Some(outcomes.into());
+            let opts = AnalyzeOptions {
+                batch_size: 1,
+                max_batches: 10,
+                max_cost: 1.0,
+                grouping: strategy,
+                drain_capacity: 4,
+                retain: 8,
+                max_events: 100,
+                live: false,
+                print_events: false,
+            };
+            let (r, client) = analyze(
+                rx,
+                metrics.clone(),
+                Some(client),
+                opts,
+                CancellationToken::new(),
+            )
+            .await;
+            assert!(client.unwrap().synthetic.unwrap().is_empty());
+            assert_eq!(r.total, 5);
+            assert_eq!(r.batches, responses as u64);
+            assert_eq!(r.reused, if strategy == Strategy::Drain { 2 } else { 0 });
+            assert_eq!(r.counts["unknown"], 1);
+        }
+    }
+    #[tokio::test]
+    async fn drain_batches_independent_representatives_without_speculative_reuse_offline() {
+        use crate::drain::tests::{event, verdict};
+        for fail_first_batch in [false, true] {
+            let metrics = Arc::new(Mutex::new(Metrics::default()));
+            let (tx, rx) = mpsc::channel(24);
+            let mut observations = Vec::new();
+            for i in 1..=24 {
+                let mut e = event(i);
+                if i % 2 == 0 {
+                    e.text = e.text.replace("count=1", "count=2");
+                }
+                observations.push(e.clone());
+                tx.send(e).await.unwrap();
+            }
+            drop(tx);
+            let outcomes: Vec<_> = (1..=8)
+                .map(|i| {
+                    let mut j = verdict();
+                    if i % 2 == 0 {
+                        j.importance = Importance::Routine;
+                        j.category = crate::jev::Category::Routine;
+                    }
+                    j
+                })
+                .collect();
+            let mut responses = Vec::new();
+            if fail_first_batch {
+                responses.push(Err("synthetic failure".into()));
+            }
+            responses.extend(outcomes.iter().cloned().map(Ok));
+            let mut client = Jev::test_client("unused-offline".into());
+            client.synthetic = Some(responses.into());
+            let (report, client) = analyze(
+                rx,
+                metrics.clone(),
+                Some(client),
+                AnalyzeOptions {
+                    batch_size: 8,
+                    max_batches: 2,
+                    max_cost: 1.0,
+                    grouping: Strategy::Drain,
+                    drain_capacity: 2,
+                    retain: 24,
+                    max_events: 24,
+                    live: false,
+                    print_events: false,
+                },
+                CancellationToken::new(),
+            )
+            .await;
+            let client = client.unwrap();
+            assert!(client.synthetic.unwrap().is_empty());
+            assert_eq!(client.usage.request_attempts, 0);
+            let classified_start = if fail_first_batch { 8 } else { 0 };
+            assert_eq!(report.batches, if fail_first_batch { 2 } else { 1 });
+            assert_eq!(report.reused, if fail_first_batch { 8 } else { 16 });
+            assert_eq!((report.total, report.events.len()), (24, 24));
+            for (i, e) in report.events.iter().enumerate() {
+                assert_eq!(e.text, observations[i].text);
+                if i < classified_start {
+                    assert!(e.judgment.analysis_error.is_some());
+                } else {
+                    assert_eq!(e.judgment.importance, outcomes[i % 8].importance);
+                    assert_eq!(e.judgment.category, outcomes[i % 8].category);
+                }
+                assert_eq!(e.analysis_reused, i >= classified_start + 8);
+            }
+            let m = metrics.lock().unwrap();
+            assert_eq!(m.drain_templates_created, 2);
+            assert_eq!(m.drain_templates_changed, 2);
+        }
+    }
+    #[tokio::test]
+    async fn exact_reuses_identical_events_but_off_classifies_each_offline() {
+        use crate::drain::tests::{event, verdict};
+        for strategy in [Strategy::Exact, Strategy::Off] {
+            let metrics = Arc::new(Mutex::new(Metrics::default()));
+            let (tx, rx) = mpsc::channel(4);
+            for _ in 0..3 {
+                tx.send(event(1)).await.unwrap();
+            }
+            drop(tx);
+            let mut client = Jev::test_client("unused-offline".into());
+            let count = if strategy == Strategy::Exact { 1 } else { 3 };
+            client.synthetic = Some(vec![Ok(verdict()); count].into());
+            let opts = AnalyzeOptions {
+                batch_size: 1,
+                max_batches: 10,
+                max_cost: 1.0,
+                grouping: strategy,
+                drain_capacity: 4,
+                retain: 4,
+                max_events: 10,
+                live: false,
+                print_events: false,
+            };
+            let (r, client) =
+                analyze(rx, metrics, Some(client), opts, CancellationToken::new()).await;
+            assert_eq!(r.batches, count as u64);
+            assert_eq!(r.reused, 3 - count as u64);
+            assert!(client.unwrap().synthetic.unwrap().is_empty());
+        }
     }
     #[tokio::test]
     async fn snapshots_wait_for_queue_capacity_and_cancellation_unblocks() {

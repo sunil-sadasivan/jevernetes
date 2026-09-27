@@ -181,11 +181,22 @@ impl Store {
         now: i64,
         ttl: i64,
     ) -> Result<Applied> {
+        self.apply_with_verdict_cache(event, contract, policy, now, ttl, true)
+    }
+    pub(crate) fn apply_with_verdict_cache(
+        &mut self,
+        event: &Event,
+        contract: &Contract,
+        policy: &Policy,
+        now: i64,
+        ttl: i64,
+        persist_verdict: bool,
+    ) -> Result<Applied> {
         if event.text.len() > crate::events::MAX_EVENT {
             return Err("Controller evidence exceeds limit");
         }
         let tx = db(self.conn.transaction())?;
-        if cacheable(event) && !event.analysis_reused {
+        if persist_verdict && cacheable(event) && !event.analysis_reused {
             let count: i64 = db(tx.query_row("SELECT count(*) FROM verdicts", [], |r| r.get(0)))?;
             let exists: bool = db(tx.query_row(
                 "SELECT EXISTS(SELECT 1 FROM verdicts WHERE key=?1)",

@@ -280,3 +280,29 @@ fn controller_rejects_symlinks_hardlinks_and_sidecar_aliases() {
     }
     assert_eq!(std::fs::read(&state).unwrap(), before);
 }
+
+#[test]
+fn grouping_strategy_validation_and_offline_compatibility() {
+    for args in [
+        vec![],
+        vec!["--no-grouping"],
+        vec!["--grouping-strategy", "off"],
+        vec!["--grouping-strategy", "exact"],
+        vec!["--grouping-strategy", "drain"],
+    ] {
+        let r = run(b"ERROR failed\nINFO ready\n", &args);
+        assert!(r.status.success(), "{:?}", r.stderr);
+        let v: serde_json::Value = serde_json::from_slice(&r.stdout).unwrap();
+        assert_eq!(v["summary"]["events"], 2);
+        assert_eq!(v["summary"]["important"], 1);
+        assert_eq!(v["summary"]["reused_events"], 0);
+    }
+    for args in [
+        vec!["--drain-capacity", "0"],
+        vec!["--drain-capacity", "1025"],
+        vec!["--grouping-strategy", "invalid"],
+        vec!["--no-grouping", "--grouping-strategy", "drain"],
+    ] {
+        assert!(!run(b"", &args).status.success());
+    }
+}

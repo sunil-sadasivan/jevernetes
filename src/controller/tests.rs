@@ -395,7 +395,8 @@ async fn offline_controller_smoke_and_shutdown() {
         batch_size: 2,
         max_batches: 1,
         max_cost: 1.0,
-        grouping: true,
+        grouping: crate::drain::Strategy::Exact,
+        drain_capacity: crate::drain::DEFAULT_CAPACITY,
         retain: 2,
         max_events: 10,
         live: true,
@@ -574,7 +575,8 @@ async fn persistent_lookup_precedes_jev_and_only_new_groups_are_batched() {
         batch_size: 3,
         max_batches: 1,
         max_cost: 1.0,
-        grouping: true,
+        grouping: crate::drain::Strategy::Exact,
+        drain_capacity: crate::drain::DEFAULT_CAPACITY,
         retain: 3,
         max_events: 10,
         live: true,
@@ -1143,4 +1145,349 @@ async fn writer_errors_release_permit_and_success_flushes_jsonl() {
     sink.deliver("id", "{}").await.unwrap();
     assert_eq!(*bytes.lock().unwrap(), b"{}\n");
     assert!(flushed.load(Ordering::Acquire));
+}
+
+#[tokio::test]
+async fn drain_preserves_events_policy_recurrence_and_notification_evidence_offline() {
+    use crate::{
+        drain::{
+            Strategy,
+            tests::{event as drain_event, verdict},
+        },
+        runtime::AnalyzeOptions,
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let mut c = controller(&dir);
+    c.policy.categories = vec![Category::Dependency];
+    c.policy.recurrence_count = 3;
+    let mut events: Vec<_> = (1..=20).map(drain_event).collect();
+    // Same source/text, fresh timestamps: recurrence remains exact, not template based.
+    let mut repeat = events[2].clone();
+    repeat.timestamp = Some("2026-09-20T00:00:01Z".into());
+    repeat.id = "repeat-one".into();
+    events.push(repeat.clone());
+    repeat.timestamp = Some("2026-09-20T00:00:02Z".into());
+    repeat.id = "repeat-two".into();
+    events.push(repeat);
+    let (tx, rx) = tokio::sync::mpsc::channel(32);
+    for e in &events {
+        tx.send(e.clone()).await.unwrap();
+    }
+    drop(tx);
+    let mut client = crate::jev::Jev::test_client("unused-offline".into());
+    client.synthetic = Some(vec![Ok(verdict()); 8].into());
+    let opts = AnalyzeOptions {
+        batch_size: 8,
+        max_batches: 100,
+        max_cost: 1.0,
+        grouping: Strategy::Drain,
+        drain_capacity: 4,
+        retain: 32,
+        max_events: 100,
+        live: false,
+        print_events: false,
+    };
+    let (report, client) = crate::runtime::analyze_controlled(
+        rx,
+        c.metrics.clone(),
+        Some(client),
+        opts,
+        CancellationToken::new(),
+        Some(c.clone()),
+    )
+    .await;
+    assert!(client.unwrap().synthetic.unwrap().is_empty());
+    assert_eq!((report.total, report.batches, report.reused), (22, 1, 14));
+    for (before, after) in events.iter().zip(&report.events) {
+        assert_eq!(before.id, after.id);
+        assert_eq!(before.text, after.text);
+        assert_eq!(before.source, after.source);
+        assert_eq!(before.group_id, after.group_id);
+    }
+    let value = report.value(
+        &c.metrics,
+        &crate::jev::Usage::new(0.0, 0.0),
+        serde_json::json!({}),
+        false,
+        false,
+        0.0,
+    );
+    assert_eq!(value["events"].as_array().unwrap().len(), 22);
+    assert_eq!(value["important_groups"].as_array().unwrap().len(), 20);
+    let store = c.store.lock().unwrap();
+    assert_eq!(
+        store
+            .conn
+            .query_row("SELECT count(*) FROM incidents", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        20
+    );
+    assert_eq!(
+        store
+            .conn
+            .query_row("SELECT max(count) FROM incidents", [], |r| r
+                .get::<_, i64>(0))
+            .unwrap(),
+        3
+    );
+    assert_eq!(
+        store
+            .conn
+            .query_row("SELECT count(*) FROM verdicts", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        0,
+        "Drain never contaminates persistent exact verdicts"
+    );
+    let mut statement = store.conn.prepare("SELECT payload FROM outbox").unwrap();
+    let payloads: Vec<serde_json::Value> = statement
+        .query_map([], |r| r.get::<_, String>(0))
+        .unwrap()
+        .map(|r| serde_json::from_str(&r.unwrap()).unwrap())
+        .collect();
+    assert_eq!(payloads.len(), 21);
+    assert!(
+        payloads
+            .iter()
+            .any(|p| p["recurrence_count"] == 3 && p["escalation_level"] == 1)
+    );
+    for e in &events[..20] {
+        assert!(
+            payloads
+                .iter()
+                .any(|p| p["evidence"] == e.text && p["source"]["pod_uid"] == e.source["pod_uid"])
+        );
+    }
+    let m = c.metrics.lock().unwrap();
+    assert_eq!(m.policy_notify, 22);
+    assert_eq!(m.drain_classifications_avoided, 14);
+}
+
+#[tokio::test]
+async fn drain_bypasses_persistent_exact_verdicts_and_honors_rescore_offline() {
+    use crate::drain::{
+        Strategy,
+        tests::{event as drain_event, verdict},
+    };
+    for rescore in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut c = controller(&dir);
+        c.rescore = rescore;
+        let mut seed = drain_event(1);
+        seed.judgment = verdict();
+        c.apply(&seed).await.unwrap();
+        let (tx, rx) = tokio::sync::mpsc::channel(4);
+        for _ in 0..3 {
+            tx.send(drain_event(1)).await.unwrap();
+        }
+        drop(tx);
+        let count = if rescore { 3 } else { 1 };
+        let mut client = crate::jev::Jev::test_client("unused-offline".into());
+        client.synthetic = Some(vec![Ok(verdict()); count].into());
+        let opts = crate::runtime::AnalyzeOptions {
+            batch_size: 1,
+            max_batches: 10,
+            max_cost: 1.0,
+            grouping: Strategy::Drain,
+            drain_capacity: 1,
+            retain: 4,
+            max_events: 10,
+            live: false,
+            print_events: false,
+        };
+        let (report, client) = crate::runtime::analyze_controlled(
+            rx,
+            c.metrics.clone(),
+            Some(client),
+            opts,
+            CancellationToken::new(),
+            Some(c.clone()),
+        )
+        .await;
+        assert_eq!(report.batches, count as u64);
+        assert_eq!(report.reused, 3 - count as u64);
+        assert!(client.unwrap().synthetic.unwrap().is_empty());
+        assert_eq!(c.metrics.lock().unwrap().verdict_hits, 0);
+    }
+}
+
+#[tokio::test]
+async fn drain_operational_values_reclassify_and_notify_offline() {
+    use crate::drain::{Strategy, tests::event as drain_event};
+    for (literal, changed) in [
+        ("ip=127.0.0.1", "ip=0.0.0.0"),
+        ("duration_ms=1", "duration_ms=86400000"),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let c = controller(&dir);
+        let mut observations: Vec<_> = (1..=4).map(drain_event).collect();
+        // Parse the changed evidence afresh, including its baseline and exact IDs.
+        let mut parser = Parser::new(observations[3].source.clone());
+        parser.feed(Line {
+            bytes: observations[3].text.replace(literal, changed).into_bytes(),
+            truncated: false,
+            private: false,
+        });
+        observations[3] = parser.flush().unwrap();
+        assert_eq!(
+            serde_json::to_value(&observations[0].baseline).unwrap(),
+            serde_json::to_value(&observations[3].baseline).unwrap()
+        );
+        let mut routine = crate::drain::tests::verdict();
+        routine.importance = Importance::Routine;
+        routine.severity = Severity::Info;
+        routine.category = Category::Routine;
+        let mut risk = crate::drain::tests::verdict();
+        risk.category = Category::Security;
+        let mut client = crate::jev::Jev::test_client("unused-offline".into());
+        client.synthetic = Some(vec![Ok(routine.clone()), Ok(routine), Ok(risk)].into());
+        let (tx, rx) = tokio::sync::mpsc::channel(4);
+        for e in &observations {
+            tx.send(e.clone()).await.unwrap();
+        }
+        drop(tx);
+        let (report, client) = crate::runtime::analyze_controlled(
+            rx,
+            c.metrics.clone(),
+            Some(client),
+            crate::runtime::AnalyzeOptions {
+                batch_size: 1,
+                max_batches: 3,
+                max_cost: 1.0,
+                grouping: Strategy::Drain,
+                drain_capacity: 4,
+                retain: 4,
+                max_events: 4,
+                live: false,
+                print_events: false,
+            },
+            CancellationToken::new(),
+            Some(c.clone()),
+        )
+        .await;
+        let client = client.unwrap();
+        assert!(client.synthetic.unwrap().is_empty());
+        assert_eq!(client.usage.request_attempts, 0);
+        assert_eq!((report.total, report.batches, report.reused), (4, 3, 1));
+        assert!(report.events[2].analysis_reused);
+        assert!(!report.events[3].analysis_reused);
+        assert_eq!(report.events[3].judgment.category, Category::Security);
+        for (before, after) in observations.iter().zip(&report.events) {
+            assert_eq!(before.text, after.text);
+            assert_eq!(before.id, after.id);
+            assert_eq!(before.source, after.source);
+        }
+        let m = c.metrics.lock().unwrap();
+        assert_eq!(
+            (m.policy_ignore, m.policy_notify, m.notifications_enqueued),
+            (3, 1, 1)
+        );
+        drop(m);
+        let store = c.store.lock().unwrap();
+        let payload: String = store
+            .conn
+            .query_row("SELECT payload FROM outbox", [], |r| r.get(0))
+            .unwrap();
+        let payload: serde_json::Value = serde_json::from_str(&payload).unwrap();
+        assert_eq!(payload["evidence"], observations[3].text);
+        assert_eq!(
+            store
+                .conn
+                .query_row("SELECT count(*) FROM verdicts", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+    }
+}
+
+#[tokio::test]
+async fn drain_multiline_fallback_preserves_batch_budget_and_controller_processing_offline() {
+    use crate::drain::{
+        Strategy,
+        tests::{event as drain_event, verdict},
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let mut c = controller(&dir);
+    c.policy.categories = vec![Category::Dependency];
+    let mut observations = Vec::new();
+    for i in 1..=16 {
+        let e = drain_event(i);
+        let mut parser = Parser::new(e.source);
+        parser.feed(Line {
+            bytes: e.text.into_bytes(),
+            truncated: false,
+            private: false,
+        });
+        parser.feed(Line {
+            bytes: b"  at synthetic stack frame".to_vec(),
+            truncated: false,
+            private: false,
+        });
+        let e = parser.flush().unwrap();
+        assert_eq!(e.line_count, 2);
+        observations.push(e);
+    }
+    let (tx, rx) = tokio::sync::mpsc::channel(16);
+    for e in &observations {
+        tx.send(e.clone()).await.unwrap();
+    }
+    drop(tx);
+    let mut client = crate::jev::Jev::test_client("unused-offline".into());
+    client.synthetic = Some(vec![Ok(verdict()); 16].into());
+    let (report, client) = crate::runtime::analyze_controlled(
+        rx,
+        c.metrics.clone(),
+        Some(client),
+        crate::runtime::AnalyzeOptions {
+            batch_size: 8,
+            max_batches: 2,
+            max_cost: 1.0,
+            grouping: Strategy::Drain,
+            drain_capacity: 4,
+            retain: 16,
+            max_events: 16,
+            live: false,
+            print_events: false,
+        },
+        CancellationToken::new(),
+        Some(c.clone()),
+    )
+    .await;
+    let client = client.unwrap();
+    assert!(client.synthetic.unwrap().is_empty());
+    assert_eq!(client.usage.request_attempts, 0);
+    assert_eq!(
+        (
+            report.total,
+            report.batches,
+            report.reused,
+            report.events.len()
+        ),
+        (16, 2, 0, 16)
+    );
+    for (before, after) in observations.iter().zip(&report.events) {
+        assert_eq!(before.text, after.text);
+        assert_eq!(before.source, after.source);
+        assert_eq!(before.id, after.id);
+        assert_eq!(
+            serde_json::to_value(&after.judgment).unwrap(),
+            serde_json::to_value(verdict()).unwrap()
+        );
+    }
+    let m = c.metrics.lock().unwrap();
+    assert_eq!(
+        (m.drain_fallbacks, m.policy_notify, m.notifications_enqueued),
+        (16, 16, 16)
+    );
+    drop(m);
+    let store = c.store.lock().unwrap();
+    for table in ["incidents", "outbox"] {
+        assert_eq!(
+            store
+                .conn
+                .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            16
+        );
+    }
 }

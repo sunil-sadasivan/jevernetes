@@ -1,6 +1,7 @@
 //! Bounded event ingestion and advisory analysis. No remediation or cluster writes.
 #![forbid(unsafe_code)]
 pub mod controller;
+pub mod drain;
 pub mod events;
 pub mod grouping;
 pub mod jev;

@@ -20,7 +20,36 @@ Files support plain text, JSONL, gzip (including concatenated members), and `-` 
 
 Without `--offline`, the key is read from `TYPESAFE_API_KEY`, then `TYPESAFEAI_API_KEY`, then `TYPESAFE_API_KEY_FILE`. The endpoint is fixed to `https://api.typesafe.ai/v1/systemone`. Each representative has importance, severity and category choice questions, each requiring numeric confidence in [0,1]. Category includes `fraud`, separately from `security`. Low-confidence routine answers (<0.7) and truncated online events become uncertain. Invalid/incomplete answers, failed requests and exhausted budgets become unknown. Offline rules mark failure/warning/HTTP-5xx keywords important and everything else uncertain; they do not produce AI confidence.
 
-Exact redacted message/source groups reuse successful judgments for five minutes in a bounded session cache. Source includes pod UID, restart count and previous/current identity. Numbers, IDs, stack traces and all source fields remain significant. Truncated and failed judgments are never cached; `--no-grouping` disables reuse. This paragraph describes `files`/`k8s` session modes. The explicit `controller` mode adds persistent reuse and deterministic policy; see [controller usage, policy and operations](controller.md). Review overrides are not imported from legacy Python.
+By default (`--grouping-strategy exact`), exact redacted message/source groups reuse successful judgments for five minutes in a bounded session cache. Source includes pod UID, restart count and previous/current identity. Numbers, IDs, stack traces and all source fields remain significant. Truncated and failed judgments are never cached; `--no-grouping` or `--grouping-strategy off` disables reuse. This paragraph describes `files`/`k8s` session modes. The explicit `controller` mode adds persistent reuse and deterministic policy; see [controller usage, policy and operations](controller.md). Review overrides are not imported from legacy Python.
+
+Opt in to in-repository template mining with `--grouping-strategy drain --drain-capacity 256`
+(capacity range 1–1024). Drain honors `--batch-size`; new/changed templates and
+pending observations classify independently within a batch. Unchanged eligible matches
+reuse for a non-sliding five minutes. Kubernetes scope uses context, namespace,
+container and kind, allowing replicas to share while keeping full original evidence.
+Baseline state and literal words/status codes remain distinct; only a fixed allowlist
+of opaque UUID/hex ID fields can vary. IPs and all numeric telemetry stay literal. Truncated, private/redacted,
+multiline, oversized and unsupported input takes the ordinary classification path.
+Failed, unknown, uncertain, security/fraud or invalid-confidence verdicts cannot be
+reused. State is bounded and process-local; restart can add classifications.
+See [the exact grammar, metrics and limitations](drain-template-mining.md).
+
+Safe local commands (no credentials or network):
+
+```sh
+cargo run --locked --example drain_reduction
+cargo test --locked --all-features drain
+printf 'INFO ready count=1\nINFO ready count=2\n' | target/release/jevernetes files - --offline --grouping-strategy drain --json
+```
+
+The demo uses synthetic verdicts and measures 1,000 events / 2 representatives /
+998 reuses / 1,000 retained events with sequential responses and only request IDs
+varying. This counts classifications, not production HTTP requests; batching changes
+warm-up costs (8 representatives for a prefilled batch of 8). Ordinary `--offline` still uses local rules and
+does not mine or produce synthetic Jev confidence. For an authorized later online
+file run, `target/release/jevernetes files synthetic.txt --grouping-strategy drain
+--drain-capacity 256 --max-batches 20 --output .runs/drain.json` uses the existing
+credential configuration. No online validation is implied by the demo.
 
 One async analysis lane batches up to `--batch-size` events (default 8, maximum 64), with a 350 ms fill deadline. `--max-batches` defaults to 500. A batch can make up to three HTTP attempts; 429/500/502/503/504 use bounded backoff, jitter and Retry-After. Requests have a 30-second total timeout and 10-second connection timeout. Redirects are rejected, responses capped at 1 MiB, and errors exclude response bodies and transport details.
 
