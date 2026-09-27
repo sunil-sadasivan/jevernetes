@@ -2,8 +2,11 @@
 
 ## Logger clock identity (2026-09-27)
 
-Strict logger clock prefixes now share template identity while retaining the date,
-level and clock format. Quoted/structured payloads remain literal, including
+Strict logger clock prefixes remaining in `Event.text` now share template identity
+while retaining any date still in that text, level and clock format. Parser-extracted
+timestamps remain event metadata outside template identity; extraction is syntactic
+and also strips timestamp-shaped invalid dates. This is an existing Parser boundary,
+not a logger-clock regression. Quoted/structured payloads remain literal, including
 ID-looking words inside user content. No dependency, persistence, policy or
 notification implementation changed. See [the grammar and limits](docs/drain-template-mining.md).
 
@@ -16,19 +19,29 @@ classifications in 4 requests and reuses 22 events; with batch size 8 it perform
 10 classifications in 2 requests and reuses 16. These are injected verdicts with
 zero provider attempts and zero measured cost, not a billing or accuracy benchmark.
 
-Validation used cached dependencies with `CARGO_NET_OFFLINE=true`:
+A follow-up Parser-to-Drain regression uses `Parser::feed`/`flush` to verify that
+valid dated prefixes and a timestamp-shaped invalid calendar date are stripped
+from text, retained verbatim as timestamp metadata, and excluded from template
+identity. Direct grammar tests are explicitly scoped to already-built `Event.text`.
+
+Validation used cached dependencies with `CARGO_NET_OFFLINE=true`. The timestamp
+boundary review reran every check below except the unchanged reduction demo:
 
 | Check | Result |
 | --- | --- |
 | `cargo fmt --all --check` | Passed. |
 | `cargo clippy --locked --all-targets --all-features -- -D warnings` | Passed. |
-| `cargo test --locked --all-features drain` | 19 passed. |
-| `cargo test --locked --all-features` | 60 library tests passed; the same 15 loopback bind fixtures listed below failed with `Operation not permitted`. Sandbox-limited, not a passing full suite. |
+| `cargo test --locked --all-features drain` | 20 passed. |
+| `cargo test --locked --all-features` | 61 library tests passed; the same 15 loopback bind fixtures listed below failed with `Operation not permitted`. Sandbox-limited, not a passing full suite. |
 | `cargo test --locked --all-features --test cli` | 11 passed. |
 | `cargo test --locked --all-features --doc` | Passed (0 doctests). |
 | `cargo build --locked --release` | Passed. |
 | `git diff --check` | Passed. |
 | `cargo run --locked --example drain_reduction` | 1,000 retained events, 2 synthetic classifications, 998 reuses, 0 fallbacks, 0 network calls. |
+
+Host loopback works as reported by the user; this run was confined to the sandbox,
+where listener binds were denied with OS code 1 (`PermissionDenied`). These results
+do not indicate a host loopback failure or establish a passing full suite on the host.
 
 Private report replay uses an untracked `/tmp` helper that reads the original files
 in place and prints only aggregate counts. It compares the baseline miner with the

@@ -39,21 +39,32 @@ are not parsed/reserialized by the miner: all keys, values, key order, duplicate
 escapes and malformed syntax remain byte-literal. No structured field is newly
 allowlisted.
 
-A leading logger clock may vary when immediately followed by a known level and at
-least one message token. Supported clocks are `HH:MM:SS`, optionally followed by a
+Parser timestamp extraction happens before Drain identity. A leading RFC-style
+timestamp such as `2024-02-29 07:08:09` or `2024-02-29T07:08:09Z` followed by a
+space or tab is removed from `Event.text` and retained as `Event.timestamp` metadata,
+outside template identity. This existing Parser boundary uses a syntactic regex,
+not calendar validation: a timestamp-shaped prefix such as
+`2023-02-29 07:08:09` is also extracted and retained verbatim. Different extracted
+dates can therefore share template identity when the remaining text and scope match.
+
+For clock tokens that remain in `Event.text`, a leading logger clock may vary
+when immediately followed by a known level and at least one message token.
+Supported clocks are `HH:MM:SS`, optionally followed by a
 period or comma and exactly 3, 6 or 9 fractional digits, optionally enclosed in a
 single pair of square brackets. All digits must be ASCII; hours are 00–23 and
-minutes/seconds 00–59. A strict valid `YYYY-MM-DD` calendar date may precede the
-clock and stays literal. Levels are TRACE, DEBUG, INFO, WARN, WARNING, ERROR, FATAL
-or CRITICAL, entirely upper- or lowercase, with an optional single trailing colon.
+minutes/seconds 00–59. A strict valid `YYYY-MM-DD` calendar date still present in
+`Event.text` may precede the clock and stays literal (for example,
+`2024-02-29 [07:08:09] INFO ready`). Levels are TRACE, DEBUG, INFO, WARN, WARNING,
+ERROR, FATAL or CRITICAL, entirely upper- or lowercase, with an optional single trailing colon.
 The level, brackets, fractional separator and precision remain distinct identities.
 Malformed dates/clocks, timezones, mixed-case levels, missing message tokens and
-clocks elsewhere in the message do not normalize. This recognizes logger prefix
-syntax, not the semantics of arbitrary user text; use exact/off if user-controlled
+clocks elsewhere in `Event.text` do not normalize at this stage. This recognizes
+logger prefix syntax, not the semantics of arbitrary user text; use exact/off if user-controlled
 content can impersonate logger prefixes.
 
-Everything else stays literal, including IP addresses, counts, durations, latencies,
-bytes, attempts, status codes, bare numbers, words, paths, user names and field names.
+Everything else in `Event.text` stays literal, including IP addresses, counts,
+durations, latencies, bytes, attempts, status codes, bare numbers, words, paths,
+user names and field names.
 In particular, `ip=127.0.0.1` cannot cover `ip=0.0.0.0`, and `duration_ms=1` cannot
 cover `duration_ms=86400000`. Only single-line text with single spaces between tokens
 is eligible. Control characters, irregular whitespace, literal `<*>`, missing stable
@@ -73,8 +84,8 @@ remains on Events and reports; notifications retain the existing source allowlis
 Files/other sources use every original source field (including file path).
 
 This is an experimental cost optimization, not a semantic-equivalence or accuracy
-guarantee. Only the specified logger clocks and opaque IDs may vary; applications
-that encode meaningful state in these fields should use exact/off. Local baseline
+guarantee. Within `Event.text`, only the specified logger clocks and opaque IDs may
+vary; applications that encode meaningful state in these fields should use exact/off. Local baseline
 separation and literal guards reduce risk but do not prove equivalence.
 Security, fraud and uncertain verdicts are deliberately not reusable by Drain.
 

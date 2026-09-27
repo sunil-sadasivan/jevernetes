@@ -67,8 +67,9 @@ fn variable(token: &str) -> Option<String> {
     }
 }
 
-/// A clock is metadata only in a leading logger prefix followed by a known
-/// level and a message. An optional strict calendar date remains literal.
+/// Normalize clocks remaining in Event.text after Parser timestamp extraction,
+/// only in a leading logger prefix followed by a known level and a message.
+/// An optional strict calendar date still in Event.text remains literal.
 /// No clocks elsewhere in the message (durations, user content) are normalized.
 fn logger_clock(tokens: &[&str]) -> Option<(usize, String)> {
     let first = *tokens.first()?;
@@ -405,7 +406,59 @@ pub(crate) mod tests {
         d.complete(t, e, now);
     }
     #[test]
-    fn logger_clock_only_reuses_without_changing_evidence() {
+    fn parser_dated_prefixes_are_metadata_outside_drain_identity() {
+        let stamps = [
+            "2024-02-28 07:08:09",
+            "2024-02-29 08:09:10.123+00:00",
+            "2024-03-01T09:10:11Z",
+            // Parser extracts by regex, without calendar validation. This invalid
+            // date is retained verbatim as metadata and also removed from text.
+            "2023-02-29 12:00:00",
+        ];
+        let mut parser = Parser::new(event(1).source);
+        let mut events = Vec::new();
+        for stamp in stamps {
+            events.extend(parser.feed(Line {
+                bytes: format!("{stamp} INFO ready\n").into_bytes(),
+                truncated: false,
+                private: false,
+            }));
+        }
+        events.extend(parser.feed(Line {
+            bytes: b"INFO ready\n".to_vec(),
+            truncated: false,
+            private: false,
+        }));
+        events.extend(parser.flush());
+        assert_eq!(events.len(), stamps.len() + 1);
+        let undated = events.last().unwrap().clone();
+        assert!(undated.timestamp.is_none());
+        let expected_identity = identity(&undated).unwrap();
+        assert!(expected_identity.1.iter().all(Option::is_none));
+        let first_id = events[0].id.clone();
+        let mut d = miner(1);
+        let now = Instant::now();
+        for (i, e) in events.iter_mut().enumerate() {
+            assert_eq!(e.text, "INFO ready");
+            assert_eq!(e.timestamp.as_deref(), stamps.get(i).copied());
+            assert_eq!(identity(e).unwrap(), expected_identity);
+            assert_eq!(e.group_id, undated.group_id);
+            if i == 0 {
+                classify(&mut d, e, now);
+            } else {
+                assert_ne!(e.id, first_id);
+                assert!(d.prepare(e, now, false).is_none());
+                assert!(e.analysis_reused);
+            }
+            assert_eq!(e.timestamp.as_deref(), stamps.get(i).copied());
+            assert_eq!(e.text, "INFO ready");
+        }
+        assert_eq!(d.metrics.lock().unwrap().drain_verdict_reuses, 4);
+    }
+    #[test]
+    fn logger_clock_in_built_event_text_reuses_without_changing_evidence() {
+        // Exercise identity grammar on already-built Event.text. Parser would
+        // extract some dated prefixes before this stage; see the ingestion test above.
         for (a, b, c) in [
             ("07:08:09", "07:08:10", "07:08:11"),
             ("[07:08:09]", "[07:08:10]", "[07:08:11]"),
@@ -442,7 +495,9 @@ pub(crate) mod tests {
         }
     }
     #[test]
-    fn ambiguous_clocks_and_grammar_changes_stay_literal() {
+    fn ambiguous_clocks_and_grammar_changes_in_built_event_text_stay_literal() {
+        // These direct Event.text assignments bypass Parser timestamp extraction,
+        // including its extraction of syntactically timestamp-shaped invalid dates.
         for text in [
             "24:00:00 INFO ready",
             "12:60:00 INFO ready",
