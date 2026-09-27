@@ -89,5 +89,15 @@ a canonical prefix with explicit strict clock grammar; compatible overlapping sc
 are rejected. Reviewed source fields/complete shape, protected fields,
 literals, risk contract and a computed artifact digest bind reuse. Verdicts remain
 session-only, expire without sliding, and never persist as active rules in SQLite.
-All evidence still reaches controller policy. See the
+Only reviewed publication/invalidation treats Info and Noise as equivalent
+non-escalating routine outcomes. Category and importance must both be Routine with
+confidence at least 0.85, protecting the risk boundary after the reviewed rule pins
+all structural and protected semantics. Severity confidence is validated as present,
+finite and within [0,1], but has no minimum here; baseline-important, failed,
+truncated, unsafe or non-routine evidence remains ineligible. Unsafe batch siblings,
+including evidence changed after ticket preparation, invalidate all pending tickets
+for that fingerprint before publication. Drain, shadow promotion, generic cacheability
+and persistent-cache policy are unchanged. Low severity confidence still goes to
+Review under default controller policy. These mechanics establish neither model
+accuracy nor production acceptance. All evidence still reaches controller policy. See the
 [reviewed contract](docs/provider-template-learning.md#reviewed-artifact-activation).

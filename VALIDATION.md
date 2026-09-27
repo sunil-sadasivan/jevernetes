@@ -1,3 +1,65 @@
+# Reviewed routine risk-equivalence predicate (2026-09-27)
+
+Preflight passed with a clean worktree at exact HEAD
+`5de0c6fc342785e6bc69f2159fa0676a4ef847d8`. A private predicate in `reviewed.rs`
+now governs reviewed publication and batch invalidation only. It requires unchanged
+`controller::cacheable`, baseline not important, Routine category and importance,
+Info/Noise severity, and category/importance confidence each at least 0.85. Those
+confidence thresholds protect the risk boundary. Severity confidence remains
+required, finite and within [0,1], but is not thresholded after a reviewed v2 rule
+has pinned complete shape, protected and operation literals, prefix grammar and
+source scope. Info and Noise are equivalent non-escalating outcomes only within
+this reviewed contract. Drain, semantic shadow promotion, generic cacheability,
+controller policy and persistent-cache behavior are unchanged.
+
+Two focused adversarial tests cover Info and Noise at severity confidence 0.0,
+0.1, 0.84, 0.85 and 1.0; exact category/importance threshold acceptance; missing,
+NaN, infinite and out-of-range confidences; low category/importance confidence;
+every non-routine category/importance and escalating/unknown severity; analysis
+errors, baseline-important, truncated and unsafe evidence; and changed source,
+prefix, shape, operation and protected literals. Unsafe completions invalidate all
+pending tickets before any publication, including when evidence changes after
+preparation. Tests cover both batch orders, multiple safe siblings, delayed tickets,
+no speculative reuse, rescore bypass and subsequent independent safe retry.
+Existing TTL/capacity/expiry/stale-owner, protected semantics and shadow tests pass.
+
+The synthetic example and runtime replay now deliberately inject severity confidence
+0.0 for routine seeds. Whole-line results remain **300/1/299** and logger-envelope
+results remain **200/3/197** sequentially and **200/10/190** at batch size 8
+(retained/classifications/reuses). Every event keeps its evidence. Controller policy
+still produces 198 Review decisions for low severity confidence and two security
+Notify decisions; the replay stores zero persistent verdicts. These are deterministic
+mechanical checks, not model accuracy, calibration or production acceptance evidence.
+
+All Cargo commands used cached dependencies with `CARGO_NET_OFFLINE=true` and
+`--locked` where applicable. Dependencies and lockfile are unchanged. No private
+aggregate reports/artifacts, real credentials, provider APIs or Kubernetes were
+accessed. No external network, push, PR or deployment was used. No Kubernetes
+command or tooling installation was run.
+
+| Check | Result |
+| --- | --- |
+| `cargo fmt --all --check`; `git diff --check` | Passed. |
+| `cargo clippy --locked --all-targets --all-features -- -D warnings` | Passed. |
+| Focused `cargo test --locked --all-features --lib reviewed` | 18 passed. |
+| Socket-free `cargo test --locked --all-features` with the 17 previously documented loopback fixtures explicitly skipped | 97 library + 15 CLI tests passed; main and doctests passed (zero tests). No unrestricted full Rust pass claimed. |
+| `cargo build --locked --release --examples --bin jevernetes` | Passed. |
+| All three release examples | Passed: reviewed 300/1/299 and 200/3/197; shadow 304 classifications/zero reuse; Drain 1,000/2/998. |
+| Release offline CLI smoke | Passed: two synthetic events retained with expected baseline judgments. |
+| Python unittest discovery | 113 tests ran; `test_dashboard.HttpTests` class setup failed at denied loopback bind. **Not a passing full suite.** |
+| Socket-free Python discovery excluding the four `test_dashboard.HttpTests` cases | 113 passed. |
+| Python compileall; five JS helper suites; app/search JS syntax | Passed. |
+| Controller/deployment and tracked-release static checks | Passed; no deployment or Kubernetes command. |
+| Python build/security tooling | build, setuptools, Bandit and pip-audit unavailable; no installation or network fetch attempted. |
+
+The initial Python exclusion used the wrong class name, so discovery attempted a
+synthetic loopback listener; the sandbox rejected the bind with `Operation not
+permitted`. The corrected socket-free run passed. Rust loopback fixtures were
+excluded without attempting sockets. Full loopback-dependent validation remains
+for an authorized environment; historical full-suite results below are not results
+for this changed snapshot. Browser integration, live providers and production
+acceptance were not evaluated.
+
 # Reviewed logger envelopes and subset scopes (2026-09-27)
 
 Started at exact local HEAD `3542ac4074c3e7b9e0f419b2b9e4df0cb6059e89`.

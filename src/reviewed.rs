@@ -2,7 +2,7 @@
 use crate::{
     controller::{Contract, digest},
     events::{Event, Source},
-    jev::Judgment,
+    jev::{Category, Importance, Judgment, Severity},
     report::SharedMetrics,
     structured::{self, Kind},
 };
@@ -18,6 +18,23 @@ use std::{
 const FILE_LIMIT: usize = 65536;
 static NEXT_OWNER: AtomicU64 = AtomicU64::new(0);
 const ERROR: &str = "Invalid reviewed template rules";
+/// Only reviewed rules pin the structural/protected semantics needed for this
+/// risk equivalence. Category and importance protect the routine risk boundary;
+/// Info/Noise are both non-escalating here. cacheable still validates all three
+/// confidences, including severity's presence, finiteness and [0, 1] range.
+fn reviewed_routine(event: &Event) -> bool {
+    crate::controller::cacheable(event)
+        && !event.baseline.important
+        && event.judgment.importance == Importance::Routine
+        && event.judgment.category == Category::Routine
+        && matches!(event.judgment.severity, Severity::Info | Severity::Noise)
+        && [
+            event.judgment.importance_confidence,
+            event.judgment.category_confidence,
+        ]
+        .into_iter()
+        .all(|c| c.is_some_and(|v| v >= 0.85))
+}
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Artifact {
@@ -506,7 +523,7 @@ impl Matcher {
         self.expire(now, wall);
         for (t, e) in &items {
             if t.owner == self.owner
-                && !crate::semantic::routine(e)
+                && (!reviewed_routine(e) || self.key(e, wall).is_none_or(|(key, _)| key != t.key))
                 && let Some(slot) = self
                     .entries
                     .get_mut(&t.key)
@@ -522,7 +539,7 @@ impl Matcher {
                 continue;
             }
             if e.analysis_reused
-                || !crate::semantic::routine(e)
+                || !reviewed_routine(e)
                 || self.rules.artifact.rules[t.rule].expires_at <= wall
                 || self.key(e, wall).is_none_or(|(key, _)| key != t.key)
             {

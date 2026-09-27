@@ -190,8 +190,12 @@ is intentional. Use `cargo run --locked --example reviewed_reduction` for determ
 replay at a fixed synthetic time: 300 retained events, one injected classification,
 299 reuses, plus a 200-event logger-envelope replay across two synthetic pods
 (198 routine, two distinct security-shape records): three classifications, 197 reuses,
-all evidence retained and zero network calls. A prefilled batch of eight requires eight independent
-classifications before any verdict publishes.
+all evidence retained and zero network calls. Routine seeds deliberately use severity
+confidence 0.0 with category/importance confidence 0.95. A prefilled batch of eight
+requires eight independent classifications before any verdict publishes; the runtime
+regression retains 200 events with ten classifications and 190 reuses. The controller
+regression preserves default policy: 198 low-confidence Review decisions and two
+security Notify decisions, with zero persistent verdicts.
 
 ```
 jevernetes files - --grouping-strategy semantic --template-rules .runs/reviewed.json
@@ -279,9 +283,17 @@ restrict which values can match a rule. Unknown/new/missing keys, changed types,
 scoped source fields or structure always miss. No similarity, embeddings or fine-tuning participates.
 
 Only a completed, independently classified, baseline-clean, cacheable routine judgment
-(category routine; severity info/noise; all three finite confidences ≥0.85) can seed a
-fingerprint. Failed, important, uncertain, security/fraud and non-cacheable judgments
-cannot seed it. Any unsafe sibling in the same batch invalidates pending publication
+(importance routine; category routine; severity info/noise; category and importance
+confidence each ≥0.85) can seed a fingerprint. Category and importance confidence
+protect the routine risk boundary. Severity confidence must still be present, finite
+and within [0,1] through the unchanged generic `controller::cacheable` check, but
+has no minimum (0.0 is valid) only for this reviewed contract: info and noise are
+equivalent non-escalating outcomes after the rule has pinned complete shape,
+protected/operation literals, prefix grammar and source scope. This does not relax
+Drain, semantic shadow promotion, persistent-cache eligibility or controller policy;
+policy still routes low severity confidence to Review by default. It is a narrow
+reviewed reuse contract, not model calibration or production acceptance evidence.
+Failed, important, uncertain, security/fraud and non-cacheable judgments cannot seed it. Any unsafe sibling in the same batch invalidates pending publication
 for that fingerprint regardless of completion order. A later independent classification
 may retry. Generation tickets reject stale completions after TTL/recreation; cache hits
 do not extend TTL. `--rescore` bypasses all reviewed reads. Rule expiry is checked on

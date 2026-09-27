@@ -79,7 +79,8 @@ fn replay(envelope: bool) {
                     Category::Routine
                 },
                 importance_confidence: Some(0.95),
-                severity_confidence: Some(0.95),
+                // Synthetic uncertainty between non-escalating Info/Noise.
+                severity_confidence: Some(if security { 0.95 } else { 0.0 }),
                 category_confidence: Some(0.95),
                 analysis_error: None,
             };

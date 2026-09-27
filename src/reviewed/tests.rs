@@ -334,10 +334,196 @@ fn failed_uncertain_noncacheable_and_same_batch_unsafe_never_seed() {
     }
 }
 #[test]
+fn reviewed_info_noise_accept_valid_low_severity_only() {
+    use crate::controller::policy::{Decision, Policy};
+    let now = Instant::now();
+    for severity in [Severity::Info, Severity::Noise] {
+        for confidence in [0.0, 0.1, 0.84, 0.85, 1.0] {
+            let mut m = matcher(1000, 4, 300);
+            let mut seed = event(1);
+            seed.judgment.severity = severity;
+            seed.judgment.severity_confidence = Some(confidence);
+            seed.judgment.category_confidence = Some(0.85);
+            seed.judgment.importance_confidence = Some(0.85);
+            assert!(crate::controller::cacheable(&seed));
+            // The shadow threshold and controller policy must not inherit this exception.
+            assert_eq!(crate::semantic::routine(&seed), confidence >= 0.85);
+            assert_eq!(
+                Policy::default().decide(&seed),
+                if confidence < 0.85 {
+                    Decision::Review
+                } else {
+                    Decision::Ignore
+                }
+            );
+            let ticket = m.prepare(&mut seed, now, 1000, false).unwrap();
+            let mut pending = event(2);
+            let sibling = m.prepare(&mut pending, now, 1000, false).unwrap();
+            pending.judgment = seed.judgment.clone();
+            assert!(!pending.analysis_reused);
+            m.complete_batch(vec![(ticket, &seed), (sibling, &pending)], now, 1000);
+            let mut hit = event(3);
+            assert!(m.prepare(&mut hit, now, 1000, false).is_none());
+            assert!(hit.analysis_reused);
+            assert_eq!(hit.judgment.severity, severity);
+            assert_eq!(hit.judgment.severity_confidence, Some(confidence));
+            assert_eq!(hit.analysis_representative_id, Some(seed.id));
+            assert_eq!(m.metrics.lock().unwrap().reviewed_publications, 1);
+            let mut rescore = event(4);
+            assert!(m.prepare(&mut rescore, now, 1000, true).is_some());
+            assert!(!rescore.analysis_reused);
+        }
+    }
+}
+
+#[test]
+fn reviewed_risk_boundary_rejects_adversarial_seeds_and_invalidates_all_pending_tickets() {
+    let mut variants = Vec::new();
+    for field in ["importance", "category", "severity"] {
+        for confidence in [
+            None,
+            Some(f64::NAN),
+            Some(f64::INFINITY),
+            Some(f64::NEG_INFINITY),
+            Some(-0.01),
+            Some(1.01),
+            Some(0.0),
+            Some(0.849999),
+        ] {
+            if field == "severity" && matches!(confidence, Some(c) if (0.0..=1.0).contains(&c)) {
+                continue;
+            }
+            let mut e = event(1);
+            e.judgment.severity_confidence = Some(0.0);
+            match field {
+                "importance" => e.judgment.importance_confidence = confidence,
+                "category" => e.judgment.category_confidence = confidence,
+                _ => e.judgment.severity_confidence = confidence,
+            }
+            variants.push((format!("{field}/{confidence:?}"), e));
+        }
+    }
+    for category in [
+        Category::Deploy,
+        Category::Capacity,
+        Category::Dependency,
+        Category::Security,
+        Category::Fraud,
+        Category::Data,
+        Category::Config,
+        Category::Transient,
+        Category::Unknown,
+    ] {
+        let mut e = event(1);
+        e.judgment.category = category;
+        variants.push((format!("category/{category:?}"), e));
+    }
+    for importance in [
+        Importance::Important,
+        Importance::Uncertain,
+        Importance::Unknown,
+    ] {
+        let mut e = event(1);
+        e.judgment.importance = importance;
+        variants.push((format!("importance/{importance:?}"), e));
+    }
+    for severity in [
+        Severity::Degraded,
+        Severity::Impact,
+        Severity::Outage,
+        Severity::Unknown,
+    ] {
+        for confidence in [0.0, 0.84, 1.0] {
+            let mut e = event(1);
+            e.judgment.severity = severity;
+            e.judgment.severity_confidence = Some(confidence);
+            variants.push((format!("severity/{severity:?}/{confidence}"), e));
+        }
+    }
+    for mutation in [
+        "error",
+        "truncated",
+        "baseline",
+        "sensitive",
+        "redacted",
+        "prefix",
+        "source",
+        "shape",
+        "status",
+        "operation",
+    ] {
+        let mut e = event(1);
+        e.judgment.severity_confidence = Some(0.0);
+        match mutation {
+            "error" => e.judgment.analysis_error = Some("synthetic failure".into()),
+            "truncated" => e.truncated = true,
+            "baseline" => e.baseline.important = true,
+            "sensitive" => e.sensitive = true,
+            "redacted" => e.text = e.text.replace("payload-1", "[REDACTED]"),
+            "prefix" => e.text = format!("12:34:56 INFO {}", e.text),
+            "source" => {
+                e.source.insert("path".into(), json!("other"));
+            }
+            "shape" => e.text = e.text.replace("{", "{\"new\":true,"),
+            "status" => e.text = e.text.replace("200", "403"),
+            _ => {
+                e.text = e
+                    .text
+                    .replace("getPhoneCalloutSessionDetails", "differentOperation")
+            }
+        }
+        variants.push((mutation.into(), e));
+    }
+    let now = Instant::now();
+    for (name, bad) in variants {
+        // Alone and with two safe siblings in either completion order. Tickets
+        // precede classification; mutations must not leave sibling tickets usable.
+        for mode in [0, 1, 2] {
+            let mut m = matcher(1000, 4, 300);
+            let t = m.prepare(&mut event(1), now, 1000, false).unwrap();
+            let mut safe = event(2);
+            safe.judgment.severity_confidence = Some(0.0);
+            let delayed = m.prepare(&mut safe, now, 1000, false).unwrap();
+            let mut items = vec![(t, &bad)];
+            if mode != 0 {
+                for _ in 0..2 {
+                    let ticket = m.prepare(&mut event(2), now, 1000, false).unwrap();
+                    items.push((ticket, &safe));
+                }
+                if mode == 2 {
+                    items.reverse();
+                }
+            }
+            m.complete_batch(items, now, 1000);
+            m.complete_batch(vec![(delayed, &safe)], now, 1000);
+            assert!(
+                m.entries.values().all(|e| e.blocked && e.verdict.is_none()),
+                "{name}/{mode}"
+            );
+            assert_eq!(
+                m.metrics.lock().unwrap().reviewed_publications,
+                0,
+                "{name}/{mode}"
+            );
+            let mut next = event(3);
+            let retry = m.prepare(&mut next, now, 1000, false).unwrap();
+            assert!(!next.analysis_reused, "{name}/{mode}");
+            // A subsequent independent safe classification may retry.
+            next.judgment.severity_confidence = Some(0.0);
+            m.complete_batch(vec![(retry, &next)], now, 1000);
+            let mut hit = event(4);
+            m.prepare(&mut hit, now, 1000, false);
+            assert!(hit.analysis_reused, "{name}/{mode}");
+        }
+    }
+}
+
+#[test]
 fn literal_shape_source_and_ineligible_variants_never_collide() {
     let now = Instant::now();
     let mut m = matcher(1000, 64, 300);
     let mut a = event(1);
+    a.judgment.severity_confidence = Some(0.0);
     let t = m.prepare(&mut a, now, 1000, false).unwrap();
     m.complete_batch(vec![(t, &a)], now, 1000);
     for mutation in [
@@ -536,7 +722,9 @@ async fn snapshot_ingest_reaches_the_same_matcher_without_network() {
     runtime::ingest(raw.as_bytes(), event(1).source, 1024 * 1024, &sender, &stop).await;
     drop(sender);
     let mut client = ProviderClient::test_client("unused-offline".into());
-    client.synthetic = Some(vec![Ok(event(1).judgment)].into());
+    let mut seed = event(1).judgment;
+    seed.severity_confidence = Some(0.0);
+    client.synthetic = Some(vec![Ok(seed)].into());
     let (report, client) = runtime::analyze_with_templates(
         rx,
         metrics.clone(),
@@ -1042,6 +1230,8 @@ async fn two_pod_envelope_replay_retains_198_routine_and_two_security_occurrence
                 e.judgment.category = Category::Security;
                 e.judgment.importance = Importance::Important;
                 e.judgment.severity = Severity::Impact;
+            } else {
+                e.judgment.severity_confidence = Some(0.0);
             }
             if i <= batch_size as u32 || i > 198 {
                 judgments.push(Ok(e.judgment.clone()));
@@ -1085,14 +1275,20 @@ async fn two_pod_envelope_replay_retains_198_routine_and_two_security_occurrence
             assert_eq!(e.analysis_reused, (batch_size..198).contains(&i));
         }
         let m = metrics.lock().unwrap();
-        assert_eq!(m.policy_ignore, 198);
+        assert_eq!(m.policy_ignore, 0);
+        assert_eq!(m.policy_review, 198);
         assert_eq!(m.policy_notify, 2);
-        assert_eq!(m.notifications_enqueued, 2);
+        assert_eq!(m.notifications_enqueued, 200);
         assert_eq!(m.verdict_hits, 0);
         assert_eq!(m.template_provider_attempts, 0);
         drop(m);
         let store = controller.store.lock().unwrap();
-        let mut statement = store.conn.prepare("SELECT payload FROM outbox").unwrap();
+        let mut statement = store
+            .conn
+            .prepare(
+                "SELECT payload FROM outbox WHERE json_extract(payload, '$.decision') = 'notify'",
+            )
+            .unwrap();
         let payloads = statement
             .query_map([], |r| r.get::<_, String>(0))
             .unwrap()
