@@ -1,6 +1,43 @@
 # Rust validation
 
-## Drain release-blocker fixes (2026-09-27)
+## Logger clock identity (2026-09-27)
+
+Strict logger clock prefixes now share template identity while retaining the date,
+level and clock format. Quoted/structured payloads remain literal, including
+ID-looking words inside user content. No dependency, persistence, policy or
+notification implementation changed. See [the grammar and limits](docs/drain-template-mining.md).
+
+Six additional synthetic regressions cover clock-only reuse, malformed/ambiguous
+prefixes, literal structured payloads (escapes, duplicate/reordered keys, oversized
+and malformed inputs), semantic changes, batch warm-up and controller notification
+evidence. A 26-event runtime fixture retains every event and separately classifies
+security/fraud observations after routine reuse. With batch size 1 it performs 4
+classifications in 4 requests and reuses 22 events; with batch size 8 it performs
+10 classifications in 2 requests and reuses 16. These are injected verdicts with
+zero provider attempts and zero measured cost, not a billing or accuracy benchmark.
+
+Validation used cached dependencies with `CARGO_NET_OFFLINE=true`:
+
+| Check | Result |
+| --- | --- |
+| `cargo fmt --all --check` | Passed. |
+| `cargo clippy --locked --all-targets --all-features -- -D warnings` | Passed. |
+| `cargo test --locked --all-features drain` | 19 passed. |
+| `cargo test --locked --all-features` | 60 library tests passed; the same 15 loopback bind fixtures listed below failed with `Operation not permitted`. Sandbox-limited, not a passing full suite. |
+| `cargo test --locked --all-features --test cli` | 11 passed. |
+| `cargo test --locked --all-features --doc` | Passed (0 doctests). |
+| `cargo build --locked --release` | Passed. |
+| `git diff --check` | Passed. |
+| `cargo run --locked --example drain_reduction` | 1,000 retained events, 2 synthetic classifications, 998 reuses, 0 fallbacks, 0 network calls. |
+
+Private report replay uses an untracked `/tmp` helper that reads the original files
+in place and prints only aggregate counts. It compares the baseline miner with the
+new miner at batch sizes 1 and 8, replaying recorded judgments without synthesizing
+confidence or weakening uncertain/security/fraud exclusions. Template reduction
+alone does not establish classification savings. No private evidence or sample
+fixtures are included in this repository.
+
+## Prior Drain baseline validation (2026-09-27)
 
 The [implemented design](docs/drain-template-mining.md) now uses a clean-room,
 Apache-2.0 in-repository core. `logdrain`, `bincode` and `dashmap` are absent from

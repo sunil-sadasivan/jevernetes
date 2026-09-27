@@ -20,7 +20,7 @@ pub enum Strategy {
 
 struct Partition {
     id: u64,
-    // None is a wildcard, introduced only at an allowlisted opaque-ID position.
+    // None is a wildcard, introduced only at a validated clock or opaque-ID position.
     tokens: Vec<Option<String>>,
     version: String,
     verdict: Option<(Instant, Judgment, String)>,
@@ -67,6 +67,76 @@ fn variable(token: &str) -> Option<String> {
     }
 }
 
+/// A clock is metadata only in a leading logger prefix followed by a known
+/// level and a message. An optional strict calendar date remains literal.
+/// No clocks elsewhere in the message (durations, user content) are normalized.
+fn logger_clock(tokens: &[&str]) -> Option<(usize, String)> {
+    let first = *tokens.first()?;
+    let date = first.len() == 10
+        && first.bytes().enumerate().all(|(i, b)| {
+            if matches!(i, 4 | 7) {
+                b == b'-'
+            } else {
+                b.is_ascii_digit()
+            }
+        })
+        && chrono::NaiveDate::parse_from_str(first, "%Y-%m-%d").is_ok();
+    let index = usize::from(date);
+    let level = tokens.get(index + 1)?.trim_end_matches(':');
+    if tokens.len() < index + 3
+        || tokens[index + 1].ends_with("::")
+        || !matches!(
+            level,
+            "TRACE"
+                | "DEBUG"
+                | "INFO"
+                | "WARN"
+                | "WARNING"
+                | "ERROR"
+                | "FATAL"
+                | "CRITICAL"
+                | "trace"
+                | "debug"
+                | "info"
+                | "warn"
+                | "warning"
+                | "error"
+                | "fatal"
+                | "critical"
+        )
+    {
+        return None;
+    }
+    let raw = tokens[index];
+    let bracketed = raw.starts_with('[');
+    let clock = if bracketed {
+        raw.strip_prefix('[')?.strip_suffix(']')?
+    } else {
+        raw
+    };
+    let bytes = clock.as_bytes();
+    if !matches!(bytes.len(), 8 | 12 | 15 | 18)
+        || !bytes.iter().enumerate().all(|(i, b)| match i {
+            2 | 5 => *b == b':',
+            8 => matches!(b, b'.' | b','),
+            _ => b.is_ascii_digit(),
+        })
+        || &bytes[..2] > b"23".as_slice()
+        || &bytes[3..5] > b"59".as_slice()
+        || &bytes[6..8] > b"59".as_slice()
+    {
+        return None;
+    }
+    Some((
+        index,
+        format!(
+            "logger-clock:{bracketed}:{}:{}",
+            bytes.get(8).copied().unwrap_or(b' '),
+            bytes.len()
+        ),
+    ))
+}
+
 fn identity(event: &Event) -> Option<(String, Vec<Option<String>>)> {
     if event.judgment.analysis_error.is_some()
         || event.truncated
@@ -83,7 +153,21 @@ fn identity(event: &Event) -> Option<(String, Vec<Option<String>>)> {
     if tokens.is_empty() || tokens.len() > MAX_TOKENS || tokens.join(" ") != event.text {
         return None;
     }
-    let shape: Vec<_> = tokens.iter().map(|t| variable(t)).collect();
+    let clock = logger_clock(&tokens);
+    // Quoted/structured payloads can contain standalone name=value words as
+    // user content. Keep the entire payload literal, including malformed JSON,
+    // duplicate/reordered keys and escapes. Do not parse and reserialize it.
+    let plain_fields = tokens.iter().enumerate().all(|(i, t)| {
+        clock.as_ref().is_some_and(|(index, _)| *index == i)
+            || !t.contains(['"', '\'', '{', '}', '[', ']'])
+    });
+    let mut shape: Vec<_> = tokens
+        .iter()
+        .map(|t| if plain_fields { variable(t) } else { None })
+        .collect();
+    if let Some((index, grammar)) = clock {
+        shape[index] = Some(grammar);
+    }
     // Retain exact literal tokens; a variable is tagged separately from a literal.
     let skeleton: Vec<_> = tokens
         .iter()
@@ -294,6 +378,18 @@ pub(crate) mod tests {
             analysis_error: None,
         }
     }
+    pub(crate) fn clock_event(i: u32) -> Event {
+        let mut p = Parser::new(event(i).source);
+        p.feed(Line {
+            bytes: format!(
+                "[07:08:09.{i:03}] INFO served status=200 ip=127.0.0.1 count=1 duration_ms=1"
+            )
+            .into_bytes(),
+            truncated: false,
+            private: false,
+        });
+        p.flush().unwrap()
+    }
     fn miner(capacity: usize) -> Drain {
         Drain::new(
             capacity,
@@ -307,6 +403,172 @@ pub(crate) mod tests {
         assert!(!e.analysis_reused);
         e.judgment = verdict();
         d.complete(t, e, now);
+    }
+    #[test]
+    fn logger_clock_only_reuses_without_changing_evidence() {
+        for (a, b, c) in [
+            ("07:08:09", "07:08:10", "07:08:11"),
+            ("[07:08:09]", "[07:08:10]", "[07:08:11]"),
+            ("07:08:09,001", "07:08:09,002", "07:08:09,003"),
+            ("07:08:09.000001", "07:08:09.000002", "07:08:09.000003"),
+            (
+                "[07:08:09.000000001]",
+                "[07:08:09.000000002]",
+                "[07:08:09.000000003]",
+            ),
+        ] {
+            for date in ["", "2024-02-29 "] {
+                for level in ["INFO", "info:"] {
+                    let mut d = miner(1);
+                    let now = Instant::now();
+                    for (i, clock) in [a, b, c].iter().enumerate() {
+                        let mut e = event(1);
+                        e.text = format!("{date}{clock} {level} completed");
+                        let before = serde_json::to_value(&e).unwrap();
+                        if i < 2 {
+                            classify(&mut d, &mut e, now);
+                        } else {
+                            assert!(d.prepare(&mut e, now, false).is_none());
+                            assert!(e.analysis_reused);
+                        }
+                        let after = serde_json::to_value(&e).unwrap();
+                        for field in ["text", "source", "id", "timestamp", "group_id", "baseline"] {
+                            assert_eq!(before[field], after[field]);
+                        }
+                    }
+                    assert_eq!(d.metrics.lock().unwrap().drain_verdict_reuses, 1);
+                }
+            }
+        }
+    }
+    #[test]
+    fn ambiguous_clocks_and_grammar_changes_stay_literal() {
+        for text in [
+            "24:00:00 INFO ready",
+            "12:60:00 INFO ready",
+            "12:00:60 INFO ready",
+            "1:02:03 INFO ready",
+            "12:00:00.1 INFO ready",
+            "12:00:00.1234 INFO ready",
+            "12:00:00Z INFO ready",
+            "[12:00:00 INFO ready",
+            "12:00:00] INFO ready",
+            "[[12:00:00]] INFO ready",
+            "１２:00:00 INFO ready",
+            "12:00:00 InfO ready",
+            "12:00:00 INFO:: ready",
+            "12:00:00 INFO",
+            "12:00:00 elapsed ready",
+            "duration=12:00:00 INFO ready",
+            "message 12:00:00 INFO ready",
+            "2023-02-29 12:00:00 INFO ready",
+            "2024-13-01 12:00:00 INFO ready",
+            "2024-1-01 12:00:00 INFO ready",
+            "12-00-00 INFO ready",
+        ] {
+            assert!(
+                logger_clock(&text.split(' ').collect::<Vec<_>>()).is_none(),
+                "{text}"
+            );
+            let mut e = event(1);
+            e.text = text.into();
+            assert!(identity(&e).unwrap().1.iter().all(Option::is_none));
+        }
+        let mut keys = std::collections::HashSet::new();
+        for prefix in [
+            "12:00:00",
+            "[12:00:00]",
+            "12:00:00.001",
+            "12:00:00,001",
+            "12:00:00.000001",
+            "2024-02-28 12:00:00",
+            "2024-02-29 12:00:00",
+        ] {
+            let mut e = event(1);
+            e.text = format!("{prefix} INFO ready");
+            assert!(keys.insert(identity(&e).unwrap().0));
+        }
+    }
+    #[test]
+    fn structured_payloads_remain_byte_literal_under_clock_normalization() {
+        // Entirely synthetic JSON, including words that could otherwise look
+        // like standalone allowlisted IDs inside user-supplied string content.
+        let payloads = [
+            r#"{"status":200,"trace_id":"0123456789abcdef","message":"ok"}"#,
+            r#"{"status":403,"trace_id":"0123456789abcdef","message":"forbidden"}"#,
+            r#"{"status":200,"trace_id":"fedcba9876543210","message":"ok"}"#,
+            r#"{"trace_id":"0123456789abcdef","status":200,"message":"ok"}"#,
+            r#"{"status":200,"status":403,"message":"error"}"#,
+            r#"{"message":"escaped \" request_id=0123456789abcdef suffix"}"#,
+            r#"{"message":"escaped \" request_id=fedcba9876543210 suffix"}"#,
+            r#"{"message":"escaped \\ request_id=0123456789abcdef suffix"}"#,
+            r#"{"message":"escaped \\ request_id=fedcba9876543210 suffix"}"#,
+            r#"{"message":"\u0061"}"#,
+            r#"{"message":"a"}"#,
+            r#"{"unfinished":" request_id=0123456789abcdef suffix"#,
+            r#"{"unfinished":" request_id=fedcba9876543210 suffix"#,
+            "'user request_id=0123456789abcdef content'",
+            "'user request_id=fedcba9876543210 content'",
+            "[user request_id=0123456789abcdef content]",
+            "[user request_id=fedcba9876543210 content]",
+        ];
+        let mut keys = std::collections::HashSet::new();
+        for payload in payloads {
+            let mut e = clock_event(1);
+            e.text = format!("[07:08:09.001] INFO payload: {payload}");
+            let (key, shape) = identity(&e).unwrap();
+            assert_eq!(shape.iter().filter(|s| s.is_some()).count(), 1);
+            assert!(keys.insert(key.clone()));
+            e.text = e.text.replacen("09.001", "10.002", 1);
+            assert_eq!(identity(&e).unwrap().0, key);
+        }
+        let mut e = clock_event(1);
+        e.text = format!(
+            "[07:08:09] INFO {{\"message\":\"{}\"}}",
+            "x".repeat(MAX_BYTES)
+        );
+        assert!(identity(&e).is_none());
+    }
+    #[test]
+    fn clocks_never_hide_semantic_changes_or_seed_security_verdicts() {
+        for (literal, changed) in [
+            ("status=200", "status=403"),
+            ("ip=127.0.0.1", "ip=192.0.2.1"),
+            ("count=1", "count=2"),
+            ("duration_ms=1", "duration_ms=9"),
+            ("path=/read", "path=/write"),
+            ("amount=10", "amount=99"),
+            ("outcome=allowed", "outcome=forbidden"),
+            ("state=ready", "state=error"),
+            ("action=read", "action=delete"),
+            ("user=alice", "user=bob"),
+            ("at=07:08:09", "at=07:08:10"),
+            ("INFO", "ERROR"),
+        ] {
+            let mut d = miner(4);
+            let now = Instant::now();
+            for i in 1..=3 {
+                let mut e = clock_event(i);
+                e.text.push_str(&format!(" {literal}"));
+                if i < 3 {
+                    classify(&mut d, &mut e, now);
+                } else {
+                    assert!(d.prepare(&mut e, now, false).is_none());
+                    assert!(e.analysis_reused);
+                }
+            }
+            let mut e = clock_event(4);
+            e.text.push_str(&format!(" {literal}"));
+            e.text = e.text.replace(literal, changed);
+            // Keep the same baseline deliberately: literals alone must isolate it.
+            let ticket = d.prepare(&mut e, now, false).unwrap();
+            assert!(!e.analysis_reused);
+            e.judgment = verdict();
+            e.judgment.category = Category::Security;
+            d.complete(ticket, &e, now);
+            assert!(d.prepare(&mut e, now, false).is_some());
+            assert!(!e.analysis_reused);
+        }
     }
     #[test]
     fn collapse_generalization_unchanged_reuse_and_non_sliding_ttl() {

@@ -59,7 +59,7 @@ struct Cli {
     output: Option<PathBuf>,
     #[arg(long, global = true)]
     no_grouping: bool,
-    /// Classification reuse: exact (default), off, or Drain (opaque UUID/hex IDs only).
+    /// Classification reuse: exact (default), off, or Drain (strict logger clocks and opaque UUID/hex IDs).
     #[arg(
         long,
         global = true,

@@ -1400,6 +1400,107 @@ async fn drain_operational_values_reclassify_and_notify_offline() {
 }
 
 #[tokio::test]
+async fn drain_clock_structured_security_changes_reclassify_and_notify_offline() {
+    use crate::drain::{Strategy, tests::clock_event as drain_event};
+    for (literal, changed) in [
+        (r#""outcome":"allowed""#, r#""outcome":"forbidden""#),
+        (r#""state":"ready""#, r#""state":"error""#),
+        (r#""amount":10"#, r#""amount":99"#),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let c = controller(&dir);
+        let mut observations: Vec<_> = (1..=4).map(|i| {
+            let e = drain_event(i);
+            let mut parser = Parser::new(e.source);
+            parser.feed(Line {
+                bytes: format!(r#"{} {{"outcome":"allowed","state":"ready","amount":10,"message":"synthetic"}}"#, e.text).into_bytes(),
+                truncated: false,
+                private: false,
+            });
+            parser.flush().unwrap()
+        }).collect();
+        // Parse the changed evidence afresh, including its baseline and exact IDs.
+        let mut parser = Parser::new(observations[3].source.clone());
+        parser.feed(Line {
+            bytes: observations[3].text.replace(literal, changed).into_bytes(),
+            truncated: false,
+            private: false,
+        });
+        observations[3] = parser.flush().unwrap();
+        if !changed.contains("error") {
+            assert_eq!(
+                serde_json::to_value(&observations[0].baseline).unwrap(),
+                serde_json::to_value(&observations[3].baseline).unwrap()
+            );
+        }
+        let mut routine = crate::drain::tests::verdict();
+        routine.importance = Importance::Routine;
+        routine.severity = Severity::Info;
+        routine.category = Category::Routine;
+        let mut risk = crate::drain::tests::verdict();
+        risk.category = Category::Security;
+        let mut client = crate::jev::Jev::test_client("unused-offline".into());
+        client.synthetic = Some(vec![Ok(routine.clone()), Ok(routine), Ok(risk)].into());
+        let (tx, rx) = tokio::sync::mpsc::channel(4);
+        for e in &observations {
+            tx.send(e.clone()).await.unwrap();
+        }
+        drop(tx);
+        let (report, client) = crate::runtime::analyze_controlled(
+            rx,
+            c.metrics.clone(),
+            Some(client),
+            crate::runtime::AnalyzeOptions {
+                batch_size: 1,
+                max_batches: 3,
+                max_cost: 1.0,
+                grouping: Strategy::Drain,
+                drain_capacity: 4,
+                retain: 4,
+                max_events: 4,
+                live: false,
+                print_events: false,
+            },
+            CancellationToken::new(),
+            Some(c.clone()),
+        )
+        .await;
+        let client = client.unwrap();
+        assert!(client.synthetic.unwrap().is_empty());
+        assert_eq!(client.usage.request_attempts, 0);
+        assert_eq!((report.total, report.batches, report.reused), (4, 3, 1));
+        assert!(report.events[2].analysis_reused);
+        assert!(!report.events[3].analysis_reused);
+        assert_eq!(report.events[3].judgment.category, Category::Security);
+        for (before, after) in observations.iter().zip(&report.events) {
+            assert_eq!(before.text, after.text);
+            assert_eq!(before.id, after.id);
+            assert_eq!(before.source, after.source);
+        }
+        let m = c.metrics.lock().unwrap();
+        assert_eq!(
+            (m.policy_ignore, m.policy_notify, m.notifications_enqueued),
+            (3, 1, 1)
+        );
+        drop(m);
+        let store = c.store.lock().unwrap();
+        let payload: String = store
+            .conn
+            .query_row("SELECT payload FROM outbox", [], |r| r.get(0))
+            .unwrap();
+        let payload: serde_json::Value = serde_json::from_str(&payload).unwrap();
+        assert_eq!(payload["evidence"], observations[3].text);
+        assert_eq!(
+            store
+                .conn
+                .query_row("SELECT count(*) FROM verdicts", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+    }
+}
+
+#[tokio::test]
 async fn drain_multiline_fallback_preserves_batch_budget_and_controller_processing_offline() {
     use crate::drain::{
         Strategy,

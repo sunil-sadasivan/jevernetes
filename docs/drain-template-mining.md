@@ -24,14 +24,33 @@ limits remain explicit existing boundaries; Drain does not deduplicate evidence.
 The minimal online core partitions before mining by the full serialized stable
 source, complete local baseline (`important` and every signal), and a conservative
 token shape. This
-identity is compared exactly, without a shortened hash. It allows only these
-space-separated `name=value` fields to vary:
+identity is compared exactly, without a shortened hash. It allows these
+space-separated `name=value` fields to vary in unquoted, unstructured messages:
 
 | Field | Accepted variable |
 | --- | --- |
 | `request_id`, `request-id`, `trace_id`, `span_id`, `correlation_id` | Exactly 16, 32 or 64 ASCII hex digits, or canonical UUID syntax (8-4-4-4-12 hex digits) |
 
 Field name, hex width and UUID/hex format stay distinct. Malformed IDs stay literal.
+If a message contains quotes, braces or brackets (other than a recognized clock
+prefix), all its ID-looking fields stay literal. This also protects standalone
+`request_id=...` words inside JSON strings or other user content. Structured payloads
+are not parsed/reserialized by the miner: all keys, values, key order, duplicates,
+escapes and malformed syntax remain byte-literal. No structured field is newly
+allowlisted.
+
+A leading logger clock may vary when immediately followed by a known level and at
+least one message token. Supported clocks are `HH:MM:SS`, optionally followed by a
+period or comma and exactly 3, 6 or 9 fractional digits, optionally enclosed in a
+single pair of square brackets. All digits must be ASCII; hours are 00–23 and
+minutes/seconds 00–59. A strict valid `YYYY-MM-DD` calendar date may precede the
+clock and stays literal. Levels are TRACE, DEBUG, INFO, WARN, WARNING, ERROR, FATAL
+or CRITICAL, entirely upper- or lowercase, with an optional single trailing colon.
+The level, brackets, fractional separator and precision remain distinct identities.
+Malformed dates/clocks, timezones, mixed-case levels, missing message tokens and
+clocks elsewhere in the message do not normalize. This recognizes logger prefix
+syntax, not the semantics of arbitrary user text; use exact/off if user-controlled
+content can impersonate logger prefixes.
 
 Everything else stays literal, including IP addresses, counts, durations, latencies,
 bytes, attempts, status codes, bare numbers, words, paths, user names and field names.
@@ -40,7 +59,7 @@ cover `duration_ms=86400000`. Only single-line text with single spaces between t
 is eligible. Control characters, irregular whitespace, literal `<*>`, missing stable
 Kubernetes fields, redacted/private provenance, redaction markers, truncation and
 oversized evidence take an ordinary classification miss. This conservative grammar
-intentionally bypasses most JSON and stack traces. The Event `sensitive` flag
+keeps JSON payloads literal and bypasses stack traces. The Event `sensitive` flag
 retains private/redaction provenance even when a later truncation removes a marker;
 JSON reserialization changes can conservatively set it too.
 
@@ -54,9 +73,9 @@ remains on Events and reports; notifications retain the existing source allowlis
 Files/other sources use every original source field (including file path).
 
 This is an experimental cost optimization, not a semantic-equivalence or accuracy
-guarantee. Only opaque IDs are allowlisted; applications that encode meaningful
-state in these ID fields should use exact/off. Local baseline separation and literal
-guards reduce risk but do not prove equivalence.
+guarantee. Only the specified logger clocks and opaque IDs may vary; applications
+that encode meaningful state in these fields should use exact/off. Local baseline
+separation and literal guards reduce risk but do not prove equivalence.
 Security, fraud and uncertain verdicts are deliberately not reusable by Drain.
 
 ## Lifecycle and bounds
@@ -73,8 +92,8 @@ Security, fraud and uncertain verdicts are deliberately not reusable by Drain.
    Capacity exhaustion refuses new partitions and classifies normally.
 
 Each partition has a fixed token count and one cluster. Its exact literal/variable
-shape ensures only allowed opaque-ID positions can differ. The first observation
-supplies literal tokens; subsequent differing ID tokens become wildcards and
+shape ensures only allowed clock/opaque-ID positions can differ. The first observation
+supplies literal tokens; subsequent differing clock/ID tokens become wildcards and
 invalidate the cached verdict. Wildcards never revert. Cluster IDs are monotonic,
 process-local and stable through generalization; reset partitions get fresh IDs.
 Tickets snapshot both ID and template version, so late responses cannot populate a

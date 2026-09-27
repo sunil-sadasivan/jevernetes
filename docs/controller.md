@@ -26,7 +26,9 @@ Durable novelty fingerprints use exact source/text, timestamp and truncation sta
 Add `--grouping-strategy drain --drain-capacity 256` to the controller command to
 select in-repository template mining. The default remains exact persistent reuse. Drain
 uses context/namespace/container/kind across replicas, plus complete baseline and
-conservative literal/variable shape; only allowlisted opaque UUID/hex IDs can vary.
+conservative literal/variable shape; only strict logger clock prefixes and
+allowlisted opaque UUID/hex IDs in unstructured messages can vary. Structured
+payloads stay literal, including telemetry and user content.
 IPs and all numeric telemetry stay literal; pod UID/restarts remain in original evidence.
 This scope can include different workloads with the same container name. Security,
 fraud, uncertain, failed and otherwise unsafe verdicts never seed template reuse.

@@ -838,6 +838,84 @@ mod tests {
         }
     }
     #[tokio::test]
+    async fn drain_clock_batches_retain_all_events_and_isolate_security_offline() {
+        use crate::drain::tests::{clock_event, verdict};
+        use crate::jev::{Category, Severity};
+        for batch_size in [1, 8] {
+            let metrics = Arc::new(Mutex::new(Metrics::default()));
+            let (tx, rx) = mpsc::channel(26);
+            let mut observations: Vec<_> = (1..=26).map(clock_event).collect();
+            for (i, message) in [(24, "forbidden"), (25, "error")] {
+                let e = &observations[i];
+                let mut parser = Parser::new(e.source.clone());
+                parser.feed(crate::events::Line {
+                    bytes: format!("{} {message}", e.text).into_bytes(),
+                    truncated: false,
+                    private: false,
+                });
+                observations[i] = parser.flush().unwrap();
+            }
+            for e in &observations {
+                tx.send(e.clone()).await.unwrap();
+            }
+            drop(tx);
+            let warmup = if batch_size == 1 { 2 } else { 8 };
+            let mut routine = verdict();
+            routine.importance = Importance::Routine;
+            routine.severity = Severity::Info;
+            routine.category = Category::Routine;
+            let mut security = verdict();
+            security.category = Category::Security;
+            let mut fraud = verdict();
+            fraud.category = Category::Fraud;
+            fraud.importance = Importance::Uncertain;
+            let mut outcomes = vec![Ok(routine); warmup];
+            outcomes.extend([Ok(security), Ok(fraud)]);
+            let mut client = Jev::test_client("unused-offline".into());
+            client.synthetic = Some(outcomes.into());
+            let (report, client) = analyze(
+                rx,
+                metrics.clone(),
+                Some(client),
+                AnalyzeOptions {
+                    batch_size,
+                    max_batches: if batch_size == 1 { 4 } else { 2 },
+                    max_cost: 1.0,
+                    grouping: Strategy::Drain,
+                    drain_capacity: 4,
+                    retain: 26,
+                    max_events: 26,
+                    live: false,
+                    print_events: false,
+                },
+                CancellationToken::new(),
+            )
+            .await;
+            let client = client.unwrap();
+            assert!(client.synthetic.unwrap().is_empty());
+            assert_eq!(client.usage.request_attempts, 0);
+            assert_eq!(client.usage.estimated_cost_usd, 0.0);
+            assert_eq!(report.batches, if batch_size == 1 { 4 } else { 2 });
+            assert_eq!((report.total, report.events.len()), (26, 26));
+            assert_eq!(report.reused, (24 - warmup) as u64);
+            for (i, (before, after)) in observations.iter().zip(&report.events).enumerate() {
+                assert_eq!(before.text, after.text);
+                assert_eq!(before.source, after.source);
+                assert_eq!(before.id, after.id);
+                assert_eq!(before.timestamp, after.timestamp);
+                assert_eq!(before.group_id, after.group_id);
+                assert_eq!(after.analysis_reused, (warmup..24).contains(&i));
+            }
+            assert_eq!(report.events[24].judgment.category, Category::Security);
+            assert_eq!(report.events[25].judgment.category, Category::Fraud);
+            assert_eq!(report.events[25].judgment.importance, Importance::Uncertain);
+            let m = metrics.lock().unwrap();
+            assert_eq!(m.drain_templates_created, 3);
+            assert_eq!(m.drain_templates_changed, 1);
+            assert_eq!(m.drain_fallbacks, 0);
+        }
+    }
+    #[tokio::test]
     async fn exact_reuses_identical_events_but_off_classifies_each_offline() {
         use crate::drain::tests::{event, verdict};
         for strategy in [Strategy::Exact, Strategy::Off] {
