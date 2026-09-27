@@ -257,8 +257,12 @@ quotes, braces, malformed brackets, controls and Unicode are rejected. Only the 
 opening brace can begin the payload; a duplicate-key-aware JSON parser must consume
 that entire suffix (apart from JSON trailing whitespace). No scanning for later objects.
 JSON strings and nested objects may contain braces normally. Changed prefix semantics
-never reuse a verdict. Parser-extracted timestamps conservatively fall back, since
-those bytes are outside `Event.text` and cannot satisfy a reviewed prefix identity.
+never reuse a verdict. External parsed timestamps (such as Kubernetes transport
+stamps) are occurrence metadata outside reviewed risk identity. They permit reuse
+only when `Event.text` independently satisfies the exact compiled prefix, shape
+and literals, and the source matches the reviewed scope. A parser-stripped
+application prefix cannot satisfy an explicit envelope rule through timestamp
+metadata. Whole-line JSON still requires the empty prefix identity. Raw event text, timestamp and source remain unchanged.
 Shadow learning and its original pre-redaction quarantine remain unchanged; proposals
 are still advisory and do not gain envelope activation privileges.
 

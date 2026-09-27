@@ -378,12 +378,11 @@ impl Matcher {
             || event.text.contains(['\n', '\r'])
             || event.text.to_ascii_lowercase().contains("[redacted")
             || event.baseline.important
-            // Parser-extracted timestamps are outside Event.text and therefore
-            // cannot satisfy an explicit reviewed envelope identity.
-            || event.timestamp.is_some()
         {
             return None;
         }
+        // External timestamps are occurrence metadata. Only Event.text can
+        // satisfy the rule's explicit prefix identity; metadata cannot supply it.
         let (prefix, mut value) = payload(&event.text)?;
         // Direct callers receive the same sensitive-data gate as Parser callers.
         let canonical = value.to_string();

@@ -1,3 +1,65 @@
+# Reviewed external transport timestamps (2026-09-27)
+
+Started on `feat/provider-template-learning` at exact clean HEAD
+`a383eef26b883e4e3b9766a7b0fa80b421aa1995`. The only production behavior change
+removes the blanket `Event.timestamp.is_some()` rejection from `reviewed::Matcher::key`.
+An external parsed timestamp is occurrence metadata; `Event.text` must still
+independently match the exact compiled prefix identity, clock grammar, complete
+shape and required/protected literals, and the source must match the reviewed scope.
+A parser-stripped application envelope cannot be supplied by timestamp metadata.
+Whole-line JSON still requires the empty prefix identity. This supersedes the earlier
+blanket parser-timestamp fallback documented below. Redaction, sensitivity,
+truncation, line-count and risk-publication checks remain unchanged, as do controller
+policy, generic cacheability, Drain and shadow learning. Dependencies are unchanged.
+
+The new Parser-to-Matcher regression and extended runtime/controller replay failed
+before the fix and pass afterward. Tests cover nanosecond Kubernetes-style transport
+stamps with retained application envelopes, whole-line JSON, dated application
+prefixes behind transport stamps, and all three provider risk-contract keys. Timestamp
+changes alone (including absence and changes between preparation and completion)
+do not change reviewed risk equivalence. Pending occurrences classify independently;
+reuse starts only after publication. Serialized events preserve evidence, source,
+timestamps, IDs and line metadata; only the expected analysis fields may change.
+Wrong/missing/stripped prefixes, changed grammar, malformed suffixes, source/shape/
+literal changes and unsafe evidence still fail. The existing adversarial risk and
+batch-invalidation matrix now also covers timestamp-bearing completions, including
+line-count/newline changes and delayed tickets.
+
+The synthetic two-pod runtime/controller replay runs with and without transport
+stamps at batch sizes 1 and 8. Both retain all 200 events: **200/3/197** sequentially
+and **200/10/190** in batches (retained/classifications/reuses). Both security events
+remain independently classified, with complete evidence and timestamps in their
+Notify outbox records. Policy remains 198 Review and two Notify decisions, with
+zero persistent verdicts. These are deterministic injected-judgment checks, not a
+private real-log replay, model-accuracy result or production acceptance claim.
+
+All Cargo dependency operations used `CARGO_NET_OFFLINE=true` and `--locked`.
+No private Pingdex reports, Kubernetes commands/APIs, live providers, real credentials
+or network were accessed. No dependency changes, installations, push, PR or deployment
+were performed.
+
+| Check | Result |
+| --- | --- |
+| `cargo fmt --all --check`; `git diff --check` | Passed. |
+| `cargo clippy --locked --all-targets --all-features -- -D warnings` | Passed. |
+| `cargo test --locked --all-features --lib reviewed` | 19 passed. |
+| `cargo test --locked --all-features` with the 17 documented loopback fixtures explicitly skipped | 98 library + 15 CLI tests passed; main and doctests passed (zero tests). |
+| `cargo build --locked --release --examples --bin jevernetes` | Passed. |
+| All three release examples | Passed: reviewed 300/1/299 and 200/3/197; shadow 304 classifications/zero reuse; Drain 1,000/2/998. |
+| Release offline CLI smoke | Passed: two retained synthetic events, one important and one uncertain. |
+| Python unittest discovery excluding the four `test_dashboard.HttpTests` loopback cases | 113 passed. |
+| Python compileall; five JS helper suites; app/search JS syntax | Passed. |
+| `tools/check_controller_artifacts.py`; `tools/check_release.py` | Passed; 113 tracked files checked, no Kubernetes command or deployment. |
+| Python build/security tooling | build, setuptools, Bandit and pip-audit unavailable; no installation attempted. |
+
+The 17 Rust fixture names are the 15 listed under prior Drain validation plus the
+two provider transport fixtures listed under provider/shadow validation below. The
+four Python exclusions are the `test_dashboard.HttpTests` cases. These loopback
+fixtures were deliberately not attempted under the no-network constraint; no
+unrestricted full-suite pass is claimed. Browser integration, private real-log replay,
+live providers and production validation remain unevaluated. Historical validation
+below applies to its stated snapshots, not this fix.
+
 # Reviewed routine risk-equivalence predicate (2026-09-27)
 
 Preflight passed with a clean worktree at exact HEAD

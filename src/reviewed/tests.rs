@@ -446,6 +446,8 @@ fn reviewed_risk_boundary_rejects_adversarial_seeds_and_invalidates_all_pending_
         "baseline",
         "sensitive",
         "redacted",
+        "line_count",
+        "newline",
         "prefix",
         "source",
         "shape",
@@ -460,6 +462,8 @@ fn reviewed_risk_boundary_rejects_adversarial_seeds_and_invalidates_all_pending_
             "baseline" => e.baseline.important = true,
             "sensitive" => e.sensitive = true,
             "redacted" => e.text = e.text.replace("payload-1", "[REDACTED]"),
+            "line_count" => e.line_count = 2,
+            "newline" => e.text.push('\n'),
             "prefix" => e.text = format!("12:34:56 INFO {}", e.text),
             "source" => {
                 e.source.insert("path".into(), json!("other"));
@@ -475,7 +479,11 @@ fn reviewed_risk_boundary_rejects_adversarial_seeds_and_invalidates_all_pending_
         variants.push((mutation.into(), e));
     }
     let now = Instant::now();
-    for (name, bad) in variants {
+    for (name, bad) in variants.into_iter().flat_map(|(name, e)| {
+        let mut stamped = e.clone();
+        stamped.timestamp = Some("2026-09-27T12:34:56Z".into());
+        [(format!("timestamp/{name}"), stamped), (name, e)]
+    }) {
         // Alone and with two safe siblings in either completion order. Tickets
         // precede classification; mutations must not leave sibling tickets usable.
         for mode in [0, 1, 2] {
@@ -570,6 +578,12 @@ fn literal_shape_source_and_ineligible_variants_never_collide() {
         }
         assert!(m.prepare(&mut e, now, 1000, false).is_none(), "{mutation}");
         assert!(!e.analysis_reused, "{mutation}");
+        e.timestamp = Some("2026-09-27T12:34:56Z".into());
+        assert!(
+            m.prepare(&mut e, now, 1000, false).is_none(),
+            "timestamp/{mutation}"
+        );
+        assert!(!e.analysis_reused, "timestamp/{mutation}");
     }
     // Protected fields stay literal even when accidentally omitted from the list.
     let mut v = artifact(1000);
@@ -1005,8 +1019,8 @@ fn strict_logger_envelope_identity_and_whole_json_regression() {
             prefix_identity(a).unwrap()
         );
     }
-    // Dates stay literal for directly built events. Parser-extracted stamps
-    // conservatively fall back; they may not disappear from reviewed identity.
+    // Dates stay literal in Event.text. A parser-stripped application clock
+    // cannot be supplied by timestamp metadata to satisfy an explicit envelope.
     let m = envelope_matcher(json!({"type":"file"}), "2024-02-29 12:34:56 INFO ");
     let mut e = event(1);
     e.text = format!("2024-02-29 12:34:56 INFO {}", e.text);
@@ -1014,10 +1028,71 @@ fn strict_logger_envelope_identity_and_whole_json_regression() {
     e.text = e.text.replace("2024-02-29", "2024-03-01");
     assert!(m.key(&e, 1000).is_none());
     for stamp in ["2024-02-29 12:34:56 ", "2023-02-29 24:60:60 "] {
-        let e = envelope_event(1, stamp);
-        assert!(matcher(1000, 4, 300).key(&e, 1000).is_none());
+        let e = envelope_event(1, &format!("{stamp}INFO "));
+        assert!(e.timestamp.is_some());
+        assert_eq!(e.text, format!("INFO {}", event(1).text));
+        assert!(m.key(&e, 1000).is_none());
     }
 }
+#[test]
+fn transport_timestamps_preserve_evidence_and_reuse_only_after_publication() {
+    let now = Instant::now();
+    for prefix in [
+        "",
+        "[12:34:56.123] INFO module - ",
+        "2024-02-29 12:34:56 INFO ",
+    ] {
+        for provider in [
+            crate::provider::ProviderKind::Typesafe,
+            crate::provider::ProviderKind::Openai,
+            crate::provider::ProviderKind::Anthropic,
+        ] {
+            let mut m = envelope_matcher(json!({"type":"file"}), prefix);
+            m.contract = Contract::provider(provider, "synthetic".into());
+            let parse = |i, stamp: &str| {
+                let e = envelope_event(i, &format!("{stamp} {prefix}"));
+                assert_eq!(e.timestamp.as_deref(), Some(stamp));
+                assert_eq!(e.text, format!("{prefix}{}", event(i).text));
+                e
+            };
+            let mut seed = parse(1, "2026-09-27T10:00:00.123456789Z");
+            if prefix.is_empty() {
+                let mut prefixed = parse(1, "2026-09-27T10:00:00Z");
+                prefixed.text = format!("[12:34:56.123] INFO module - {}", prefixed.text);
+                assert!(m.key(&prefixed, 1000).is_none());
+            }
+            let key = m.key(&seed, 1000).unwrap();
+            let ticket = m.prepare(&mut seed, now, 1000, false).unwrap();
+            let mut sibling = parse(2, "2026-09-27T11:00:00.987654321Z");
+            let second = m.prepare(&mut sibling, now, 1000, false).unwrap();
+            assert!(!seed.analysis_reused && !sibling.analysis_reused);
+            assert_eq!(m.metrics.lock().unwrap().reviewed_publications, 0);
+            // Timestamp metadata alone cannot change risk identity, even between
+            // preparation and publication. Evidence itself is never normalized.
+            seed.timestamp = Some("2026-09-27T12:00:00Z".into());
+            assert_eq!(m.key(&seed, 1000), Some(key.clone()));
+            let before = serde_json::to_value(&seed).unwrap();
+            m.complete_batch(vec![(ticket, &seed), (second, &sibling)], now, 1000);
+            assert_eq!(serde_json::to_value(&seed).unwrap(), before);
+            assert_eq!(m.metrics.lock().unwrap().reviewed_publications, 1);
+            for timestamp in [None, Some("2026-09-28T01:02:03Z".into())] {
+                let mut hit = parse(3, "2026-09-27T13:00:00.000000001Z");
+                hit.timestamp = timestamp;
+                assert_eq!(m.key(&hit, 1000), Some(key.clone()));
+                let mut expected = hit.clone();
+                expected.judgment = seed.judgment.clone();
+                expected.analysis_reused = true;
+                expected.analysis_representative_id = Some(seed.id.clone());
+                assert!(m.prepare(&mut hit, now, 1000, false).is_none());
+                assert_eq!(
+                    serde_json::to_value(&hit).unwrap(),
+                    serde_json::to_value(&expected).unwrap()
+                );
+            }
+        }
+    }
+}
+
 #[test]
 fn invalid_ambiguous_prefix_suffix_and_semantic_changes_fail_closed() {
     let m = envelope_matcher(json!({"type":"file"}), "[12:34:56.123] INFO module - ");
@@ -1057,6 +1132,8 @@ fn invalid_ambiguous_prefix_suffix_and_semantic_changes_fail_closed() {
         let mut e = event(1);
         e.text = format!("{prefix}{}", e.text);
         assert!(m.key(&e, 1000).is_none(), "{prefix:?}");
+        e.timestamp = Some("2026-09-27T12:34:56Z".into());
+        assert!(m.key(&e, 1000).is_none(), "timestamp/{prefix:?}");
     }
     let raw = envelope_event(1, "[12:34:56.123] INFO module - ").text;
     for text in [
@@ -1070,6 +1147,7 @@ fn invalid_ambiguous_prefix_suffix_and_semantic_changes_fail_closed() {
     ] {
         let mut e = event(1);
         e.text = text;
+        e.timestamp = Some("2026-09-27T12:34:56Z".into());
         assert!(m.key(&e, 1000).is_none());
     }
     for identity in [
@@ -1185,7 +1263,7 @@ fn enveloped_sensitive_payloads_never_seed_even_with_escaped_field_names() {
 #[tokio::test]
 async fn two_pod_envelope_replay_retains_198_routine_and_two_security_occurrences() {
     use crate::controller::{Controller, policy::Policy, store::Store};
-    for batch_size in [1, 8] {
+    for (batch_size, transport) in [(1, false), (8, false), (1, true), (8, true)] {
         let dir = tempfile::tempdir().unwrap();
         let wall = crate::controller::now();
         let metrics = Arc::new(Mutex::new(Metrics::default()));
@@ -1236,7 +1314,25 @@ async fn two_pod_envelope_replay_retains_198_routine_and_two_security_occurrence
             if i <= batch_size as u32 || i > 198 {
                 judgments.push(Ok(e.judgment.clone()));
             }
-            evidence.push((e.text.clone(), e.source.clone()));
+            if transport {
+                let stamp = format!("2026-09-27T10:00:00.{i:09}Z");
+                let mut parser = Parser::new(e.source.clone());
+                assert!(
+                    parser
+                        .feed(Line {
+                            bytes: format!("{stamp} {}", e.text).into_bytes(),
+                            truncated: false,
+                            private: false,
+                        })
+                        .is_none()
+                );
+                let mut parsed = parser.flush().unwrap();
+                assert_eq!(parsed.timestamp.as_deref(), Some(stamp.as_str()));
+                assert_eq!(parsed.text, e.text);
+                parsed.judgment = e.judgment;
+                e = parsed;
+            }
+            evidence.push(e.clone());
             tx.send(e).await.unwrap();
         }
         drop(tx);
@@ -1269,9 +1365,14 @@ async fn two_pod_envelope_replay_retains_198_routine_and_two_security_occurrence
         assert_eq!(report.total, 200);
         assert_eq!(report.events.len(), 200);
         assert_eq!(report.reused, 198 - batch_size as u64);
-        for (i, (e, (text, source))) in report.events.iter().zip(&evidence).enumerate() {
-            assert_eq!(&e.text, text);
-            assert_eq!(&e.source, source);
+        for (i, (e, before)) in report.events.iter().zip(&evidence).enumerate() {
+            let mut expected = before.clone();
+            expected.analysis_reused = e.analysis_reused;
+            expected.analysis_representative_id = e.analysis_representative_id.clone();
+            assert_eq!(
+                serde_json::to_value(e).unwrap(),
+                serde_json::to_value(expected).unwrap()
+            );
             assert_eq!(e.analysis_reused, (batch_size..198).contains(&i));
         }
         let m = metrics.lock().unwrap();
@@ -1297,12 +1398,14 @@ async fn two_pod_envelope_replay_retains_198_routine_and_two_security_occurrence
         assert_eq!(payloads.len(), 2);
         for payload in payloads {
             let v: Value = serde_json::from_str(&payload).unwrap();
-            assert!(
-                evidence[198..]
-                    .iter()
-                    .any(|(text, source)| v["evidence"] == *text
-                        && v["source"]["pod_uid"] == source["pod_uid"])
-            );
+            assert!(evidence[198..].iter().any(|e| v["evidence"] == e.text
+                && v["source"]["pod_uid"] == e.source["pod_uid"]
+                && v["evidence_timestamp"]
+                    == json!(e.timestamp.as_deref().map(|s| {
+                        chrono::DateTime::parse_from_rfc3339(s)
+                            .unwrap()
+                            .to_rfc3339()
+                    }))));
         }
         let verdicts: i64 = store
             .conn
