@@ -4,9 +4,9 @@ version = "0.2.0"
 edition = "2024"
 rust-version = "1.89"
 description = "Bounded, read-only Kubernetes log analysis with typed Jev judgments"
-license = "Apache-2.0"
+license = "MIT"
 repository = "https://github.com/sunil-sadasivan/jevernetes"
-include = ["src/**", "tests/rust/**", "Cargo.toml", "Cargo.lock", "README.md", "docs/architecture.md", "docs/migration.md", "docs/usage.md", "SECURITY.md", "LICENSE", "NOTICE"]
+include = ["src/**", "tests/rust/**", "Cargo.toml", "Cargo.lock", "README.md", "docs/architecture.md", "docs/migration.md", "docs/usage.md", "SECURITY.md", "LICENSE"]
 
 [dependencies]
 chrono = { version = "0.4", features = ["serde"] }

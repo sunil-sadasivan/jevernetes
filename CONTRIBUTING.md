@@ -40,7 +40,7 @@ python3 -m venv .venv
 python3 tools/check_release.py --dist dist
 ```
 
-Keep collection read-only, model outputs advisory, context fetches bounded, and review overrides reversible. For behavioral changes, add regression tests that exercise observable outcomes. Contributions are made under the project's Apache 2.0 license.
+Keep collection read-only, model outputs advisory, context fetches bounded, and review overrides reversible. For behavioral changes, add regression tests that exercise observable outcomes. Contributions are made under the project's MIT License.
 
 ## Security automation
 

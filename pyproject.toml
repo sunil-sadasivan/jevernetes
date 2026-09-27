@@ -7,8 +7,8 @@ name = "jevernetes-legacy"
 version = "0.1.0"
 description = "Legacy Jevernetes dashboard, TUI, search, review and context companion"
 readme = "README.md"
-license = "Apache-2.0"
-license-files = ["LICENSE", "NOTICE"]
+license = "MIT"
+license-files = ["LICENSE"]
 keywords = ["kubernetes", "kubectl", "logs", "observability", "jev"]
 requires-python = ">=3.11"
 dependencies = []
