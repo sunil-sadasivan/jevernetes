@@ -49,4 +49,4 @@ Jev mode sends redacted log text and source metadata to TypeSafe over verified H
 
 [Security policy](SECURITY.md) · [Security review scope](SECURITY_REVIEW.md) · [Contributing](CONTRIBUTING.md) · [Validation](VALIDATION.md)
 
-Licensed under Apache 2.0. Inspired by [Log Sentinel](https://github.com/dabit3/jev-experiments/tree/main/log-sentinel).
+Licensed under the MIT License. Inspired by [Log Sentinel](https://github.com/dabit3/jev-experiments/tree/main/log-sentinel).
