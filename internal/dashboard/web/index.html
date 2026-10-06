@@ -1,0 +1,6 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Jevernetes</title><link rel="stylesheet" href="/style.css"><script defer src="/app.js"></script></head>
+<body><header><h1>Jevernetes</h1><p>Read-only operational log analysis</p></header><main>
+<section><h2>Report</h2><p id="summary">Loading report…</p><label>Filter events <input id="filter" type="search" maxlength="256"></label><div id="events"></div></section>
+<details id="controller" open><summary>Continuous controller monitoring</summary><p id="connection" role="status">Connecting…</p><p>Coverage is partial. No incidents shown does not establish that a system is healthy.</p><pre id="metrics"></pre><h3>Recent incidents</h3><div id="incidents"></div><h3>Selected incident</h3><pre id="detail">Select an incident.</pre></details>
+<footer>Targets are fixed by the local operator. This dashboard cannot change a cluster or request model analysis.</footer></main></body></html>
