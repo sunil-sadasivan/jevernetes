@@ -1,6 +1,3 @@
-__pycache__/
-*.egg-info/
-.venv/
 .runs/
 reports/
 dist/
@@ -11,7 +8,6 @@ build/
 *.log
 !examples/*.log
 *.log.gz
-*.py[cod]
 .DS_Store
 .kube/
 kubeconfig
@@ -20,5 +16,13 @@ kubeconfig.*
 *.key
 
 .review-rules.json
-.security-venv/
-/target/
+
+# Controller runtime state and SQLite sidecars
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.db.lock
+*.sqlite.lock
+/.cache/
+/bin/
