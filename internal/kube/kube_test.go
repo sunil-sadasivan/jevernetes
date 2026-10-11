@@ -88,18 +88,27 @@ func TestSnapshotIncludesKindsPreviousAndCaps(t *testing.T) {
 		}
 	}
 }
-func TestLiveIdleFlushAndCancellationJoins(t *testing.T) {
+func TestLiveDelayedStackAndCancellationJoins(t *testing.T) {
 	r, w := io.Pipe()
 	ctx, cancel := context.WithCancel(context.Background())
 	p := event.NewParser(event.Source{})
 	events := make(chan event.Event, 1)
 	done := make(chan error, 1)
 	go func() { done <- readLive(ctx, r, p, func(e event.Event) error { events <- e; return nil }) }()
-	_, _ = w.Write([]byte("INFO singleton\n"))
+	_, _ = w.Write([]byte("ERROR failure\n"))
 	select {
 	case <-events:
+		t.Fatal("quiet interval split a pending event")
+	case <-time.After(500 * time.Millisecond):
+	}
+	_, _ = w.Write([]byte("  at delayed.frame\nINFO next header\n"))
+	select {
+	case e := <-events:
+		if e.Text != "ERROR failure\n  at delayed.frame" || e.LineCount != 2 {
+			t.Fatal(e)
+		}
 	case <-time.After(time.Second):
-		t.Fatal("idle flush missing")
+		t.Fatal("header failed to finalize trace")
 	}
 	cancel()
 	select {

@@ -81,6 +81,10 @@ func Execute(ctx context.Context, args []string, in io.Reader, out, stderr io.Wr
 	return 1
 }
 func New(in io.Reader, out, stderr io.Writer) *cobra.Command {
+	return newCommand(in, out, stderr, runtimeDeps{})
+}
+
+func newCommand(in io.Reader, out, stderr io.Writer, deps runtimeDeps) *cobra.Command {
 	o := &options{unsupported: map[string]*string{}}
 	root := &cobra.Command{Use: "jevernetes", Short: "Bounded, read-only Kubernetes log analysis", Version: Version, SilenceUsage: true, SilenceErrors: true}
 	root.SetIn(in)
@@ -132,7 +136,7 @@ func New(in io.Reader, out, stderr io.Writer) *cobra.Command {
 		if err := o.validate(c, false); err != nil {
 			return err
 		}
-		return o.run(c, args, in)
+		return o.runWith(c, args, in, deps)
 	}}
 	files.Flags().Int64Var(&o.k.MaxBytes, "max-file-bytes", 32<<20, "Maximum decompressed bytes per input")
 	root.AddCommand(files)
@@ -140,7 +144,7 @@ func New(in io.Reader, out, stderr io.Writer) *cobra.Command {
 		if err := o.validate(c, true); err != nil {
 			return err
 		}
-		return o.run(c, nil, in)
+		return o.runWith(c, nil, in, deps)
 	}}
 	collectionFlags(k8s, &o.k)
 	root.AddCommand(k8s)
@@ -156,7 +160,7 @@ func New(in io.Reader, out, stderr io.Writer) *cobra.Command {
 		if err := o.validate(c, true); err != nil {
 			return err
 		}
-		return o.run(c, nil, in)
+		return o.runWith(c, nil, in, deps)
 	}}
 	collectionFlags(ctrl, &o.k)
 	ctrl.Flags().StringVar(&o.state, "state", "", "Private SQLite state file")
@@ -178,8 +182,8 @@ func New(in io.Reader, out, stderr io.Writer) *cobra.Command {
 	root.AddCommand(dashboardCommand(o))
 	for _, name := range []string{"search", "context", "review", "reviews", "tui"} {
 		name := name
-		root.AddCommand(&cobra.Command{Use: name, Short: "Unsupported compatibility command", DisableFlagParsing: true, RunE: func(*cobra.Command, []string) error {
-			return fmt.Errorf("%s is unsupported in the Go runtime; see docs/migration.md", name)
+		root.AddCommand(&cobra.Command{Use: name, Short: "Available in the coexisting Rust/Python investigation runtimes", DisableFlagParsing: true, RunE: func(*cobra.Command, []string) error {
+			return fmt.Errorf("%s is available in the retained investigation runtimes: use jevernetes-legacy (python3 -m jevernetes) or the Rust --tui; see docs/migration.md", name)
 		}})
 	}
 	root.CompletionOptions.DisableDefaultCmd = true
@@ -240,7 +244,7 @@ func (o *options) validate(c *cobra.Command, cluster bool) error {
 	}
 	for name := range o.unsupported {
 		if c.Flags().Changed(name) {
-			return fmt.Errorf("--%s is unsupported in the Go runtime; see docs/migration.md", name)
+			return fmt.Errorf("--%s is available in the retained investigation runtimes: use jevernetes-legacy (python3 -m jevernetes) or the Rust --tui; see docs/migration.md", name)
 		}
 	}
 	if o.templateProvider != "off" {

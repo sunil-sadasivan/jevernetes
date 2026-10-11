@@ -43,7 +43,35 @@ func readBounded(path string, limit int64) ([]byte, error) {
 	}
 	return raw, nil
 }
-func (o *options) run(cmd *cobra.Command, paths []string, stdin io.Reader) error {
+
+type riskProvider interface {
+	provider.Judge
+	Usage() provider.Usage
+}
+type logCollector interface {
+	Follow(context.Context, func(event.Event) error, func(event.Source, string)) error
+	Snapshot(context.Context, func(event.Event) error, func(event.Source, string)) error
+}
+
+// Dependencies are internal test seams; no endpoint or command is browser/CLI supplied.
+type runtimeDeps struct {
+	provider  func(provider.Config, string) (riskProvider, error)
+	collector func(kube.Config) (logCollector, error)
+}
+
+func (o *options) runWith(cmd *cobra.Command, paths []string, stdin io.Reader, deps runtimeDeps) error {
+	if deps.provider == nil {
+		deps.provider = func(c provider.Config, key string) (riskProvider, error) { return provider.New(c, key) }
+	}
+	if deps.collector == nil {
+		deps.collector = func(c kube.Config) (logCollector, error) {
+			cfg, err := kube.Load(c)
+			if err != nil {
+				return nil, err
+			}
+			return kube.New(cfg, c)
+		}
+	}
 	process, cancelProcess := context.WithCancel(cmd.Context())
 	defer cancelProcess()
 	ctx, cancel := context.WithCancel(process)
@@ -131,14 +159,14 @@ func (o *options) run(cmd *cobra.Command, paths []string, stdin io.Reader) error
 			listeners = append(listeners, l)
 		}
 	}
-	var client *provider.Client
+	var client riskProvider
 	var judge provider.Judge
 	if !o.offline {
 		key, err := provider.Credential(o.risk, os.Getenv)
 		if err != nil {
 			return err
 		}
-		client, err = provider.New(o.providerConfig(), key)
+		client, err = deps.provider(o.providerConfig(), key)
 		if err != nil {
 			return err
 		}
@@ -202,13 +230,9 @@ func (o *options) run(cmd *cobra.Command, paths []string, stdin io.Reader) error
 			return ctx.Err()
 		}
 	}
-	var collector *kube.Collector
+	var collector logCollector
 	if paths == nil {
-		kcfg, err := kube.Load(o.k)
-		if err != nil {
-			return err
-		}
-		collector, err = kube.New(kcfg, o.k)
+		collector, err = deps.collector(o.k)
 		if err != nil {
 			return err
 		}
@@ -251,7 +275,9 @@ func (o *options) run(cmd *cobra.Command, paths []string, stdin io.Reader) error
 	}()
 	state.Ready.Store(true)
 	budgetStopped := false
-	analysisErr := engine.Run(ctx, in, func(e event.Event) error {
+	// Intake limits stop producers only. Admitted provider work uses the process
+	// context and drains; operator cancellation still interrupts it.
+	analysisErr := engine.Run(process, in, func(e event.Event) error {
 		state.Merge(engine.Metrics)
 		if store != nil {
 			applyCtx := process
@@ -278,6 +304,20 @@ func (o *options) run(cmd *cobra.Command, paths []string, stdin io.Reader) error
 			}
 		}
 		r.Add(e)
+		if !o.json {
+			writer := cmd.OutOrStdout()
+			if store != nil {
+				writer = cmd.ErrOrStderr()
+			}
+			source, _ := json.Marshal(e.Source)
+			fmt.Fprintf(writer, "[%s/%s/%s] %s #%s\n", e.Importance, e.Severity, e.Category, event.Console(string(source)), e.ID)
+			for _, line := range strings.Split(e.Text, "\n") {
+				fmt.Fprintf(writer, "  %s\n", event.Console(line))
+			}
+			if e.AnalysisError != "" {
+				fmt.Fprintf(writer, "  analysis: %s\n", event.Console(e.AnalysisError))
+			}
+		}
 		if e.Truncated {
 			state.Add("truncated_events", 1)
 		}
@@ -302,7 +342,7 @@ func (o *options) run(cmd *cobra.Command, paths []string, stdin io.Reader) error
 	}
 	state.Ready.Store(false)
 	state.Stopped.Store(true)
-	if store != nil && (o.hold || o.inspectPort > 0) && (analysisErr == nil || errors.Is(analysisErr, context.Canceled) || errors.Is(analysisErr, context.DeadlineExceeded)) && (collectionErr == nil || errors.Is(collectionErr, context.DeadlineExceeded) || errors.Is(collectionErr, context.Canceled) || errors.Is(collectionErr, errCap)) {
+	if store != nil && o.hold && !budgetStopped && (analysisErr == nil || errors.Is(analysisErr, context.Canceled) || errors.Is(analysisErr, context.DeadlineExceeded)) && (collectionErr == nil || errors.Is(collectionErr, context.DeadlineExceeded) || errors.Is(collectionErr, context.Canceled) || errors.Is(collectionErr, errCap)) {
 		select {
 		case <-process.Done():
 		case err := <-background:
@@ -355,6 +395,9 @@ func (o *options) run(cmd *cobra.Command, paths []string, stdin io.Reader) error
 	} else {
 		summary := value["summary"].(map[string]any)
 		fmt.Fprintf(cmd.OutOrStdout(), "events=%v important=%v uncertain=%v unknown=%v complete=%v\n", summary["events"], summary["important"], summary["uncertain"], summary["unknown"], summary["complete_within_window"])
+	}
+	if budgetStopped {
+		return errors.New("provider budget exhausted; collection stopped, restart under supervision after reviewing budget policy")
 	}
 	if cmd.Context().Err() != nil {
 		return cmd.Context().Err()

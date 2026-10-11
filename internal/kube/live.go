@@ -169,7 +169,9 @@ func (e *consumerError) Error() string { return e.err.Error() }
 
 var errStreamRead = errors.New("log transport interrupted")
 
-// Reads run in a joined goroutine so idle events flush while the network is quiet.
+// Reads run in a joined goroutine so cancellation closes and joins the reader.
+// A quiet interval is not an event boundary: only a new header or stream end
+// finalizes a multiline event. The pending event remains byte-bounded.
 func readLive(ctx context.Context, r io.ReadCloser, p *event.Parser, emit func(event.Event) error) error {
 	type chunk struct {
 		data []byte
@@ -196,18 +198,10 @@ func readLive(ctx context.Context, r io.ReadCloser, p *event.Parser, emit func(e
 		}
 	}()
 	defer func() { close(stop); r.Close(); wg.Wait() }()
-	timer := time.NewTicker(350 * time.Millisecond)
-	defer timer.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-timer.C:
-			if e := p.Flush(); e != nil {
-				if err := emit(*e); err != nil {
-					return &consumerError{err}
-				}
-			}
 		case v := <-ch:
 			for _, e := range p.Feed(v.data) {
 				if err := emit(e); err != nil {
