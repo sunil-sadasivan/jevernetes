@@ -26,7 +26,11 @@ func remoteClient(ctx context.Context, k kube.Config, port int) (*inspect.Client
 	if err != nil {
 		return nil, err
 	}
-	api, err := core.NewForConfig(cfg)
+	httpClient, err := kube.HTTPClientFor(cfg)
+	if err != nil {
+		return nil, errors.New("Kubernetes transport unavailable")
+	}
+	api, err := core.NewForConfigAndClient(cfg, httpClient)
 	if err != nil {
 		return nil, errors.New("Kubernetes client unavailable")
 	}

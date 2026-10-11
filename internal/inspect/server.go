@@ -175,19 +175,48 @@ func ServeWithWriteTimeout(ctx context.Context, listener net.Listener, handler h
 	} else {
 		listener = netutil.LimitListener(listener, 16)
 	}
-	srv := &http.Server{Handler: handler, ReadHeaderTimeout: 2 * time.Second, ReadTimeout: 2 * time.Second, WriteTimeout: writeTimeout, IdleTimeout: 2 * time.Second, MaxHeaderBytes: 1024, BaseContext: func(net.Listener) context.Context { return ctx }}
+	serveCtx, cancelServe := context.WithCancel(ctx)
+	defer cancelServe()
+	var handlers sync.WaitGroup
+	var handlerMu sync.Mutex
+	stopping := false
+	tracked := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handlerMu.Lock()
+		if stopping {
+			handlerMu.Unlock()
+			return
+		}
+		handlers.Add(1)
+		handlerMu.Unlock()
+		defer handlers.Done()
+		handler.ServeHTTP(w, r)
+	})
+	srv := &http.Server{Handler: tracked, ReadHeaderTimeout: 2 * time.Second, ReadTimeout: 2 * time.Second, WriteTimeout: writeTimeout, IdleTimeout: 2 * time.Second, MaxHeaderBytes: 1024, BaseContext: func(net.Listener) context.Context { return serveCtx }}
 	done := make(chan struct{})
+	joined := make(chan struct{})
 	go func() {
+		defer close(joined)
 		select {
 		case <-ctx.Done():
-			shutdown, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-			defer cancel()
-			_ = srv.Shutdown(shutdown)
 		case <-done:
 		}
+		cancelServe()
+		shutdown, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if srv.Shutdown(shutdown) != nil {
+			_ = srv.Close()
+		}
+		// Serve returns as soon as listeners close. Join handlers too: a dashboard
+		// request may still be killing/waiting for its credential helper.
+		handlerMu.Lock()
+		stopping = true
+		handlerMu.Unlock()
+		handlers.Wait()
 	}()
 	err := srv.Serve(listener)
 	close(done)
+	<-joined
+
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil
 	}

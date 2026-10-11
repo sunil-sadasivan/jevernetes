@@ -74,6 +74,7 @@ func LoadContext(ctx context.Context, c Config) (*rest.Config, error) {
 	if err != nil {
 		return nil, errors.New("Kubernetes configuration unavailable")
 	}
+	cfg.Wrap(func(base http.RoundTripper) http.RoundTripper { return lifecycleTransport{ctx, base} })
 	cfg.Timeout = 15 * time.Second
 	cfg.QPS = 5
 	cfg.Burst = 10
@@ -93,7 +94,7 @@ type Collector struct {
 func New(cfg *rest.Config, c Config) (*Collector, error) {
 	copy := rest.CopyConfig(cfg)
 	copy.Timeout = 0
-	httpClient, err := rest.HTTPClientFor(copy)
+	httpClient, err := HTTPClientFor(copy)
 	if err != nil {
 		return nil, errors.New("Kubernetes transport unavailable")
 	}

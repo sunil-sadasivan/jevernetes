@@ -1,0 +1,43 @@
+Starting HEAD: f79e7f2ef2ada0bdcb4d71589fcb5fb19f24fc20
+Synthetic local regressions, before the corresponding production changes.
+
+GOCACHE="$PWD/.cache/build" GOPROXY=off GOSUMDB=off go test -count=1 ./internal/safefile -run '^TestProjectedDeploymentInputs$'
+--- FAIL: TestProjectedDeploymentInputs (0.02s)
+    --- FAIL: TestProjectedDeploymentInputs//etc/jevernetes/policy.json (0.00s)
+        projected_test.go:70: deployment input unreadable: unsafe file type or alias
+    --- FAIL: TestProjectedDeploymentInputs//var/run/jevernetes-secrets/jev-key (0.00s)
+        projected_test.go:70: deployment input unreadable: unsafe file type or alias
+    --- FAIL: TestProjectedDeploymentInputs//var/run/jevernetes-secrets/webhook-url (0.00s)
+        projected_test.go:70: deployment input unreadable: unsafe file type or alias
+    --- FAIL: TestProjectedDeploymentInputs//var/run/jevernetes-secrets/openai-key (0.00s)
+        projected_test.go:70: deployment input unreadable: unsafe file type or alias
+    --- FAIL: TestProjectedDeploymentInputs//var/run/jevernetes-secrets/anthropic-key (0.00s)
+        projected_test.go:70: deployment input unreadable: unsafe file type or alias
+    --- FAIL: TestProjectedDeploymentInputs//etc/jevernetes/policy.json#01 (0.00s)
+        projected_test.go:70: deployment input unreadable: unsafe file type or alias
+    --- FAIL: TestProjectedDeploymentInputs//etc/jevernetes-reviewed/rules.json (0.00s)
+        projected_test.go:70: deployment input unreadable: unsafe file type or alias
+FAIL
+FAIL	github.com/sunil-sadasivan/jevernetes/internal/safefile	0.251s
+FAIL
+
+GOCACHE="$PWD/.cache/build" GOPROXY=off GOSUMDB=off go test -count=1 ./internal/kube -run '^TestExecAuthenticationCancellation$'
+--- FAIL: TestExecAuthenticationCancellation (4.20s)
+    --- FAIL: TestExecAuthenticationCancellation/refresh=false/lifecycle=false (1.03s)
+        exec_regression_test.go:94: credential helper blocked cancellation
+    --- FAIL: TestExecAuthenticationCancellation/refresh=false/lifecycle=true (1.04s)
+        exec_regression_test.go:94: credential helper blocked cancellation
+    --- FAIL: TestExecAuthenticationCancellation/refresh=true/lifecycle=false (1.06s)
+        exec_regression_test.go:94: credential helper blocked cancellation
+    --- FAIL: TestExecAuthenticationCancellation/refresh=true/lifecycle=true (1.06s)
+        exec_regression_test.go:94: credential helper blocked cancellation
+FAIL
+FAIL	github.com/sunil-sadasivan/jevernetes/internal/kube	4.993s
+FAIL
+
+GOCACHE="$PWD/.cache/build" GOPROXY=off GOSUMDB=off go test -count=1 ./internal/inspect -run '^TestInspectionShutdownJoinsHandlers$'
+--- FAIL: TestInspectionShutdownJoinsHandlers (0.00s)
+    shutdown_test.go:74: inspection shutdown returned before handler joined
+FAIL
+FAIL	github.com/sunil-sadasivan/jevernetes/internal/inspect	0.824s
+FAIL

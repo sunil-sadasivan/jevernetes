@@ -45,6 +45,7 @@ type options struct {
 	state, policy, sink, listen                                                             string
 	inspectPort                                                                             int
 	hold, rescore                                                                           bool
+	projectedInputs                                                                         bool
 }
 
 func Main() int {
@@ -163,6 +164,7 @@ func newCommand(in io.Reader, out, stderr io.Writer, deps runtimeDeps) *cobra.Co
 		return o.runWith(c, nil, in, deps)
 	}}
 	collectionFlags(ctrl, &o.k)
+	ctrl.Flags().BoolVar(&o.projectedInputs, "projected-inputs", false, "Read fixed deployment inputs from Kubernetes projected volumes")
 	ctrl.Flags().StringVar(&o.state, "state", "", "Private SQLite state file")
 	ctrl.Flags().StringVar(&o.policy, "policy", "", "Strict JSON policy file")
 	ctrl.Flags().StringVar(&o.sink, "sink", "stdout", "stdout or webhook")

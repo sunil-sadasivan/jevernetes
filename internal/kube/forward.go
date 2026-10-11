@@ -12,8 +12,10 @@ import (
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	streamspdy "k8s.io/apimachinery/pkg/util/httpstream/spdy"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/portforward"
+	"k8s.io/client-go/transport"
 	"k8s.io/client-go/transport/spdy"
 )
 
@@ -40,7 +42,7 @@ func (f SPDYForwarder) Open(ctx context.Context, namespace, pod string, port int
 	if port < 1 || port > 65535 {
 		return nil, errors.New("invalid inspection port")
 	}
-	transport, upgrader, err := spdy.RoundTripperFor(f.Config)
+	rt, upgrader, err := spdyTransport(ctx, f.Config)
 	if err != nil {
 		return nil, errors.New("port-forward unavailable")
 	}
@@ -51,7 +53,7 @@ func (f SPDYForwarder) Open(ctx context.Context, namespace, pod string, port int
 	u.Path = strings.TrimSuffix(u.Path, "/") + "/api/v1/namespaces/" + url.PathEscape(namespace) + "/pods/" + url.PathEscape(pod) + "/portforward"
 	u.RawQuery = ""
 	u.Fragment = ""
-	client := &http.Client{Transport: transport, Timeout: 20 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("redirect rejected") }}
+	client := &http.Client{Transport: rt, Timeout: 20 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("redirect rejected") }}
 	dialer := spdy.NewDialer(upgrader, client, "POST", u)
 	stop := make(chan struct{})
 	ready := make(chan struct{})
@@ -85,4 +87,30 @@ func (f SPDYForwarder) Open(ctx context.Context, namespace, pod string, port int
 		}
 	}()
 	return t, nil
+}
+
+// Use the same bounded exec auth for upgrade requests. client-go's SPDY dialer
+// creates requests without a context, so wrap the entire handshake lifecycle.
+func spdyTransport(ctx context.Context, cfg *rest.Config) (http.RoundTripper, spdy.Upgrader, error) {
+	tc, err := transportConfig(cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+	tlsConfig, err := transport.TLSConfigFor(tc)
+	if err != nil {
+		return nil, nil, err
+	}
+	proxy := http.ProxyFromEnvironment
+	if cfg.Proxy != nil {
+		proxy = cfg.Proxy
+	}
+	upgrade, err := streamspdy.NewRoundTripperWithConfig(streamspdy.RoundTripperConfig{TLS: tlsConfig, Proxier: proxy, PingPeriod: 5 * time.Second})
+	if err != nil {
+		return nil, nil, err
+	}
+	rt, err := transport.HTTPWrappersForConfig(tc, upgrade)
+	if err != nil {
+		return nil, nil, err
+	}
+	return lifecycleTransport{ctx, rt}, upgrade, nil
 }

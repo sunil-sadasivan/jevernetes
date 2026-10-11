@@ -12,6 +12,7 @@
             "name": "controller",
             "args": [
               "controller",
+              "--projected-inputs",
               "--namespace",
               "jevernetes",
               "--state",

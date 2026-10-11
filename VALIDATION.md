@@ -1,3 +1,59 @@
+# Final projected-input and exec-auth blockers — 2026-10-11
+
+Started in the clean implementation worktree on `fix/go-full-parity-20261011` at exactly `f79e7f2ef2ada0bdcb4d71589fcb5fb19f24fc20`. Read `CONTRIBUTING.md`; no applicable `AGENTS.md` was present. All fixtures and credentials are synthetic/local. No push, deployment, GitHub mutation, production access or live provider/cluster contact occurred. Go/Rust/Python coexistence remains staged; runtime retirement remains disabled.
+
+## Regression-first evidence
+
+[Committed failure excerpts](docs/validation/final-blockers-before-f79e7f2.txt) preserve the commands and failures before each corresponding production change. The complete logs are ignored under `.cache/final-blockers-*-before.log`.
+
+- The atomic-writer fixture reproduced rejection of every deployed input: policy, webhook URL, TypeSafe/OpenAI/Anthropic keys, and optional reviewed rules. The fixture discovers paths in both actual manifests. Initially its reader adapter called the existing strict `Read`; the retained test calls the new projection reader and continues asserting that ordinary `Read` rejects the same leaves.
+- Initial exec auth and 401 refresh each exceeded the one-second cancellation bound for both request cancellation and owner-lifecycle cancellation. The before harness constructed the original collector with an in-memory 401 transport and killed/joined helpers after failures. The retained harness injects the same in-memory transport at the new transport-config boundary; separate real CLI, HTTP-client, SPDY and dashboard-handler regressions verify production routing.
+- An adjacent inspection shutdown regression failed before its production change: `Serve` returned as soon as its listener closed, before the request handler joined. It uses `net.Pipe`, so the failure does not depend on socket-bind privileges.
+
+## Fixes and audit
+
+**Projected deployment inputs:** Both the base manifest and argument-replacing reviewed-rules overlay explicitly pass controller-only `--projected-inputs`. Only the six fixed configuration paths gain projection support; other paths retain ordinary no-alias semantics even with this opt-in. The reader pins the root and generation using directory descriptors, interprets only `leaf -> ..data/leaf` plus a timestamp-shaped generation name, and opens the generation/regular leaf with `openat` and `O_NOFOLLOW`. Same-descriptor type, identity, single-link, size and cancellation checks remain. Arbitrary/absolute/traversing links, symlinked generations/leaves, hardlinks, FIFOs, directories, over-limit content, unsafe generation permissions and cancellation fail closed. Tests race atomic generation replacement (including escape attempts) and leaf replacement. The manifest fixture checks read-only mounts, mode-2777 roots, timestamp generations and mode-0440 files. The root mode reflects Kubernetes' [emptyDir-backed volume setup](https://github.com/kubernetes/kubernetes/blob/v1.35.3/pkg/volume/emptydir/empty_dir.go); generation pinning follows its [atomic-writer layout](https://github.com/kubernetes/kubernetes/blob/v1.35.0/pkg/volume/util/atomic_writer.go).
+
+Deployment mount ancestors and read-only roots remain trusted; this is not a general-purpose symlink resolver. Root/current-user directory ownership is checked, but root mode 0777 is valid because the mount supplies write protection. Generation removal can fail startup closed rather than retry through a different path. Policy/rules/provider/webhook values remain startup snapshots; pod restart is required to apply changes. Optional provider credentials are read only when selected; the optional rules overlay opts in independently. The unused `webhook-token` projection is not a Go authentication-header input and remains outside the allowlist. Ordinary inputs, reports and local Kubernetes files retain their prior protections. No in-cluster service-account path was read or changed.
+
+**Exec authentication:** Both ordinary Kubernetes HTTP clients and SPDY upgrades bypass client-go's context-free exec runner. The runner has request/owner cancellation and a separate 30-second cap, kills the helper process group and joins the command and output readers. Context-aware serialization permits cancelled waiters to leave promptly. TLS callbacks return cached certificates only; helper execution occurs where a request context exists. Initial/expiry/401 refresh, no-replay 401 semantics, v1/v1beta1 wire versions, environment overrides, explicit auth precedence, plugin policy, certificate/key parsing, token+certificate combinations, per-client caching and cluster extension/audience data are covered. Tokens remain opaque and server-validated; no global cache crosses cluster/client scope. Strict parsing rejects duplicate/unknown fields, incorrect kind/version, empty or malformed credentials, expired output, token control characters and output above 1 MiB. Noninteractive stderr and detailed credential/command errors are suppressed. Interactive success, deadline and Ctrl-C are tested through a local PTY; foreground terminal ownership is restored and helper PIDs are gone. Helpers remain trusted local code; intentionally detached processes outside their process group are not sandboxed by this mechanism.
+
+The CLI tests exercise real child processes for `k8s --duration 1`, `k8s` SIGTERM and `remote` SIGTERM, then assert the helper PID no longer exists. A dashboard handler using the real remote-client builder cancels/join auth without opening a listener. Concurrent ordinary HTTP and SPDY callers also join. Inspection server shutdown now cancels and joins handlers before returning, including on a listener error. No provider/cluster request can leave these hanging-auth fixtures: helpers block before transport I/O. The pinned `x/term` module becomes a direct dependency; no dependency version/checksum changes.
+
+## Exact validation
+
+Darwin arm64; Go 1.27.1, Python 3.14.7, Rust 1.94.0, Node 24.19.0. Commands use:
+
+```sh
+export PATH=/opt/homebrew/opt/node@24/bin:$PATH
+export GOCACHE="$PWD/.cache/build" GOPROXY=off GOSUMDB=off CARGO_NET_OFFLINE=true PIP_NO_INDEX=1
+```
+
+| Command | Result |
+| --- | --- |
+| `go test -count=1 ./internal/kube ./internal/safefile ./internal/cli ./internal/inspect -run 'TestExec\|TestProjected\|TestCLIExecAuthShutdown\|TestInspectionShutdownJoinsHandlers'` | Passed; `.cache/final-blockers-focused.log` |
+| `go test -race -count=1 ./internal/kube ./internal/safefile ./internal/cli ./internal/inspect -run 'TestExec\|TestProjected\|TestCLIExecAuthShutdown\|TestInspectionShutdownJoinsHandlers\|TestLocalConfigMergeAndSafeTokenRotation\|TestKubeFIFOFilesBounded\|TestFIFOOpenIsBounded\|TestCancellation'` | Passed; `.cache/final-blockers-focused-race.log` |
+| `tools/check.sh` | Passed the complete gate with local-listener permissions: full Go tests/race, vet, cross-builds, UI, Python, source/privacy and parity inventory checks. `.cache/final-blockers-check-local-listeners.log` |
+| `go test -race ./...` (inside `tools/check.sh`) | Passed every package with local-listener permissions, with no race reports. `.cache/final-blockers-check-local-listeners.log` |
+| `tools/release.sh` | Passed both executable names, private final reports, signal smoke, state-volume/migration/reopen checks and source/archive byte/privacy checks; `.cache/final-blockers-release.log` |
+| `go vet ./...`; `tools/check-cross.sh` | Passed, including Linux amd64/386/arm builds; binaries not executed on Linux. `.cache/final-blockers-vet-cross.log` |
+| `cargo fmt --check`; `cargo clippy --locked --offline --all-targets --all-features -- -D warnings` | Passed; `.cache/final-blockers-rust.log` |
+| `cargo test --locked --offline --all-features` | Passed all 38 library and 7 CLI tests with local-listener permissions; binary/doc-test targets also pass. `.cache/final-blockers-rust-local-listeners.log` |
+| `cargo build --locked --offline`; `python3 tests/rust/tui_pty.py target/debug/jevernetes` | Passed build, search, Ctrl-C and SIGTERM, with restored terminals/private reports; `.cache/final-blockers-rust.log` |
+| `python3 -m unittest discover -s tests -q` | All 124 tests passed inside the complete check gate with local-listener permissions. `.cache/final-blockers-check-local-listeners.log` |
+| `python3 tools/check_parity.py --run` | Passed all 17 executable suites/14 workflows with local-listener permissions; retirement disabled. `.cache/final-blockers-parity-local-listeners.log` |
+| `for file in tests/*_ui.cjs; do node "$file" \|\| exit; done`; syntax checks for both dashboard JavaScript trees | Six UI suites and syntax checks passed; `.cache/final-blockers-ui.log` |
+| `python3 tools/check_release.py`; `python3 tools/check_parity.py`; `node tools/check-release.mjs` | Passed source/privacy checks and 14-workflow/17-suite coexistence inventory; `.cache/final-blockers-ui.log` and release log |
+| `git diff --check`; `git diff --cached --check` | Passed; final diff independently inspected and final committed worktree clean |
+
+Implementation iterations included correcting the fractional-duration test argument, moving synthetic transport injection to the new boundary, fixing internal-to-wire cluster encoding, accepting the real mode-2777 volume root, and restoring terminal foreground ownership with a serialized SIGTTOU-safe handoff. The inspection join fixture initially failed to drain its `net.Pipe` response and was corrected to model a consuming HTTP client. These were resolved implementation/fixture issues, not environment exceptions. The PTY fixture explicitly skips only if the repository's Python 3 development prerequisite is unavailable; it ran here. Existing socket/ownership tests were not weakened or removed. Nonfatal macOS minimum-version linker warnings remain.
+
+## Environment limits and initial attempts
+
+The initially restricted runs of `tools/check.sh`, `go test -race -count=1 ./...`, Rust tests, Python tests and executable parity failed at denied TCP/Unix socket binding (including the listener-dependent controller notification timeout). Their logs remain `.cache/final-blockers-{check,go-race,rust,python,parity}.log`; there were no race reports. Automatic approval subsequently permitted the requested local-only gates to run with loopback listeners, still using offline dependencies and synthetic fixtures. All complete gates then passed as recorded above; no test was skipped or weakened to achieve those results. No live integrations, real Kubernetes mounts, container/PVC runtime, hosted CI or production access were exercised. The projected-volume tests emulate Kubernetes layout/rotation locally, including exact deployed names and relevant modes; Linux validation is cross-compilation only. The helper lifecycle tests and interactive PTYs ran natively on Darwin. Filesystem ancestors/read-only mounts and trusted local executable policy remain operator trust boundaries. These changes do not authorize runtime retirement. Historical entries below do not describe this pass.
+
+---
+
 # Eviction, stack context and safe file opens — 2026-10-11
 
 Started in the clean worktree at exact HEAD `8875d1845ef0a19189613151ec8a47fe0a9d94a2`. Repository guidance in `CONTRIBUTING.md` was read; no applicable `AGENTS.md` was present. All evidence uses synthetic local data and fixtures. No push, GitHub mutation, deployment, production access, live provider or cluster contact occurred. Go/Rust/Python coexistence and disabled runtime retirement are preserved.

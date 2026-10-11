@@ -28,7 +28,7 @@ import (
 var errCap = errors.New("global event cap reached")
 
 func readBounded(ctx context.Context, path string, limit int64) ([]byte, error) {
-	raw, err := safefile.Read(ctx, path, limit)
+	raw, err := safefile.ReadConfig(ctx, path, limit)
 	if err != nil {
 		return nil, errors.New("cannot read configuration file")
 	}
@@ -62,6 +62,9 @@ func (o *options) runWith(cmd *cobra.Command, paths []string, stdin io.Reader, d
 			}
 			return kube.New(cfg, c)
 		}
+	}
+	if o.projectedInputs {
+		cmd.SetContext(safefile.WithDeploymentInputs(cmd.Context()))
 	}
 	process, cancelProcess := context.WithCancel(cmd.Context())
 	defer cancelProcess()

@@ -153,7 +153,7 @@ func CredentialContext(ctx context.Context, kind string, lookup func(string) str
 			continue
 		}
 		if strings.HasSuffix(n, "_FILE") {
-			b, err := safefile.Read(ctx, v, 16384)
+			b, err := safefile.ReadConfig(ctx, v, 16384)
 			if err != nil {
 				return "", errors.New("cannot read provider key file")
 			}
