@@ -40,18 +40,41 @@
       if (generation === epoch && active()) timer = setTimeout(poll, interval);
     }
   }
-  function renderEvents() {
-    const query = $('filter').value.toLowerCase(); $('events').replaceChildren();
-    for (const event of events.filter(e => e.text.toLowerCase().includes(query)).slice(-200)) {
-      const row = document.createElement('pre'); row.textContent = `[${event.importance}] ${event.text}`;
-      $('events').append(row);
+  let reportEpoch = 0, reportRequest, nextOffset = null;
+  async function reportPage(offset = 0) {
+    const generation = ++reportEpoch;
+    if (reportRequest) reportRequest.abort();
+    reportRequest = new AbortController();
+    $('next').disabled = true;
+    const query = $('filter').value;
+    const path = offset || query ? `/api/report?offset=${offset}&q=${encodeURIComponent(query)}` : '/api/report';
+    try {
+      const report = await get(path, reportRequest.signal);
+      if (generation !== reportEpoch) return;
+      events = report.events || [];
+      text('summary', JSON.stringify(report.summary));
+      $('events').replaceChildren();
+      for (const event of events) {
+        const row = document.createElement('pre'); row.textContent = `[${event.importance}] ${event.text}`;
+        $('events').append(row);
+      }
+      const page = report.page;
+      nextOffset = page.next_offset;
+      $('next').disabled = nextOffset === null;
+      $('previous').disabled = offset === 0;
+      text('page-status', `${offset + (events.length ? 1 : 0)}–${offset + events.length} of ${page.matched_events} matches in ${page.retained_events} retained events. Coverage ${page.coverage_complete ? 'complete within report window' : 'partial or unverified'}. Unavailable on this page: ${page.unavailable_events}.`);
+    } catch (error) {
+      if (generation !== reportEpoch) return;
+      $('events').replaceChildren(); text('page-status', 'Report page unavailable. No completeness claim.');
     }
   }
-  $('filter').addEventListener('input', renderEvents);
+  $('filter').addEventListener('input', () => reportPage());
+  $('previous').addEventListener('click', () => reportPage());
+  $('next').addEventListener('click', () => { if (nextOffset !== null) reportPage(nextOffset); });
   $('controller').addEventListener('toggle', () => active() ? poll() : cancel());
   document.addEventListener('visibilitychange', () => active() ? poll() : cancel());
   window.addEventListener('pagehide', cancel);
-  get('/api/report').then(report => { events = report.events || []; text('summary', JSON.stringify(report.summary)); renderEvents(); }).catch(() => text('summary', 'Report unavailable or exceeds dashboard limit.'));
+  reportPage();
   get('/api/controller/config').then(config => {
     if (!config.enabled) { text('connection', 'Controller inspection is not configured.'); return; }
     enabled = true; interval = Math.max(2000, config.interval_seconds * 1000); poll();

@@ -160,6 +160,19 @@
       ]
     },
     {
+      "workflow": "schema1-review-import",
+      "status": "coexistence",
+      "assets": [
+        "jevernetes/migrate.py",
+        "tests/test_migration.py",
+        "internal/dashboard/report_test.go"
+      ],
+      "commands": [
+        "python3 -m unittest discover -s tests -q",
+        "go test ./internal/dashboard"
+      ]
+    },
+    {
       "workflow": "live-provider-cluster-container",
       "status": "unverified",
       "assets": [

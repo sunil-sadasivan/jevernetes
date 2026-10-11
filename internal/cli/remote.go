@@ -14,7 +14,6 @@ import (
 	"github.com/sunil-sadasivan/jevernetes/internal/dashboard"
 	"github.com/sunil-sadasivan/jevernetes/internal/inspect"
 	"github.com/sunil-sadasivan/jevernetes/internal/kube"
-	"github.com/sunil-sadasivan/jevernetes/internal/provider"
 	"github.com/sunil-sadasivan/jevernetes/internal/report"
 )
 
@@ -130,18 +129,14 @@ func dashboardCommand(o *options) *cobra.Command {
 		}
 		d := &dashboard.Dashboard{Interval: time.Duration(interval) * time.Second}
 		if path != "" {
-			raw, err := readBounded(path, 32<<20)
+			raw, err := readBounded(path, 64<<20)
 			if err != nil {
 				return err
 			}
-			var value map[string]any
-			if provider.Strict(raw, &value) != nil || value["schema_version"] != float64(2) {
-				return errors.New("dashboard requires schema-2 report")
-			} // Only bounded event previews reach the browser.
-			if events, ok := value["events"].([]any); ok && len(events) > 200 {
-				value["events"] = events[len(events)-200:]
+			d.Report, err = dashboard.LoadReport(raw)
+			if err != nil {
+				return err
 			}
-			d.Report = func() any { return value }
 		}
 		if k.Namespace != "" {
 			client, err := remoteClient(k, port)
@@ -160,7 +155,7 @@ func dashboardCommand(o *options) *cobra.Command {
 	}}
 	f := c.Flags()
 	f.StringVar(&listen, "listen", "127.0.0.1:8765", "Numeric loopback address")
-	f.StringVar(&path, "report", "", "Local schema-2 report to inspect")
+	f.StringVar(&path, "report", "", "Local schema-1 or schema-2 report to inspect")
 	f.StringVar(&k.Context, "controller-context", "", "Fixed controller context")
 	f.StringVar(&k.Namespace, "controller-namespace", "", "Fixed controller namespace")
 	f.StringVar(&k.Pod, "controller-pod", "", "Fixed exact pod")

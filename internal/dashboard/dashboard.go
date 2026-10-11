@@ -29,7 +29,7 @@ type cache struct {
 }
 type Dashboard struct {
 	Remote                       Sampler
-	Report                       func() any
+	Report                       *ReportView
 	Interval                     time.Duration
 	mu                           sync.Mutex
 	busy                         bool
@@ -97,17 +97,13 @@ func (d *Dashboard) Handler(host string) http.Handler {
 			inspect.JSON(w, 405, map[string]string{"error": "read-only dashboard"})
 			return
 		}
-		if r.URL.RawQuery != "" || r.URL.ForceQuery || r.URL.RawPath != "" {
+		if ((r.URL.RawQuery != "" || r.URL.ForceQuery) && r.URL.Path != "/api/report") || r.URL.RawPath != "" {
 			http.NotFound(w, r)
 			return
 		}
 		switch r.URL.Path {
 		case "/api/report":
-			if d.Report == nil {
-				inspect.JSON(w, 200, map[string]any{"events": []any{}, "summary": map[string]int{"events": 0}})
-			} else { // Reports can exceed the inspection cap; dashboard only exposes a bounded view.
-				inspect.JSON(w, 200, d.Report())
-			}
+			d.Report.page(w, r)
 			return
 		case "/api/controller/config":
 			inspect.JSON(w, 200, map[string]any{"enabled": d.Remote != nil, "interval_seconds": int(max(d.Interval, 2*time.Second).Seconds())})
