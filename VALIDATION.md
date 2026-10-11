@@ -1,3 +1,53 @@
+# Upgrade sockets, interactive terminals and retained assets — 2026-10-11
+
+Started in the exact existing worktree on `fix/go-full-parity-20261011`, clean at `3338ea130d7daaca9d4916985654c047af296612`. Read `CONTRIBUTING.md`; no applicable `AGENTS.md` was present. All endpoints, credentials, helper processes and evidence are synthetic/local. No push, deployment, GitHub mutation, live provider or cluster contact occurred. Rust/Python coexistence is preserved and runtime retirement remains disabled.
+
+## Regression-first evidence
+
+[Committed failure excerpts](docs/validation/lifecycle-before-3338ea13.txt) record failures before production edits. The permitted loopback run is `.cache/lifecycle-before-local.log`; the original restricted run is `.cache/lifecycle-before.log`.
+
+- A fake endpoint accepts the port-forward POST and withholds response headers until explicitly released after the assertion. Both `Open` and an owning inspection `Serve` exceeded the one-second cancellation bound. The same failure reproduced during HTTP proxy CONNECT negotiation. The retained fixture additionally covers the real dashboard → inspection client → SPDY forwarder path, with a fake pod client. None of these success assertions releases the endpoint.
+- A real interactive helper enters raw terminal mode, then succeeds, fails, blocks until forced timeout, or receives terminal Ctrl-C. All four initial cases left changed termios fields after helper join, despite foreground ownership being restored. The final fixture compares every saved `x/term.State` field, verifies foreground process ownership and checks the helper PID is gone. A zero-time readiness observation settles Darwin's transient PENDIN bookkeeping before comparison; no termios flags are masked. Darwin's canonical-mode transition and pending-input handling are documented in [Apple's tty implementation](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/tty.c).
+- A disposable local Git repository reproduces the old parity gate accepting 32 mutations across nine retained Rust/Python/test/package fixtures, including empty files, executable-mode changes and symlink replacements. The final regression also checks ordinary permission changes: all 45 mutations fail, while the original fixture passes. It lives in `tools/test_retained_parity.py` and runs in both the complete check and parity inventory.
+
+## Fixes and adjacent lifecycle audit
+
+The SPDY transport registers cancellation against the raw connection immediately after dialing, before proxy negotiation, TLS, request writes or response reads. It uses client-go's upgrade transport hook and keeps client-go's HTTP/SPDY response validation, framing, streams, pings and auth wrappers. HTTP/HTTPS CONNECT and SOCKS5 negotiation use the same cancellable socket; configured dial hooks, proxy callbacks, proxy credentials, verified TLS/SNI, exec tokens and client certificates remain active. Proxy callbacks receive the authenticated upgrade request, and TLS configuration remains discoverable through transport wrappers. Successful upgrades detach and join the handshake callback before response-body cleanup cancels the HTTP context. Forwarder completion closes any remaining socket on every path, including failed response validation and errors that bypass `NewConnection`. Tunnel cancellation watchers are stopped and joined before tunnel completion.
+
+Additional regressions cover cancellation and deadlines during blocked request writes, direct/proxy TLS, SOCKS5, CONNECT and incomplete error bodies; socket closure at the peer; callback close/cancel races; authenticated mTLS over direct, HTTP-proxy and HTTPS-proxy paths; rejection of untrusted TLS; and survival of a successful SPDY connection after handshake-body cleanup. Existing real SPDY inspection/stream cancellation and HTTP exec-auth/refresh tests remain active.
+
+Interactive exec auth saves termios inside the serialized foreground section, then restores foreground ownership and terminal attributes after `cmd.Run` has joined the helper and output readers, while SIGTTOU protection and serialization are still held. Restoration errors fail closed. Process-group cancellation and terminal prompts remain intact.
+
+The parity gate compares raw Git blob bytes, regular-file type and exact permission modes for all 60 retained assets against the pinned accepted coexistence tree `3338ea130d7daaca9d4916985654c047af296612`. It does not trust the index or `core.fileMode`. The historical workflow reference remains `3a08dcb1c3611c0014b000074006701ad767bfa2`; `retained_base` separately freezes existing package/test adaptations and the migration companion. This avoids reverting the already-adapted `Cargo.toml`, `MANIFEST.in` and `tests/test_analyzer.py`. Only the evolving parity inventory itself is excluded; new acceptance suites can be added. The existing retained tree is unchanged. Documentation now states these lifecycle and retention guarantees explicitly.
+
+## Verification
+
+Native Darwin arm64, Go 1.27.1, Rust 1.94.0, Python 3.14.7 and Node 24.19.0. Dependencies remain offline (`GOPROXY=off`, `GOSUMDB=off`, `CARGO_NET_OFFLINE=true`, `PIP_NO_INDEX=1`), with `GOCACHE` in the ignored worktree cache and Node 24 on PATH. Local TCP/Unix listener permission was granted for the requested hermetic suites.
+
+| Command | Result |
+| --- | --- |
+| `go test -count=1 ./internal/kube ./internal/inspect ./internal/cli -run 'TestSPDY\|TestUpgradeSocket\|TestExec\|TestRealSPDY\|TestCLIExecAuthShutdown\|TestInspectionShutdownJoinsHandlers'` | Passed; `.cache/lifecycle-focused.log` |
+| Same focused command with `-race -count=1` | Passed, no race reports; `.cache/lifecycle-focused-race.log` |
+| `tools/check.sh` | Complete gate passed with local-listener permission: full Go tests/race, `go vet ./...`, module tidy/diff, Linux amd64/386/arm cross-builds, six UI suites, Python, retained parity and source/privacy checks. Final pass: `.cache/lifecycle-check.log`; earlier full pass: `.cache/lifecycle-check-initial.log` |
+| `tools/release.sh` | Passed local build/signing, both executable names, signal/private-report and state migration/reopen smoke, source/archive byte and privacy checks; `.cache/lifecycle-release.log` |
+| `python3 tools/check_parity.py --run` | Passed 14 workflows / 18 suites; 60 retained assets byte/type/mode verified, retirement disabled; `.cache/lifecycle-parity.log` |
+| `python3 -m unittest discover -s tests -q` | All 124 tests passed in complete check and parity runs |
+| `python3 -m unittest discover -s tools -p test_retained_parity.py -q` | Passed the valid baseline and 45 rejection assertions; included in complete check and parity runs |
+| `cargo fmt --check`; `cargo clippy --locked --offline --all-targets --all-features -- -D warnings` | Passed |
+| `cargo test --locked --offline --all-features` | Passed all 38 library and 7 CLI tests, plus binary/doc-test targets, with local-listener permission; also rerun by parity |
+| `cargo build --locked --offline`; `python3 tests/rust/tui_pty.py target/debug/jevernetes` | Passed build and all three PTYs (search, Ctrl-C, SIGTERM), with restored terminals and private reports |
+| Six `tests/*_ui.cjs` suites; `node --check` for both dashboard JavaScript trees | Passed; UI suites included in complete check, syntax checks run separately |
+| `git diff --exit-code 3338ea13 -- src jevernetes Cargo.toml Cargo.lock pyproject.toml MANIFEST.in requirements-dev.txt tests ':!tests/parity.json'` | Passed: retained implementation/package/test tree unchanged |
+| `git diff --check`; `git diff --cached --check` | Passed; final source/privacy checks cover all 209 intended files; local commit and clean status verified after completion |
+
+## Resolved fixture/environment issues and operational limits
+
+The restricted first run could not bind its local endpoint; the permitted run reproduced the actual upgrade failures. A request-write fixture originally signaled readiness before dialing, allowing cancellation before socket ownership; it now signals at the blocked write. A one-second successful-handshake test timeout collided with the race detector's normal child-process exit delay; its success timeout is five seconds, while all stalled-cancellation assertions remain one second. Initial termios comparison exposed Darwin's transient pending-input bit after canonical-mode restoration; the fixture now observes readiness before comparing the complete state. These were resolved fixture issues, with no disabled tests or masked terminal fields. Nonfatal macOS minimum-version linker warnings remain.
+
+These checks exercise local protocol endpoints and PTYs, not live providers/clusters, deployed proxies, container/PVC runtime, hosted CI or a production soak. Linux amd64/386/arm validation is cross-compilation, not execution. Custom dial/proxy hooks and credential helpers remain trusted local code: hooks must honor contexts, and intentionally detached descendants outside a helper's process group are not sandboxed. No full Go investigation-parity or retirement claim follows from these results. Historical entries below describe earlier passes only.
+
+---
+
 # Final projected-input and exec-auth blockers — 2026-10-11
 
 Started in the clean implementation worktree on `fix/go-full-parity-20261011` at exactly `f79e7f2ef2ada0bdcb4d71589fcb5fb19f24fc20`. Read `CONTRIBUTING.md`; no applicable `AGENTS.md` was present. All fixtures and credentials are synthetic/local. No push, deployment, GitHub mutation, production access or live provider/cluster contact occurred. Go/Rust/Python coexistence remains staged; runtime retirement remains disabled.

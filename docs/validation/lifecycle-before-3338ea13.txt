@@ -1,0 +1,41 @@
+Starting HEAD: 3338ea130d7daaca9d4916985654c047af296612
+Production files were unchanged when these regressions ran.
+
+GOCACHE="$PWD/.cache/build" GOPROXY=off GOSUMDB=off go test -count=1 ./internal/kube -run 'TestSPDYStalledUpgradeCancellation|TestExecInteractivePTY'
+Local loopback listener permission granted. Selected failure lines:
+
+--- FAIL: TestExecInteractivePTY (3.31s)
+    --- FAIL: TestExecInteractivePTY/success (0.08s)
+                exec_regression_test.go:599: complete terminal attributes not restored
+    --- FAIL: TestExecInteractivePTY/cancel (3.08s)
+                exec_regression_test.go:599: complete terminal attributes not restored
+    --- FAIL: TestExecInteractivePTY/error (0.08s)
+                exec_regression_test.go:599: complete terminal attributes not restored
+    --- FAIL: TestExecInteractivePTY/interrupt (0.07s)
+                exec_regression_test.go:599: complete terminal attributes not restored
+--- FAIL: TestSPDYStalledUpgradeCancellation (4.19s)
+    --- FAIL: TestSPDYStalledUpgradeCancellation/open/upgrade (1.00s)
+        forward_regression_test.go:97: cancellation waited for endpoint release
+    --- FAIL: TestSPDYStalledUpgradeCancellation/server/upgrade (1.09s)
+        forward_regression_test.go:97: cancellation waited for endpoint release
+    --- FAIL: TestSPDYStalledUpgradeCancellation/open/proxy-connect (1.00s)
+        forward_regression_test.go:97: cancellation waited for endpoint release
+    --- FAIL: TestSPDYStalledUpgradeCancellation/server/proxy-connect (1.09s)
+        forward_regression_test.go:97: cancellation waited for endpoint release
+
+python3 -m unittest discover -s tests -p test_retained_parity.py
+The new fixture was subsequently moved to tools/test_retained_parity.py so it
+stays outside the immutable companion tests and companion package manifest.
+Nine synthetic retained files, each tested for empty bytes, executable-mode
+replacement, symlink replacement and deletion. The old gate accepted 32 of
+those mutations (including all empty, mode and symlink replacements).
+
+AssertionError: 0 == 0 : retained asset replacement passed
+Ran 1 test in 2.249s
+FAILED (failures=32)
+
+The first restricted Go run reproduced all four termios failures, then failed
+to bind the local test endpoint. The permitted run above reproduced both the
+POST-header and proxy-CONNECT cancellation failures in Open and owning Serve.
+No test depended on endpoint release to declare cancellation success; the
+failure cleanup released and joined the blocked endpoint afterward.

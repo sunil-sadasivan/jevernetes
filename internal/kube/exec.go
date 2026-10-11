@@ -197,7 +197,7 @@ func (b *boundedOutput) Write(p []byte) (int, error) {
 	return b.Buffer.Write(p)
 }
 
-func (a *execAuth) run(ctx context.Context) (*execCredentials, error) {
+func (a *execAuth) run(ctx context.Context) (credentials *execCredentials, runErr error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	interactive := false
@@ -254,9 +254,21 @@ func (a *execAuth) run(ctx context.Context) (*execCredentials, error) {
 		if err != nil {
 			return nil, errExecAuth
 		}
+		state, err := term.GetState(int(os.Stdin.Fd()))
+		if err != nil {
+			return nil, errExecAuth
+		}
+		// Deferred until Run has joined the helper and output readers; hold the
+		// interactive gate and SIGTTOU protection through both restorations.
+		defer func() {
+			groupErr := unix.IoctlSetPointerInt(int(os.Stdin.Fd()), unix.TIOCSPGRP, foreground)
+			stateErr := term.Restore(int(os.Stdin.Fd()), state)
+			if groupErr != nil || stateErr != nil {
+				credentials, runErr = nil, errExecAuth
+			}
+		}()
 		cmd.SysProcAttr.Foreground = true
 		cmd.SysProcAttr.Ctty = int(os.Stdin.Fd())
-		defer unix.IoctlSetPointerInt(int(os.Stdin.Fd()), unix.TIOCSPGRP, foreground)
 		cmd.Stderr = os.Stderr // Interactive prompts belong to the user's terminal.
 	}
 	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }

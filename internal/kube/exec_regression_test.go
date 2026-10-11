@@ -13,6 +13,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"golang.org/x/sys/unix"
+	"golang.org/x/term"
 	"io"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/rest"
@@ -22,6 +23,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -39,7 +41,16 @@ func TestCredentialHelperProcess(t *testing.T) {
 	marker := os.Getenv("JEV_AUTH_MARKER")
 	if os.Getenv("JEV_AUTH_TERMINAL") == "1" {
 		_ = os.WriteFile(marker, []byte(strconv.Itoa(os.Getpid())), 0600)
+		// Change echo/canonical attributes for every exit path. The PTY driver
+		// re-enables ISIG before sending a real foreground Ctrl-C.
+		if _, err := term.MakeRaw(int(os.Stdin.Fd())); err != nil {
+			os.Exit(3)
+		}
+		// Python sets ISIG after seeing this marker, before sending Ctrl-C.
 		fmt.Fprintln(os.Stderr, "synthetic terminal prompt")
+		if os.Getenv("JEV_AUTH_PTY") == "error" {
+			os.Exit(2)
+		}
 		line, err := bufio.NewReader(os.Stdin).ReadString('\n')
 		if err != nil || line != "synthetic input\n" {
 			os.Exit(2)
@@ -561,6 +572,13 @@ func TestExecInteractiveHarness(t *testing.T) {
 		return
 	}
 	marker := execFixture(t, false)
+	// A readiness observation settles Darwin's transient PENDIN bookkeeping
+	// without consuming input; compare every termios field, without masking flags.
+	_, _ = unix.Poll([]unix.PollFd{{Fd: int32(os.Stdin.Fd()), Events: unix.POLLIN}}, 0)
+	before, err := term.GetState(int(os.Stdin.Fd()))
+	if err != nil {
+		t.Fatal(err)
+	}
 	life, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	config, err := LoadContext(life, cfg())
@@ -579,6 +597,11 @@ func TestExecInteractiveHarness(t *testing.T) {
 	if err != nil || group != syscall.Getpgrp() {
 		t.Fatal("terminal foreground group not restored")
 	}
+	_, _ = unix.Poll([]unix.PollFd{{Fd: int32(os.Stdin.Fd()), Events: unix.POLLIN}}, 0)
+	after, stateErr := term.GetState(int(os.Stdin.Fd()))
+	if stateErr != nil || !reflect.DeepEqual(before, after) {
+		t.Errorf("complete terminal attributes not restored: before=%#v after=%#v", before, after)
+	}
 	raw, _ := os.ReadFile(marker)
 	pid, _ := strconv.Atoi(string(raw))
 	if pid == 0 || syscall.Kill(pid, 0) != syscall.ESRCH {
@@ -592,7 +615,7 @@ func TestExecInteractivePTY(t *testing.T) {
 		t.Skip("Python 3 is required for the local PTY fixture")
 	}
 	script := `
-import os, pty, select, signal, sys, time
+import os, pty, select, signal, sys, time, termios
 pid, fd = pty.fork()
 if pid == 0:
     env = dict(os.environ, JEV_AUTH_PTY=sys.argv[2], GORACE="atexit_sleep_ms=0")
@@ -611,6 +634,9 @@ try:
                 break
             output += data
             if b"synthetic terminal prompt" in output and not sent and sys.argv[2] in ("success", "interrupt"):
+                attrs = termios.tcgetattr(fd)
+                attrs[3] |= termios.ISIG
+                termios.tcsetattr(fd, termios.TCSANOW, attrs)
                 os.write(fd, b"synthetic input\n" if sys.argv[2] == "success" else b"\x03")
                 sent = True
     else:
@@ -622,7 +648,7 @@ try:
 finally:
     os.close(fd)
 `
-	for _, mode := range []string{"success", "cancel", "interrupt"} {
+	for _, mode := range []string{"success", "cancel", "error", "interrupt"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 			defer cancel()
