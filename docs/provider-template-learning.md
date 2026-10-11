@@ -3,7 +3,7 @@
 Risk classification (`--risk-provider`) and template review (`--template-provider`) use independent fixed-host clients. Templates support OpenAI and Anthropic only. Explicit template model and input/output prices are required. Offline mode reads no template credentials and makes no requests.
 
 ```sh
-jevernetes files synthetic.jsonl --grouping-strategy semantic \
+jevernetes-go files synthetic.jsonl --grouping-strategy semantic \
   --template-provider openai --template-model MODEL \
   --template-input-price 0 --template-output-price 0
 ```

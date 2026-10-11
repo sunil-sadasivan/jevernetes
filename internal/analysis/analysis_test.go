@@ -255,3 +255,44 @@ func TestParseUncertaintyCannotPublishRoutineSafety(t *testing.T) {
 		}
 	}
 }
+
+func TestSemanticIdentityKeepsGenerationSeparate(t *testing.T) {
+	g := NewGrouper("drain", "strict", 1, time.Minute, false, 32)
+	now := time.Now()
+	a, b := ev(1), ev(2)
+	b.Text = "INFO request_id=abcdef1234567890"
+	old, _, _ := g.Observe(a, now)
+	other := ev(3)
+	other.Text = "another family"
+	g.Observe(other, now)
+	current, _, _ := g.Observe(b, now)
+	if old.TemplateID != current.TemplateID || old.VersionID != current.VersionID || old.Generation == current.Generation || old.Compatible(current) || g.Current(old) || !g.Current(current) {
+		t.Fatal("semantic identity or generation isolation lost", old, current)
+	}
+	if g.Publish(old, verdict(), "old", now) || !g.Publish(current, verdict(), "current", now) {
+		t.Fatal("publication ignored generation")
+	}
+	g.Invalidate(old)
+	if _, j, _ := g.Observe(a, now); j == nil {
+		t.Fatal("stale invalidation cleared current verdict")
+	}
+	// Diagnostic output preserves stable IDs and the separate incarnation.
+	raw, err := json.Marshal(g.Checkpoint())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var checkpoint struct {
+		Templates []struct {
+			TemplateID string `json:"template_id"`
+			VersionID  string `json:"version_id"`
+			Generation uint64 `json:"generation"`
+		} `json:"templates"`
+	}
+	if err := json.Unmarshal(raw, &checkpoint); err != nil || len(checkpoint.Templates) != 1 {
+		t.Fatal(string(raw), err)
+	}
+	row := checkpoint.Templates[0]
+	if row.TemplateID != old.TemplateID || row.VersionID != old.VersionID || row.Generation != current.Generation {
+		t.Fatal("checkpoint conflated semantic and local identities", row)
+	}
+}

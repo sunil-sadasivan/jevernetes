@@ -106,6 +106,8 @@ func Template(text string, classic bool) string {
 }
 
 type Ticket struct {
+	// Semantic identities survive restarts; Generation belongs only to this
+	// grouper and remains part of equality for every stale-result check.
 	Key, TemplateID, VersionID string
 	Generation                 uint64
 }
@@ -147,6 +149,7 @@ func (g *Grouper) Observe(e event.Event, now time.Time) (Ticket, *event.Judgment
 		return Ticket{}, nil, "ineligible"
 	}
 	template := e.Text
+	kind := g.strategy
 	if g.strategy == "semantic" {
 		if g.rules == nil {
 			return Ticket{}, nil, "shadow_only"
@@ -164,10 +167,14 @@ func (g *Grouper) Observe(e event.Event, now time.Time) (Ticket, *event.Judgment
 	if g.rules != nil {
 		if t, ok := g.rules.Template(e, now); ok {
 			template = t
+			kind = "reviewed"
 			scope = e.Source
 		}
 	}
-	key := event.Hash([]any{scope, template, e.Baseline.Important})
+	// Namespace the normalization contract separately from process-local
+	// generation. Reviewed templates already include the rule ID and version.
+	version := event.Hash([]any{"go-template-version-v2", g.strategy, g.masking, kind, template})
+	key := event.Hash([]any{"go-template-v2", scope, version, e.Baseline.Important})
 	g.sequence++
 	p := g.entries[key]
 	if p == nil {
@@ -183,7 +190,7 @@ func (g *Grouper) Observe(e event.Event, now time.Time) (Ticket, *event.Judgment
 			delete(g.entries, oldest)
 		}
 		g.generation++
-		t := Ticket{Key: key, TemplateID: event.Hash([]any{key, g.generation}), VersionID: event.Hash([]any{template, g.generation}), Generation: g.generation}
+		t := Ticket{Key: key, TemplateID: key, VersionID: version, Generation: g.generation}
 		p = &partition{ticket: t, interval: 16}
 		g.entries[key] = p
 	}

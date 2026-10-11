@@ -116,7 +116,10 @@ func (e *Engine) teach(ctx context.Context, events []event.Event) {
 	touched := []string{}
 	seen := map[string]bool{}
 	for i, ev := range events {
-		if !Eligible(ev) {
+		// Stable semantic IDs can outlive an evicted ticket. Learning must
+		// preserve the engine's stale-generation rejection, including when a
+		// current incarnation of that same family appears later in this batch.
+		if !Eligible(ev) || ev.AnalysisError == "stale template generation" {
 			continue
 		}
 		key, version := "", ""
@@ -192,7 +195,7 @@ func (e *Engine) teach(ctx context.Context, events []event.Event) {
 					decision.Outcome = "escalated"
 					e.Metrics["refine_escalations"]++
 					for i := range events {
-						if events[i].Assessment != nil && events[i].Assessment.TemplateID == key && events[i].Assessment.VersionID == p.version && Eligible(events[i]) && events[i].Importance != "important" {
+						if events[i].Assessment != nil && events[i].Assessment.TemplateID == key && events[i].Assessment.VersionID == p.version && Eligible(events[i]) && events[i].AnalysisError != "stale template generation" && events[i].Importance != "important" {
 							events[i].Judgment = *j
 						}
 					}

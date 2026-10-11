@@ -2,6 +2,7 @@ package analysis
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -84,5 +85,38 @@ func TestProposalProtectedPathAndShapeRejected(t *testing.T) {
 	samples[1] = strings.Replace(samples[1], "request_id", "other_id", 1)
 	if ValidateProposal(p, samples) {
 		t.Fatal("shape changed")
+	}
+}
+
+func TestLearningCannotOverrideStaleGeneration(t *testing.T) {
+	for _, prelearned := range []bool{false, true} {
+		t.Run(fmt.Sprint(prelearned), func(t *testing.T) {
+			c := config()
+			c.Capacity = 1
+			c.Teacher = &teacher{}
+			c.TemplateMinSamples = 2
+			c.TemplateCapacity = 8
+			c.TemplateTTL = time.Minute
+			c.TemplateConfidence = .85
+			e, err := New(c, judge())
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx := context.Background()
+			a, b, other := ev(1), ev(2), ev(3)
+			b.Text = "INFO request_id=abcdef1234567890"
+			other.Text = "another family"
+			if prelearned {
+				e.Batch(ctx, []event.Event{a, b})
+				e.Batch(ctx, []event.Event{other})
+			}
+			out := e.Batch(ctx, []event.Event{a, other, b, a})
+			if out[0].Importance != "unknown" || out[0].AnalysisError != "stale template generation" || out[0].AnalysisReused {
+				t.Fatal("learning overrode stale generation", out[0])
+			}
+			if out[2].Importance != "important" || out[3].Importance != "important" {
+				t.Fatal("current generation lost escalation", out)
+			}
+		})
 	}
 }

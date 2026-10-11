@@ -8,7 +8,7 @@ import (
 	"github.com/sunil-sadasivan/jevernetes/internal/provider"
 )
 
-// CachedJudge persists only hashed evidence identities and validated verdicts.
+// CachedJudge persists only hashed semantic identities and validated verdicts.
 // Sensitive or incomplete dossiers always bypass durable reuse.
 type CachedJudge struct {
 	Store    *Store
@@ -26,8 +26,11 @@ func (c CachedJudge) Judge(ctx context.Context, groups []provider.Dossier) ([]ev
 	now := time.Now().Unix()
 	for i, g := range groups {
 		key := ""
-		if !g.Sensitive && !g.Truncated && !g.EvidenceLimited && !g.SamplesLimited && !g.SecuritySignal && g.TemplateID != "" {
-			key = event.Hash([]any{"go-group-cache-v1", c.Contract, g.ScopeID, g.TemplateID, g.VersionID, event.Hash(g.Samples), g.BaselineImportant})
+		if g.TemplateID != "" {
+			// One entry per semantic family: an audit of another normalized
+			// sample must invalidate every prior verdict for that family. The
+			// new namespace leaves old sample-specific entries unreachable.
+			key = event.Hash([]any{"go-group-cache-v2", c.Contract, g.ScopeID, g.TemplateID, g.VersionID, g.BaselineImportant})
 		}
 		if key != "" && (c.Rescore || g.CacheMode != provider.CacheDefault) {
 			// Invalidate before dispatch: failed/unsafe reassessment must not
@@ -35,6 +38,11 @@ func (c CachedJudge) Judge(ctx context.Context, groups []provider.Dossier) ([]ev
 			if err := c.Store.deleteVerdict(ctx, key); err != nil {
 				return nil, err
 			}
+		}
+		// Unsafe evidence still invalidates on reassessment, but can neither
+		// consume nor publish a reusable family verdict.
+		if g.Sensitive || g.Truncated || g.EvidenceLimited || g.SamplesLimited || g.SecuritySignal {
+			key = ""
 		}
 		if key != "" && !c.Rescore && g.CacheMode == provider.CacheDefault {
 			j, err := c.Store.Lookup(ctx, key, now, c.TTL)

@@ -1,3 +1,65 @@
+# Stable audit families and review identities — 2026-10-11
+
+This narrow follow-up starts from the verified clean branch `fix/go-full-parity-20261011` at exactly `3558887ff88c4f88deba61e83d2451e962e73f53`. Work and validation use local synthetic providers, SQLite databases, streams, loopback servers and Git fixtures. No production access, live provider/cluster calls, pushes, deployments or GitHub changes occurred. Staged Rust/Python/Go coexistence and all prior fixes remain in place.
+
+## Identity dependency audit and changes
+
+Before editing, the audit traced `TemplateID`, `VersionID`, full `Ticket` equality/`Compatible`, `Current`, `Publish`, `Invalidate`, batch grouping/fanout, reviewed-rule matching, teacher learning/refinement, assessment/report/checkpoint output, review flags, cache keys/provider contracts, SQLite lookup/deletion/publication, metrics and their tests.
+
+- Review-facing template identity now hashes semantic source scope, version and baseline importance. Version identity hashes the normalization namespace, strategy/masking, template kind and canonical template. Reviewed templates already include rule ID/version; their full source scope is retained. Discovery order and eviction do not enter either identity.
+- Generation remains a separate process-local counter in full ticket equality. Stale tickets cannot publish or invalidate a replacement. Engine marks already-evicted dossiers as durable-cache bypass before dispatch, because CachedJudge runs before Engine's final publication check. Learning also preserves stale results as unknown, including saved escalations and same-batch teacher reviews.
+- Durable cache namespace `go-group-cache-v2` has one entry per semantic family/provider contract, independent of literal samples. Audit, veto and rescore deletion happens before dispatch and before the evidence-safety gate; limited-sample audits invalidate too. Only validated reusable replacements can be stored, and review-veto/stale-ticket results cannot populate the cache.
+- Checkpoint schema/output fields remain diagnostic only: stable opaque template/version IDs plus separate generation/counters. No checkpoint is restored as safety authority. Metrics remain aggregate counters, with no identity labels; veto regression tests assert zero reuse/fanout counters.
+- Host examples for remote/dashboard/controller and related Go demo/template-learning examples use `jevernetes-go`. Documentation explicitly distinguishes the Go image's internal `/usr/local/bin/jevernetes`; Rust and Python command examples and container commands are preserved.
+
+## Reproduced counterexamples and regression evidence
+
+Before production-code edits, `go test -count=1 ./internal/controller -run 'TestEngine(DurableReassessment|ReviewIdentity)'` failed all six audit-outcome subtests and both veto-capacity subtests against the starting implementation (`.cache/family-before.log`). Sample A and sample B differ only in a normalized request ID: B's audit left A's old routine verdict reusable after SQLite close/reopen, including when B's safe replacement should have changed it. Reversed discovery order bypassed the recorded veto and allowed fanout.
+
+Passing regression coverage now includes:
+
+- `TestEngineDurableReassessmentAcrossRestart`: Engine → CachedJudge → real SQLite close/reopen; ordinary persisted hits; sample-A seed/sample-B audit/sample-A restart; safe replacement and unknown, uncertain, invalid, provider-error and wrong-response-count outcomes; repeated vetoes with no durable publication.
+- `TestEngineReviewIdentityAcrossRestartAndEviction`: reversed discovery order after restart, capacities 1 and 8, eviction/recreation, repeated multi-sample batches, stable template/version IDs, no vetoed fanout/reuse and zero durable rows after each vetoed batch.
+- `TestEngineLimitedAuditInvalidatesDurableFamily`: nine distinct normalized request IDs exceed the sample cap; the audit deletes the prior family entry and a reopened engine must call the provider.
+- `TestEngineStaleGenerationCannotSeedDurableCache`: A/other/B in one capacity-1 batch; the evicted generation's safe response cannot seed SQLite when the current generation returns unknown; reopen still requires a provider call.
+- `TestEngineDurableSemanticIdentityIsolation`: SQLite restarts prove intended normalized-sample and Drain pod reuse, while source scope, baseline, protected template literals, masking/strategy, provider contract, exact-source pod identity, reviewed-rule version and reviewed full-source pod identity remain isolated.
+- `TestSemanticIdentityKeepsGenerationSeparate`: stable IDs across recreation, unequal tickets/generations, stale publication/invalidation rejection and checkpoint identity/counter separation.
+- `TestLearningCannotOverrideStaleGeneration`: both saved and newly generated learning escalations preserve stale results as unknown while escalating current results. Both variants failed before the learning guard (`.cache/family-learning-before.log`) and passed with an uncached race run afterward.
+
+## Executed validation
+
+Environment: Darwin arm64, Go 1.27.1, Node 24.19.0 with `/opt/homebrew/opt/node@24/bin` first in `PATH`, Python 3.14.7, Rust 1.94.0. Go gates use `GOPROXY=off GOSUMDB=off`; Cargo uses `--offline`; Python build/install uses local dependencies with `PIP_NO_INDEX=1`. Logs and build artifacts remain ignored under `.cache/family-*`, `dist/` and `target/`.
+
+| Check | Result |
+| --- | --- |
+| `gofmt` on all changed Go files; `gofmt -l cmd internal examples` | Passed; no unformatted files |
+| `go test -count=1 ./internal/analysis ./internal/controller` | Passed |
+| `go test -race -count=1 ./internal/analysis ./internal/controller ./internal/provider ./internal/cli ./internal/kube ./internal/report` | All six packages passed; no race report |
+| `go test -race -count=1 ./internal/analysis -run 'TestLearningCannotOverrideStaleGeneration\|TestSemanticIdentityKeepsGenerationSeparate'` | Passed |
+| `tools/check.sh` with Node 24, rerun after the final code change | Passed: tidy/no dependency diff, all Go packages, race, vet, Linux amd64/386/arm cross-builds, six JS suites, 122 Python tests, privacy/source checks and the 14-workflow/17-suite coexistence inventory |
+| `tools/release.sh` with Node 24 | Passed: both Go names, offline classification/private reports/signals, SQLite migration/reopen and state-volume smoke, source/archive byte/privacy checks |
+| `cargo fmt --check` | Passed |
+| `cargo clippy --locked --offline --all-targets --all-features -- -D warnings` | Passed |
+| `cargo test --locked --offline --all-features` | 38 library and 7 CLI tests passed |
+| `cargo build --locked --offline --release` | Passed |
+| `python3 tests/rust/tui_pty.py target/release/jevernetes` | Search, Ctrl-C and SIGTERM passed; terminal restored and private reports saved |
+| `cargo package --list --allow-dirty --offline` | Passed; coexistence sources retained |
+| `PIP_NO_INDEX=1 .venv/bin/python -m build --no-isolation --outdir dist/python` | Wheel and sdist built |
+| `python3 tools/check_release.py --dist dist/python` | Both companion archives passed |
+| `.venv/bin/python tools/check_python_package.py dist/python/*.whl` | Installed entry point/assets and 122 Python tests passed |
+| `node --check` for every `internal/dashboard/web/*.js` and `jevernetes/web/*.js` | Passed |
+| `git diff --check` | Passed |
+
+One restricted test attempt was blocked by writes to the shared Go cache; successful runs had local cache/socket permission and used only synthetic fixtures. Existing macOS deployment-target linker warnings were nonfatal.
+
+## Remaining limitations
+
+Opaque IDs from the prior generation-dependent scheme cannot be translated: existing operator vetoes must be reissued using stable IDs from a new Go report. Semantic template/rule-version changes intentionally get new identities. Old v1 sample-specific cache rows are unreachable by this runtime and remain subject to normal bounded capacity eviction; this change does not rewrite the SQLite schema or migrate those verdicts.
+
+No live provider accuracy/billing, production Kubernetes/SPDY compatibility, container/PVC execution, hosted CI or production soak was validated. Linux targets were cross-built, not executed. The three existing ownership subtests remain skipped as UID 501: `TestPrivateStateDirectory/foreign_owner`, `TestPrepareVolumeRejectsConflicts/foreign-owner`, and `TestWALUnsafeSHMRejectedBeforeInitialization/foreign-owner`. Checkpoints and transport cursors remain process-local/diagnostic as previously documented. These local checks do not authorize retirement of the retained runtimes. Earlier validation below is historical evidence, not a claim of production access during this follow-up.
+
+---
+
 # Independent review corrections — 2026-10-11
 
 This follow-up starts from clean branch `fix/go-full-parity-20261011` at `fba6e375033d228374224b3b8b3fe8688f7796a1`. Work is confined to this worktree; tests use local synthetic providers, streams, Git repositories and SQLite state. No live providers/clusters, production access, pushes, deployments or remote GitHub changes are involved. Staged coexistence and the runtime-retirement prohibition remain in force.

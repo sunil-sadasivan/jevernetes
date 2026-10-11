@@ -33,7 +33,7 @@ type CacheMode uint8
 const (
 	CacheDefault CacheMode = iota
 	CacheRefresh           // Reassess, replacing a safe durable verdict only after success.
-	CacheBypass            // Reassess without publishing a durable verdict (human veto).
+	CacheBypass            // Reassess without durable publication (human veto or stale ticket).
 )
 
 type Dossier struct {

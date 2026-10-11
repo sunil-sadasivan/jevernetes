@@ -129,6 +129,11 @@ func (e *Engine) Batch(ctx context.Context, events []event.Event) []event.Event 
 	dossiers := make([]provider.Dossier, len(groups))
 	for i, g := range groups {
 		dossiers[i] = g.d
+		if g.eligible && !e.groups.Current(g.ticket) {
+			// A later observation in this batch can evict this generation.
+			// Durable caching runs before Publish's final stale-ticket check.
+			dossiers[i].CacheMode = provider.CacheBypass
+		}
 	}
 	var js []event.Judgment
 	var err error
