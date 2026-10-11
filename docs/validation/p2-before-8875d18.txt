@@ -1,0 +1,70 @@
+Base: 8875d1845ef0a19189613151ec8a47fe0a9d94a2
+Production changes: none
+Command: GOCACHE="$PWD/.cache/build" GOPROXY=off GOSUMDB=off go test -count=1 ./internal/controller ./internal/event ./internal/cli -run 'TestEvictionRetainsDurableLifetime|TestTimestampedStackContext|TestFIFOOpenIsBounded'
+Selected failing output (full local log: .cache/p2-before.log):
+--- FAIL: TestEvictionRetainsDurableLifetime (0.03s)
+    --- FAIL: TestEvictionRetainsDurableLifetime/rollback (0.01s)
+        eviction_regression_test.go:72: eviction renewed old durable authority: calls=2 want=3, fanout=true
+    --- FAIL: TestEvictionRetainsDurableLifetime/recovered-wall (0.00s)
+        eviction_regression_test.go:72: eviction renewed old durable authority: calls=2 want=3, fanout=true
+    --- FAIL: TestEvictionRetainsDurableLifetime/multiple-evictions (0.01s)
+        eviction_regression_test.go:72: eviction renewed old durable authority: calls=9 want=10, fanout=true
+    --- FAIL: TestEvictionRetainsDurableLifetime/provider-failure (0.00s)
+        eviction_regression_test.go:72: eviction renewed old durable authority: calls=2 want=3, fanout=true
+FAIL
+FAIL	github.com/sunil-sadasivan/jevernetes/internal/controller	0.386s
+--- FAIL: TestTimestampedStackContext (0.06s)
+    --- FAIL: TestTimestampedStackContext/file/0 (0.00s)
+    --- FAIL: TestTimestampedStackContext/file/1 (0.00s)
+    --- FAIL: TestTimestampedStackContext/file/3 (0.00s)
+    --- FAIL: TestTimestampedStackContext/file/4 (0.00s)
+    --- FAIL: TestTimestampedStackContext/kubernetes/0 (0.00s)
+    --- FAIL: TestTimestampedStackContext/kubernetes/1 (0.00s)
+    --- FAIL: TestTimestampedStackContext/kubernetes/3 (0.00s)
+    --- FAIL: TestTimestampedStackContext/kubernetes/4 (0.00s)
+FAIL
+FAIL	github.com/sunil-sadasivan/jevernetes/internal/event	0.494s
+--- FAIL: TestFIFOOpenIsBounded (12.04s)
+    --- FAIL: TestFIFOOpenIsBounded/input (2.01s)
+        open_regression_test.go:78: input open blocked past deadline (including SIGTERM): signal: killed
+    --- FAIL: TestFIFOOpenIsBounded/rules (2.01s)
+        open_regression_test.go:78: rules open blocked past deadline (including SIGTERM): signal: killed
+    --- FAIL: TestFIFOOpenIsBounded/policy (2.01s)
+        open_regression_test.go:78: policy open blocked past deadline (including SIGTERM): signal: killed
+    --- FAIL: TestFIFOOpenIsBounded/dashboard (2.01s)
+        open_regression_test.go:78: dashboard open blocked past deadline (including SIGTERM): signal: killed
+    --- FAIL: TestFIFOOpenIsBounded/credential (2.01s)
+        open_regression_test.go:78: credential open blocked past deadline (including SIGTERM): signal: killed
+    --- FAIL: TestFIFOOpenIsBounded/signal (2.01s)
+        open_regression_test.go:78: signal open blocked past deadline (including SIGTERM): signal: killed
+FAIL
+FAIL	github.com/sunil-sadasivan/jevernetes/internal/cli	12.816s
+FAIL
+
+Parser failure included the Python traceback split into line counts 3,2,1,1 instead of 5,1,1 (two trailing normal lines). Go and .NET fixtures also split.
+
+Adjacent client-go path regression, before kube production changes:
+Command: GOCACHE="$PWD/.cache/build" GOPROXY=off GOSUMDB=off go test -count=1 ./internal/kube -run TestKubeFIFOFilesBounded
+--- FAIL: TestKubeFIFOFilesBounded (10.04s)
+    --- FAIL: TestKubeFIFOFilesBounded/config (2.01s)
+        file_regression_test.go:68: unsafe config config open: signal: killed
+    --- FAIL: TestKubeFIFOFilesBounded/token (2.01s)
+        file_regression_test.go:68: unsafe token config open: signal: killed
+    --- FAIL: TestKubeFIFOFilesBounded/ca (2.01s)
+        file_regression_test.go:68: unsafe ca config open: signal: killed
+    --- FAIL: TestKubeFIFOFilesBounded/certificate (2.01s)
+        file_regression_test.go:68: unsafe certificate config open: signal: killed
+    --- FAIL: TestKubeFIFOFilesBounded/key (2.01s)
+        file_regression_test.go:68: unsafe key config open: signal: killed
+FAIL
+FAIL	github.com/sunil-sadasivan/jevernetes/internal/kube	10.851s
+FAIL
+
+Additional observation regression after Store deadline retention, before Grouper clock high-water fix:
+Command: GOCACHE="$PWD/.cache/build" GOPROXY=off GOSUMDB=off go test -count=1 ./internal/controller -run TestEvictionRetainsDurableLifetime/rollback-before-expiry
+--- FAIL: TestEvictionRetainsDurableLifetime (0.01s)
+    --- FAIL: TestEvictionRetainsDurableLifetime/rollback-before-expiry (0.01s)
+        eviction_regression_test.go:76: eviction renewed old durable authority: calls=2 want=3, fanout=true
+FAIL
+FAIL	github.com/sunil-sadasivan/jevernetes/internal/controller	0.399s
+FAIL

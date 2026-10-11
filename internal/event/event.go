@@ -117,9 +117,16 @@ var ansi = regexp.MustCompile("\x1b(?:\\[[0-?]*[ -/]*[@-~]|\\][^\x07\x1b]*(?:\x0
 var stamp = regexp.MustCompile(`^\d{4}-\d\d-\d\d[T ][\d:.]+(?:Z|[+-]\d\d:\d\d)?[ \t]`)
 var continuation = regexp.MustCompile(`^(?:\s+\S|Caused by:|Suppressed:|Traceback |[\w.]+(?:Error|Exception):|\s*\.\.\. \d+ more)`)
 
-// Timestamped normal lines may be indented for formatting. Require an
-// explicit stack marker in that case; unstamped lines retain legacy framing.
+// Explicit stack markers establish context for timestamped source/detail lines.
+// Unstamped lines retain legacy framing.
 var stackContinuation = regexp.MustCompile(`^\s*(?:at\s+\S|File ["']|Caused by:|Suppressed:|Traceback |[\w.]+(?:Error|Exception):|\.\.\. \d+ more)`)
+var pythonFrame = regexp.MustCompile(`^\s*File ["'].+["'], line \d+(?:, in .+)?$`)
+var stackCaret = regexp.MustCompile(`^\s+[~^]+[~^ ]*$`)
+var dotnetDetail = regexp.MustCompile(`^\s+--- End of (?:inner exception stack trace|stack trace from previous location) ---$`)
+var normalLog = regexp.MustCompile(`(?i)^\s*(?:TRACE|DEBUG|INFO|NOTICE|WARN|WARNING|ERROR|FATAL|CRITICAL)\b`)
+var goHeader = regexp.MustCompile(`^goroutine \d+ \[.+\]:$`)
+var goFrame = regexp.MustCompile(`^(?:[\w./-]+\.(?:\([^ )]+\)\.)?[\w.$]+\(.*\)|\s+\S+\.go:\d+(?: \+0x[0-9a-f]+)?|created by \S+ in goroutine \d+)$`)
+
 var field = regexp.MustCompile(`(?i)password|passwd|secret|token|authorization|cookie|api[-_]?key|access[-_]?key|private[-_]?key|credential`)
 var secret = regexp.MustCompile(`(?i)(["']?(?:password|passwd|secret|(?:access_|refresh_)?token|api[-_]?key|access[-_]?key(?:[-_]?id)?|private[-_]?key|authorization|cookie|credentials?)["']?\s*[:=]\s*)("(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'|[^\s,;]+)`)
 var auth = regexp.MustCompile(`(?i)\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+`)
@@ -225,16 +232,17 @@ func Offline(e Event) Judgment {
 
 // Parser is owned by one producer. Private-key state survives line and read boundaries.
 type Parser struct {
-	source             Source
-	sourceSensitive    bool
-	pending            *Event
-	line               uint64
-	inKey              bool
-	buffer             []byte
-	truncated, private bool
-	marker             string
-	transport          bool
-	digest             hash.Hash
+	source                       Source
+	sourceSensitive              bool
+	pending                      *Event
+	line                         uint64
+	inKey                        bool
+	buffer                       []byte
+	truncated, private           bool
+	marker                       string
+	transport                    bool
+	stack, pythonSource, goStack bool
+	digest                       hash.Hash
 	// AcceptLine sees a full raw physical-line digest, including discarded bytes.
 	AcceptLine func(timestamp *time.Time, digest string, partial bool) bool
 }
@@ -319,11 +327,20 @@ func (p *Parser) finishLine(partial bool) *Event {
 		safe = "[REDACTED PRIVATE KEY]"
 		changed = true
 	}
-	isContinuation := continuation.MatchString(text)
+	explicit := stackContinuation.MatchString(text)
+	goStart := strings.HasPrefix(text, "panic: ") || strings.HasPrefix(text, "fatal error: ")
+	goDetail := p.goStack && (goHeader.MatchString(text) || goFrame.MatchString(text))
+	detail := p.stack && (stackCaret.MatchString(text) || dotnetDetail.MatchString(text))
+	// A Python frame has at most one indented source line before its caret.
+	// Merely indenting a normal timestamped log never establishes stack context.
+	detail = detail || (p.pythonSource && (strings.HasPrefix(text, "    ") || strings.HasPrefix(text, "\t")) && !normalLog.MatchString(text))
+	isContinuation := continuation.MatchString(text) || goDetail
 	if ts != nil {
-		isContinuation = stackContinuation.MatchString(text)
+		isContinuation = explicit || detail || goDetail
 	}
 	if isContinuation && p.pending != nil {
+		p.stack = p.stack || explicit
+		p.pythonSource = pythonFrame.MatchString(text)
 		e := p.pending
 		e.LineEnd = p.line
 		e.LineCount++
@@ -335,12 +352,16 @@ func (p *Parser) finishLine(partial bool) *Event {
 	}
 	orphan := isContinuation && p.pending == nil
 	prev := p.Flush()
+	p.stack = explicit
+	p.pythonSource = pythonFrame.MatchString(text)
+	p.goStack = goStart || goHeader.MatchString(text)
 	p.pending = &Event{Source: p.source, Timestamp: ts, Text: Clip(safe, MaxEvent), LineStart: p.line, LineEnd: p.line, LineCount: 1, Truncated: trunc || len(safe) > MaxEvent, Sensitive: changed || p.sourceSensitive, ParseUncertain: partial || invalid || ambiguous || orphan || (p.transport && !transportStamp), Judgment: Unknown("")}
 	return prev
 }
 func (p *Parser) Flush() *Event {
 	e := p.pending
 	p.pending = nil
+	p.stack, p.pythonSource, p.goStack = false, false, false
 	if e != nil {
 		e.Baseline = Rules(e.Text)
 		e.ID = Hash([]any{e.Source, e.Timestamp, e.LineStart, e.Text})[:20]

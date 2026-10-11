@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,11 +18,11 @@ import (
 	"github.com/sunil-sadasivan/jevernetes/internal/report"
 )
 
-func remoteClient(k kube.Config, port int) (*inspect.Client, error) {
+func remoteClient(ctx context.Context, k kube.Config, port int) (*inspect.Client, error) {
 	if err := k.Validate(); err != nil {
 		return nil, err
 	}
-	cfg, err := kube.Load(k)
+	cfg, err := kube.LoadContext(ctx, k)
 	if err != nil {
 		return nil, err
 	}
@@ -46,7 +47,7 @@ func remoteCommand(o *options) *cobra.Command {
 		if port < 1 || port > 65535 || interval < 2 || interval > 3600 {
 			return errors.New("invalid remote port or interval")
 		}
-		client, err := remoteClient(k, port)
+		client, err := remoteClient(c.Context(), k, port)
 		if err != nil {
 			return err
 		}
@@ -129,7 +130,7 @@ func dashboardCommand(o *options) *cobra.Command {
 		}
 		d := &dashboard.Dashboard{Interval: time.Duration(interval) * time.Second}
 		if path != "" {
-			raw, err := readBounded(path, 64<<20)
+			raw, err := readBounded(c.Context(), path, 64<<20)
 			if err != nil {
 				return err
 			}
@@ -139,7 +140,7 @@ func dashboardCommand(o *options) *cobra.Command {
 			}
 		}
 		if k.Namespace != "" {
-			client, err := remoteClient(k, port)
+			client, err := remoteClient(c.Context(), k, port)
 			if err != nil {
 				return err
 			}

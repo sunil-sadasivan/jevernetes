@@ -12,13 +12,13 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/sunil-sadasivan/jevernetes/internal/event"
+	"github.com/sunil-sadasivan/jevernetes/internal/safefile"
 )
 
 const MaxResponse = 1 << 20
@@ -143,6 +143,9 @@ func New(c Config, key string) (*Client, error) {
 	return &Client{config: c, key: key, http: HTTPClient(30 * time.Second), usage: Usage{Complete: true}}, nil
 }
 func Credential(kind string, lookup func(string) string) (string, error) {
+	return CredentialContext(context.Background(), kind, lookup)
+}
+func CredentialContext(ctx context.Context, kind string, lookup func(string) string) (string, error) {
 	names := map[string][]string{"typesafe": {"TYPESAFE_API_KEY", "TYPESAFEAI_API_KEY", "TYPESAFE_API_KEY_FILE"}, "openai": {"OPENAI_API_KEY", "OPENAI_API_KEY_FILE"}, "anthropic": {"ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY_FILE"}}
 	for _, n := range names[kind] {
 		v := lookup(n)
@@ -150,19 +153,9 @@ func Credential(kind string, lookup func(string) string) (string, error) {
 			continue
 		}
 		if strings.HasSuffix(n, "_FILE") {
-			f, err := os.Open(v)
+			b, err := safefile.Read(ctx, v, 16384)
 			if err != nil {
 				return "", errors.New("cannot read provider key file")
-			}
-			st, err := f.Stat()
-			if err != nil || !st.Mode().IsRegular() || st.Size() > 16384 {
-				f.Close()
-				return "", errors.New("invalid provider key file")
-			}
-			b, err := io.ReadAll(io.LimitReader(f, 16385))
-			f.Close()
-			if err != nil || len(b) > 16384 {
-				return "", errors.New("invalid provider key file")
 			}
 			v = string(b)
 		}

@@ -16,7 +16,6 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation"
 	core "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/sunil-sadasivan/jevernetes/internal/event"
 )
@@ -59,6 +58,9 @@ func (c Config) Validate() error {
 	return nil
 }
 func Load(c Config) (*rest.Config, error) {
+	return LoadContext(context.Background(), c)
+}
+func LoadContext(ctx context.Context, c Config) (*rest.Config, error) {
 	if err := c.Validate(); err != nil {
 		return nil, err
 	}
@@ -67,7 +69,7 @@ func Load(c Config) (*rest.Config, error) {
 	if c.InCluster {
 		cfg, err = rest.InClusterConfig()
 	} else {
-		cfg, err = clientcmd.NewNonInteractiveDeferredLoadingClientConfig(clientcmd.NewDefaultClientConfigLoadingRules(), &clientcmd.ConfigOverrides{CurrentContext: c.Context}).ClientConfig()
+		cfg, err = loadLocal(ctx, c.Context)
 	}
 	if err != nil {
 		return nil, errors.New("Kubernetes configuration unavailable")

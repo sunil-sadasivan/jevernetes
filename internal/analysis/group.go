@@ -136,6 +136,9 @@ type Grouper struct {
 	maxInterval          uint64
 	review               map[string]bool
 	rules                *Rules
+	// A wall-clock high-water mark survives partition eviction. While the wall
+	// is behind it, recreated families must refresh rather than reload old rows.
+	observed time.Time
 }
 
 func NewGrouper(strategy, masking string, capacity int, ttl time.Duration, adaptive bool, maxInterval uint64) *Grouper {
@@ -202,8 +205,12 @@ func (g *Grouper) Observe(e event.Event, now time.Time) (Ticket, *event.Judgment
 		p.verdict = event.Unknown("")
 		return p.ticket, nil, "review_required"
 	}
-	rollback := !p.observed.IsZero() && now.Round(0).Before(p.observed)
-	p.observed = now.Round(0)
+	wall := now.Round(0)
+	rollback := !g.observed.IsZero() && wall.Before(g.observed)
+	if g.observed.IsZero() || wall.After(g.observed) {
+		g.observed = wall
+	}
+	p.observed = wall
 	if rollback {
 		p.refresh = true
 		p.verdict = event.Unknown("")

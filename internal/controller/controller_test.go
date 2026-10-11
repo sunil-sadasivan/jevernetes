@@ -152,8 +152,14 @@ func TestPersistedVerdictTTLAndRollbackClock(t *testing.T) {
 		}
 	}
 	got, err := s.Lookup(ctx, key, time.Unix(1001, 0), time.Minute)
-	if err != nil || got == nil {
+	if err != nil || got != nil {
+		t.Fatal("invalidated lifetime resurrected", got, err)
+	}
+	if err := s.PutVerdict(ctx, key, j, 1001, time.Minute); err != nil {
 		t.Fatal(err)
+	}
+	if got, err := s.Lookup(ctx, key, time.Unix(1002, 0), time.Minute); err != nil || got == nil {
+		t.Fatal("fresh authority unavailable", got, err)
 	}
 }
 func TestInspectionContentionAndMissing(t *testing.T) {

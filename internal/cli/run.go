@@ -22,23 +22,15 @@ import (
 	"github.com/sunil-sadasivan/jevernetes/internal/kube"
 	"github.com/sunil-sadasivan/jevernetes/internal/provider"
 	"github.com/sunil-sadasivan/jevernetes/internal/report"
+	"github.com/sunil-sadasivan/jevernetes/internal/safefile"
 )
 
 var errCap = errors.New("global event cap reached")
 
-func readBounded(path string, limit int64) ([]byte, error) {
-	f, err := os.Open(path)
+func readBounded(ctx context.Context, path string, limit int64) ([]byte, error) {
+	raw, err := safefile.Read(ctx, path, limit)
 	if err != nil {
-		return nil, errors.New("cannot open configuration file")
-	}
-	defer f.Close()
-	st, err := f.Stat()
-	if err != nil || !st.Mode().IsRegular() || st.Size() > limit {
-		return nil, errors.New("invalid configuration file type or size")
-	}
-	raw, err := io.ReadAll(io.LimitReader(f, limit+1))
-	if err != nil || int64(len(raw)) > limit {
-		return nil, errors.New("configuration file exceeds limit")
+		return nil, errors.New("cannot read configuration file")
 	}
 	return raw, nil
 }
@@ -64,7 +56,7 @@ func (o *options) runWith(cmd *cobra.Command, paths []string, stdin io.Reader, d
 	}
 	if deps.collector == nil {
 		deps.collector = func(c kube.Config) (logCollector, error) {
-			cfg, err := kube.Load(c)
+			cfg, err := kube.LoadContext(cmd.Context(), c)
 			if err != nil {
 				return nil, err
 			}
@@ -82,7 +74,7 @@ func (o *options) runWith(cmd *cobra.Command, paths []string, stdin io.Reader, d
 	}
 	cfg := o.analysisConfig()
 	if o.rules != "" {
-		raw, err := readBounded(o.rules, 1<<20)
+		raw, err := readBounded(ctx, o.rules, 1<<20)
 		if err != nil {
 			return err
 		}
@@ -94,7 +86,7 @@ func (o *options) runWith(cmd *cobra.Command, paths []string, stdin io.Reader, d
 	}
 	policy := controller.DefaultPolicy()
 	if o.policy != "" {
-		raw, err := readBounded(o.policy, 65536)
+		raw, err := readBounded(ctx, o.policy, 65536)
 		if err != nil {
 			return err
 		}
@@ -133,7 +125,7 @@ func (o *options) runWith(cmd *cobra.Command, paths []string, stdin io.Reader, d
 			if raw == "" {
 				path := os.Getenv("JEV_WEBHOOK_URL_FILE")
 				if path != "" {
-					b, e := readBounded(path, 4096)
+					b, e := readBounded(ctx, path, 4096)
 					if e != nil {
 						return errors.New("webhook configuration unavailable")
 					}
@@ -161,7 +153,7 @@ func (o *options) runWith(cmd *cobra.Command, paths []string, stdin io.Reader, d
 	var client riskProvider
 	var judge provider.Judge
 	if !o.offline {
-		key, err := provider.Credential(o.risk, os.Getenv)
+		key, err := provider.CredentialContext(ctx, o.risk, os.Getenv)
 		if err != nil {
 			return err
 		}
@@ -173,7 +165,7 @@ func (o *options) runWith(cmd *cobra.Command, paths []string, stdin io.Reader, d
 	}
 	var teacher *provider.Client
 	if !o.offline && o.templateProvider != "off" {
-		key, err := provider.Credential(o.templateProvider, os.Getenv)
+		key, err := provider.CredentialContext(ctx, o.templateProvider, os.Getenv)
 		if err != nil {
 			return err
 		}
@@ -450,7 +442,7 @@ func collectFiles(ctx context.Context, paths []string, stdin io.Reader, maxBytes
 				closer = c
 			}
 		} else {
-			f, err := os.Open(path)
+			f, err := safefile.Open(ctx, path)
 			if err != nil {
 				gap(source, "file_unavailable")
 				continue

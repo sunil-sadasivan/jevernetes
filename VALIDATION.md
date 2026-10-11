@@ -1,3 +1,69 @@
+# Eviction, stack context and safe file opens — 2026-10-11
+
+Started in the clean worktree at exact HEAD `8875d1845ef0a19189613151ec8a47fe0a9d94a2`. Repository guidance in `CONTRIBUTING.md` was read; no applicable `AGENTS.md` was present. All evidence uses synthetic local data and fixtures. No push, GitHub mutation, deployment, production access, live provider or cluster contact occurred. Go/Rust/Python coexistence and disabled runtime retirement are preserved.
+
+## Regression-first evidence and changes
+
+[Committed before evidence](docs/validation/p2-before-8875d18.txt) records the commands and failing excerpts (trailing whitespace removed). The full initial log is `.cache/p2-before.log`. Before any production edit, the eviction tests reproduced stale durable hits and fanout for rollback, recovered wall, multiple evictions and provider failure. Python source/caret, Go and .NET fixtures split; the Python source case produced `[3,2,1,1]` instead of `[5,1,1]` with two trailing normal lines. All six FIFO subprocess cases exceeded their two-second bounds: file input, reviewed rules, policy, dashboard report, provider credential and SIGTERM/final reporting.
+
+The initial command was:
+
+```sh
+go test -count=1 ./internal/controller ./internal/event ./internal/cli -run 'TestEvictionRetainsDurableLifetime|TestTimestampedStackContext|TestFIFOOpenIsBounded'
+```
+
+- **Durable lifetime:** Store retains process-local lifetime metadata independently of template eviction, under its existing mutex, with a hard bound of 10,000 records. Repeated lookups retain the earliest elapsed deadline and smallest configured expiry. Unknown families miss at saturation; new provider results without a registry slot are not persisted. Records are forgotten only after the corresponding row is deleted or found absent. Expiration/rollback deletes the durable row before provider dispatch, so failed refresh cannot resurrect it. The Grouper retains a wall high-water mark independent of partitions and forces refresh while wall time is behind it. A further regression exposed rollback with half a second of elapsed lifetime left after the initial Store fix; its failure is also committed before the high-water fix. Coverage includes the exact wall 1000/1059/1020, elapsed 0/59/60 sequence, recovery, eight evictions, valid remaining lifetime, actual provider errors, unknown responses, saturation and freeing a slot. An older test that explicitly expected resurrection after invalidation now asserts rejection followed by successful fresh publication. Existing TTL, latency, provider-schema and local-metadata serialization regressions pass. SQLite schema and persisted expiry calculation are unchanged; no local lifetime metadata is serialized.
+- **Stack context:** A Python frame permits one following indented source line, followed by recognized caret lines. Explicit stack context allows .NET detail markers; Go panic/goroutine context allows bounded frame grammars. Context resets at flush/new normal events. Indentation alone does not merge timestamped normal events; known normal log prefixes also terminate a pending Python source expectation. Tests cover files and Kubernetes, every two-chunk split, byte-at-a-time input, header timestamp/ranges, normal indented lines, redaction, invalid UTF-8, truncation, partial/orphan uncertainty and context reset. The exact six-line fixture yields `[5,1]` in Go and retained Python; Java, Go and .NET fixtures are also covered.
+- **File opening:** Shared `internal/safefile` opens read-only with `O_NONBLOCK|O_NOFOLLOW|O_CLOEXEC`, checks the same descriptor for regular type, single link and identity, and registers cancellation immediately after obtaining it. Preliminary lstat rejects known devices/special files without opening them. Regular-file reads keep `O_NONBLOCK` (regular files ignore it); no unsafe flag change after concurrent close is needed. Close is idempotent and joins the cancellation callback. Inputs, gzip inputs, rules, policy, webhook URL files, provider key files and dashboard reports use this path, with existing byte limits and caller context. FIFO, leaf symlink, hardlink, directory and device rejection plus descriptor cancellation are exercised. The Unix socket fixture remains present but cannot bind in this sandbox. Actual child SIGTERM exits 130 and writes equivalent valid stdout/private saved reports with coverage gaps; rejected FIFO input without a signal exits 2 with a final report. Invalid configuration fails before collection/report initialization.
+
+## Adjacent file-path audit
+
+The audit also found blocking reads inside client-go for user-supplied kubeconfig, token, CA, client certificate and key files. Before changing Kubernetes loading, `go test -count=1 ./internal/kube -run TestKubeFIFOFilesBounded` failed all five two-second subprocess bounds (`.cache/p2-kube-before.log`, excerpt committed). Local loading now reads bounded verified descriptors, merges named maps with first-file precedence, resolves origin-relative paths and passes certificate bytes to client-go. Configuration input is capped at 32 files of 1 MiB each; TLS files are capped at 1 MiB and tokens at 16 KiB. A context-aware token wrapper safely rereads regular token files on requests; synthetic transport tests verify precedence, relative paths, token rotation, immutable request headers and fail-closed FIFO replacement without network traffic.
+
+The local loader does not perform client-go's optional kubeconfig migration writes or implicit in-cluster fallback: explicit `--in-cluster` remains the supported in-cluster path. Local certificate/key bytes are snapshots loaded at startup; local TLS file rotation requires restart. Local token rotation remains supported. User-supplied leaf symlinks and hardlinks are rejected intentionally. Fixed Kubernetes service-account projection paths for explicit in-cluster mode remain client-go owned, including their symlink/rotation behavior; they are not user-supplied input paths and were not accessed. Executable authentication plugins remain governed by client-go's existing trust model and were not invoked. State/volume descriptor paths already use nonblocking, no-follow regular-file/owner checks. Report output uses private atomic replacement; its directory open is for synchronization, not user input ingestion. Retained Rust/Python production code is unchanged.
+
+## Exact validation
+
+Darwin arm64; Go 1.27.1, Python 3.14.7, Rust 1.94.0, Node 24.19.0. Commands used:
+
+```sh
+export PATH=/opt/homebrew/opt/node@24/bin:$PATH
+export GOCACHE="$PWD/.cache/build" GOPROXY=off GOSUMDB=off CARGO_NET_OFFLINE=true PIP_NO_INDEX=1
+```
+
+The focused selection below was run normally (`.cache/p2-focused.log`) and with `-race` after the final provider-error/report assertions (`.cache/p2-focused-race.log`); both passed. Analysis has no matching tests in this selection and was tested fully separately.
+
+```sh
+go test -race -count=1 ./internal/controller ./internal/analysis ./internal/event ./internal/cli ./internal/provider ./internal/kube ./internal/safefile -run 'TestEvictionRetainsDurableLifetime|TestStoreLifetimeCapacity|TestDurableMonotonicLifetime|TestTimestamped|TestPythonSource|TestFIFOOpenIsBounded|TestKubeFIFOFilesBounded|TestLocalConfigMerge|TestCancellation|TestCredential'
+```
+
+| Command | Result |
+| --- | --- |
+| `go test -count=1 ./internal/controller ./internal/analysis ./internal/event` | Passed complete suites on final source; `.cache/p2-core-final.log` |
+| `go test -race -count=1 ./internal/event -run TestPythonExactTimestampedFixture` | Passed exact `[5,1]` fixture for both sources; `.cache/p2-exact-race.log` |
+| `go test -race -count=1 ./internal/controller ./internal/analysis ./internal/event ./internal/cli ./internal/provider ./internal/kube ./internal/safefile` | Controller/analysis/event full suites passed (47.222s/2.299s/12.257s); no race reports. Full command **failed** at socket-bound CLI/provider/Kubernetes fixtures and safefile Unix-socket creation; `.cache/p2-race.log` |
+| `tools/check.sh` | **Failed** at `go test ./...` because TCP/Unix socket binding is denied. CLI notification test times out waiting for its listener-based controller. Formatting, tidy and module-diff checks passed; later stages did not run. `.cache/p2-check.log` |
+| `tools/release.sh` | Passed both executable names, classification, private reports, SIGINT/SIGTERM final reports, state-volume/migration/reopen checks, binary/source archives and source-byte/privacy checks; `.cache/p2-release.log` |
+| `go vet ./...` and `tools/check-cross.sh` | Passed; Linux amd64, 386, arm cross-builds, not Linux execution; `.cache/p2-vet-cross.log` |
+| `python3 -m unittest tests.test_analyzer.ParsingTests -v` | 10 tests passed including retained-Python `[5,1]` parity; `.cache/p2-python-parsing.log` |
+| `python3 -m unittest discover -s tests -q` | **Failed**: 120 tests ran, one dashboard class setup error due to denied socket binding; `.cache/p2-python.log` |
+| `cargo fmt --check`; `cargo clippy --locked --offline --all-targets --all-features -- -D warnings` | Passed; `.cache/p2-rust.log` |
+| `cargo test --locked --offline --all-features` | **Failed**: 24 library tests passed, 14 failed at denied listener setup; CLI phase not reached. `.cache/p2-rust.log` |
+| `cargo build --locked --offline`; `python3 tests/rust/tui_pty.py target/debug/jevernetes` | Passed build, search, Ctrl-C and SIGTERM with terminal restoration/private reports; `.cache/p2-rust.log` |
+| `python3 tools/check_parity.py --run` | **Failed** on its first suite (`go test ./internal/event ./internal/cli`) at the same CLI listener restriction; later inventory suites did not run via this command. `.cache/p2-parity.log` |
+| `for file in tests/*_ui.cjs; do node "$file" || exit; done` | Six UI suites passed |
+| `for file in internal/dashboard/web/*.js jevernetes/web/*.js; do node --check "$file" || exit; done` | Both trees passed syntax checks |
+| `python3 tools/check_release.py`; `python3 tools/check_parity.py`; `node tools/check-release.mjs` | Passed source/privacy checks and 14-workflow/17-suite coexistence inventory |
+| `git diff --check`; `git diff --cached --check` | Passed after removing trailing whitespace from the evidence excerpt |
+
+An intermediate build caught a missing context import after threading cancellation into remote configuration loading; it was fixed before the successful focused/release/vet/cross runs. A report assertion initially compared pretty-printed versus compact JSON bytes; it now compares decoded values and checks private mode. These were implementation/test iterations, not environment restrictions. Nonfatal macOS deployment-target linker warnings remain. Logs and build outputs are ignored. No test was disabled or weakened to bypass binding restrictions, and no permissions escalation was available.
+
+## Remaining limits
+
+Full Go/Python/Rust and executable parity gates need a runner permitting local TCP and Unix socket binding. The Unix-socket rejection fixture could not create its socket; the other special-file and cancellation assertions ran. No live integration, hosted CI, production soak, privileged ownership capability or container/PVC runtime was exercised. Monotonic authority remains process-local: a restart cannot recover an elapsed-clock history that was never persisted. Saturation deliberately reduces durable hit rate; rollback forces refresh until the wall catches its high-water mark. No persistent expiry or configured TTL is extended by a cache hit. Ordinary filesystem access permissions govern read-only input ownership; filesystem ancestors/mounts and explicit in-cluster projected credentials remain trusted. Nonblocking opening does not promise deadlines for a malfunctioning filesystem's regular-file I/O. Earlier entries below are historical and do not describe this pass.
+
+---
+
 # Final parity hardening — 2026-10-11
 
 Started in the clean current worktree at exactly `0fe8eaf35966b45664a3a6bf70d55bf088785ea7`. All evidence is synthetic/local. No push, PR mutation, deployment, production access or live provider/cluster contact occurred.

@@ -52,6 +52,19 @@ class ParsingTests(unittest.TestCase):
                     self.assertEqual(es[1]["line_start"], 4)
                     self.assertEqual(es[0]["timestamp"], "2026-01-01T00:00:00Z" if stamped else None)
 
+    def test_timestamped_python_source_parity(self):
+        lines = ["ERROR request failed", "Traceback (most recent call last):",
+                 '  File "app.py", line 7, in run', "    do_work()",
+                 "ValueError: failed", "INFO ready"]
+        raw = "".join(f"2026-01-01T00:00:0{i}Z {line}\n" for i, line in enumerate(lines)).encode()
+        for source in ("file", "kubernetes"):
+            es, warnings = parse_stream(io.BytesIO(raw), {"type": source}, 100)
+            self.assertFalse(warnings)
+            self.assertEqual([e["line_count"] for e in es], [5, 1])
+            self.assertEqual(es[0]["timestamp"], "2026-01-01T00:00:00Z")
+            self.assertEqual(es[0]["line_end"], 5)
+            self.assertEqual(es[1]["line_start"], 6)
+
     def test_event_limit_is_visible(self):
         es, warnings = parse_stream(io.BytesIO(b"one\ntwo\nthree\n"), {}, 2)
         self.assertEqual(len(es), 2)

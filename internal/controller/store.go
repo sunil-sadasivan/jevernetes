@@ -29,6 +29,8 @@ type Store struct {
 	lock *os.File
 	vfs  *verifiedVFS
 	file *os.File
+	// Lifetime authority belongs to the store, never to evictable templates.
+	lifetimes map[string]event.Judgment
 }
 
 func Open(path string) (*Store, error) {
@@ -262,6 +264,11 @@ func (s *Store) PutVerdict(ctx context.Context, key string, j event.Judgment, no
 	if !j.Reusable() || !ValidID(key) || ttl <= 0 || ttl > 7*24*time.Hour {
 		return errors.New("unsafe verdict cache entry")
 	}
+	if _, known := s.lifetimes[key]; !known && len(s.lifetimes) >= stateCapacity {
+		// A fresh result can still be used by its current grouper, but must
+		// not become a durable row without retained lifetime authority.
+		return s.deleteVerdictLocked(ctx, key)
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return ErrState
@@ -278,31 +285,51 @@ func (s *Store) PutVerdict(ctx context.Context, key string, j event.Judgment, no
 	if tx.Commit() != nil {
 		return ErrState
 	}
+	// Fresh provider publication may replace old authority. Wall-only callers
+	// are anchored on first Lookup; CachedJudge supplies its monotonic reading.
+	if s.lifetimes == nil {
+		s.lifetimes = make(map[string]event.Judgment)
+	}
+	if _, known := s.lifetimes[key]; known || len(s.lifetimes) < stateCapacity {
+		s.lifetimes[key] = j
+	}
 	return nil
 }
 func (s *Store) deleteVerdict(ctx context.Context, key string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.deleteVerdictLocked(ctx, key)
+}
+func (s *Store) deleteVerdictLocked(ctx context.Context, key string) error {
 	if _, err := s.db.ExecContext(ctx, "DELETE FROM verdicts WHERE key=?", key); err != nil {
 		return ErrState
 	}
+	delete(s.lifetimes, key) // Safe only after the durable authority is deleted.
 	return nil
 }
 
 func (s *Store) Lookup(ctx context.Context, key string, now time.Time, ttl time.Duration) (*event.Judgment, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Never evict authority and then reconstruct it from a rolled-back wall
+	// clock. At capacity, unseen families miss until a slot is explicitly
+	// invalidated. Existing entries (including expired ones) remain bounded.
+	prior, known := s.lifetimes[key]
+	if !known && len(s.lifetimes) >= stateCapacity {
+		return nil, nil
+	}
 	var raw string
 	var created, expires int64
 	err := s.db.QueryRowContext(ctx, "SELECT substr(judgment,1,4097),created,expires FROM verdicts WHERE key=?", key).Scan(&raw, &created, &expires)
 	if err == sql.ErrNoRows {
+		delete(s.lifetimes, key)
 		return nil, nil
 	}
 	if err != nil {
 		return nil, ErrState
 	}
 	if len(raw) > 4096 || ttl <= 0 || ttl > 7*24*time.Hour || now.Unix() < created || now.Unix() >= expires || now.Unix()-created >= int64(ttl.Seconds()) {
-		return nil, nil
+		return nil, s.deleteVerdictLocked(ctx, key)
 	}
 	var j event.Judgment
 	if provider.Strict([]byte(raw), &j) != nil || !j.Reusable() {
@@ -314,5 +341,22 @@ func (s *Store) Lookup(ctx context.Context, key string, now time.Time, ttl time.
 	// SQLite. Subtract wall-only values without rounding away fractional seconds.
 	j.CacheObservedAt = now.Round(0)
 	j.CacheDeadline = now.Add(j.CacheExpiresAt.Sub(now.Round(0)))
+	if known && !prior.CacheDeadline.IsZero() {
+		// Keep both the original elapsed deadline and the smallest configured
+		// wall window. A later, longer TTL cannot renew either one.
+		if !prior.CacheValidAt(now) {
+			return nil, s.deleteVerdictLocked(ctx, key)
+		}
+		if prior.CacheDeadline.Before(j.CacheDeadline) {
+			j.CacheDeadline = prior.CacheDeadline
+		}
+		if prior.CacheExpiresAt.Before(j.CacheExpiresAt) {
+			j.CacheExpiresAt = prior.CacheExpiresAt
+		}
+	}
+	if s.lifetimes == nil {
+		s.lifetimes = make(map[string]event.Judgment)
+	}
+	s.lifetimes[key] = j
 	return &j, nil
 }
