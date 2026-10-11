@@ -119,6 +119,7 @@ type partition struct {
 	seen           uint64
 	verdict        event.Judgment
 	expires        time.Time
+	observed       time.Time
 	representative string
 	last           uint64
 	auditAt        uint64
@@ -200,6 +201,12 @@ func (g *Grouper) Observe(e event.Event, now time.Time) (Ticket, *event.Judgment
 		p.verdict = event.Unknown("")
 		return p.ticket, nil, "review_required"
 	}
+	rollback := !p.observed.IsZero() && now.Before(p.observed)
+	p.observed = now
+	if rollback {
+		p.verdict = event.Unknown("")
+		return p.ticket, nil, "clock_rollback"
+	}
 	if p.verdict.Reusable() && now.Before(p.expires) {
 		if !g.adaptive || p.seen < p.auditAt {
 			j := p.verdict
@@ -220,9 +227,17 @@ func (g *Grouper) Publish(t Ticket, j event.Judgment, representative string, now
 		p.interval = 16
 		return false
 	}
+	expires := now.Add(g.ttl)
+	if !j.CacheExpiresAt.IsZero() {
+		expires = minTime(expires, j.CacheExpiresAt)
+		if now.Before(j.CacheCreatedAt) || !now.Before(expires) {
+			return false
+		}
+	}
 	p.verdict = j
+	p.observed = now
 	p.representative = representative
-	p.expires = now.Add(g.ttl)
+	p.expires = expires
 	if j.Importance == "routine" {
 		p.interval = min(g.maxInterval, max(uint64(32), p.interval*2))
 	} else {
@@ -255,4 +270,11 @@ func (g *Grouper) Checkpoint() any {
 		Schema    int   `json:"schema_version"`
 		Templates []row `json:"templates"`
 	}{1, rows}
+}
+
+func minTime(a, b time.Time) time.Time {
+	if a.Before(b) {
+		return a
+	}
+	return b
 }

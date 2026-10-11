@@ -120,3 +120,110 @@ func TestLearningCannotOverrideStaleGeneration(t *testing.T) {
 		})
 	}
 }
+
+func TestLearningSavedEscalationRespectsVeto(t *testing.T) {
+	c := config()
+	c.Masking, c.Adaptive = "classic", true
+	tch := &teacher{}
+	c.Teacher, c.TemplateMinSamples, c.TemplateCapacity, c.TemplateTTL, c.TemplateConfidence = tch, 2, 8, time.Minute, .85
+	e, err := New(c, judge())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	a, b := ev(1), ev(2)
+	b.Text = "INFO request_id=abcdef1234567890"
+	out := e.Batch(ctx, []event.Event{a, b})
+	if tch.reviews != 1 || out[1].Importance != "important" {
+		t.Fatal("saved escalation not seeded")
+	}
+	e.groups.Veto([]string{out[0].Assessment.TemplateID})
+	before := e.Metrics["drain_group_fanouts"]
+	for range 3 {
+		out = e.Batch(ctx, []event.Event{b, a})
+		if out[1].Importance != "unknown" || out[1].Assessment.Reason != "review_required" || out[0].Importance == "important" || out[0].AnalysisReused || out[1].AnalysisReused {
+			t.Errorf("saved escalation overrode veto: %+v", out)
+		}
+	}
+	if tch.reviews != 1 || e.Metrics["drain_group_fanouts"] != before || e.Metrics["drain_verdict_reuses"] != 0 {
+		t.Fatal("veto reuse metrics", e.Metrics, tch.reviews)
+	}
+}
+
+func TestLearningLimitedBatchPreservesIndependentReview(t *testing.T) {
+	for _, saved := range []bool{false, true} {
+		t.Run(fmt.Sprint(saved), func(t *testing.T) {
+			c := config()
+			c.Masking, c.Adaptive, c.BatchSize = "classic", true, 16
+			tch := &teacher{}
+			c.Teacher, c.TemplateMinSamples, c.TemplateCapacity, c.TemplateTTL, c.TemplateConfidence = tch, 2, 8, time.Minute, .85
+			e, err := New(c, judge())
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx := context.Background()
+			if saved {
+				out := e.Batch(ctx, []event.Event{ev(1), ev(2)})
+				// Retain teacher state while forcing a primary reassessment.
+				for _, p := range e.groups.entries {
+					e.groups.Invalidate(p.ticket)
+				}
+				if out[1].Importance != "important" {
+					t.Fatal("escalation seed missing")
+				}
+			}
+			samples := make([]event.Event, 9)
+			for i := range samples {
+				samples[i] = ev(i)
+				samples[i].Text = fmt.Sprintf("INFO request_id=%016x", i)
+			}
+			out := e.Batch(ctx, samples)
+			if !out[0].Assessment.SamplesLimited || out[0].Importance != "uncertain" {
+				t.Fatal("limited evidence not preserved", out[0])
+			}
+			for _, got := range out[1:] {
+				if got.Importance != "unknown" || got.AnalysisReused {
+					t.Fatal("learning escalated limited fanout", got)
+				}
+			}
+			want := 0
+			if saved {
+				want = 1
+			}
+			if tch.reviews != want {
+				t.Fatal("limited evidence taught", tch.reviews)
+			}
+		})
+	}
+}
+
+func TestLearningLifetimeDoesNotSlideOrSurviveRollback(t *testing.T) {
+	for _, rollback := range []bool{false, true} {
+		t.Run(fmt.Sprint(rollback), func(t *testing.T) {
+			start := time.Unix(1000, 0)
+			now := start
+			c := config()
+			c.Now = func() time.Time { return now }
+			tch := &teacher{}
+			c.Teacher, c.TemplateMinSamples, c.TemplateCapacity, c.TemplateTTL, c.TemplateConfidence = tch, 2, 8, time.Minute, .85
+			e, err := New(c, judge())
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx := context.Background()
+			e.Batch(ctx, []event.Event{ev(1), ev(2)})
+			now = start.Add(59 * time.Second)
+			if got := e.Batch(ctx, []event.Event{ev(3)})[0]; got.Importance != "important" {
+				t.Fatal("saved escalation missing", got)
+			}
+			now = start.Add(time.Minute)
+			if rollback {
+				now = start.Add(58 * time.Second)
+			}
+			got := e.Batch(ctx, []event.Event{ev(4)})[0]
+			if got.Importance != "routine" || tch.reviews != 1 {
+				t.Fatal("teacher lifetime escaped", got, tch.reviews)
+			}
+		})
+	}
+}

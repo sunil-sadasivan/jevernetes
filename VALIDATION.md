@@ -1,3 +1,69 @@
+# Blind-review P2 implementation — 2026-10-11
+
+Started on clean `fix/go-full-parity-20261011` at exactly `c89497263cdca871fa705f53e5b7ef35d0b78115`. Changes and commits are confined to this worktree. All provider, teacher, cluster, stream and notification fixtures are synthetic/local. No live providers/clusters, production access, push, deployment or GitHub mutation occurred. Rust/Python coexistence is retained and retirement remains disabled.
+
+## Reproductions and fixes
+
+Before the production fixes, the following command failed all seven default-mode sample-limit outcomes, the near-expiry boundary/past-boundary/shorter-TTL/longer-TTL cases, rollback after a durable hit, and both generated and saved teacher-veto paths. The only production plumbing present for this reproduction was optional injectable clocks, still using the original cache behavior. Evidence: `.cache/blind-before.log`. An initial restricted-cache attempt could not write the shared Go build cache; the successful reproduction and validation had local cache/socket permission and kept dependency networking disabled.
+
+```sh
+GOPROXY=off GOSUMDB=off go test -count=1 ./internal/controller ./internal/analysis -run 'TestEngine(LimitedDefault|DurableTTL|LearningVeto)|TestLearningSaved'
+```
+
+The same command now passes (`.cache/blind-after.log`). Stateful regression coverage includes:
+
+- `TestEngineLimitedDefaultReassessmentAcrossRestart`: persist routine A, close/reopen SQLite, submit nine distinct normalized request IDs with batch size 16 and default cache mode, then request A in the same engine and after another restart. Routine, safe-important, unknown, uncertain, invalid, provider-error and wrong-count responses all leave zero durable rows and cannot resurrect A. Unsafe evidence now deletes its identified durable family before dispatch, independently of rescore/audit mode; it cannot publish even a valid important result.
+- `TestEngineLearningVetoAcrossRestart`: adaptive classic Drain, stable review ID, teacher threshold two, reversed sample order and repeated batches over two SQLite/engine restarts. Vetoed unknown results retain `review_required`, produce no teacher calls/escalations/reuse/fanout metrics and publish no durable rows. `TestLearningSavedEscalationRespectsVeto` first generates a real saved escalation, applies the Grouper veto and repeats matching batches; saved teacher state cannot overwrite either the primary result or the independently reviewed unknown fanout.
+- `TestEngineDurableTTLAcrossRestart`: controllable clocks, original 60-second lifetime, durable hit after restart at t=59, successful reuse within the remaining second, then provider dispatch exactly at t=60 and just after. Current shorter TTL clamps to original creation plus the shorter duration; a longer current TTL cannot extend stored expiry. Tests also exercise restart before creation, rollback after a hit (including rollback within the original lifetime), and provider latency reaching the expiry boundary.
+- `Store.Lookup` carries creation and the smaller of stored expiry/current configured lifetime through local-only judgment metadata. `CachedJudge` also stamps newly stored judgments with the same original window. Engine/Grouper publication checks the current clock and caps expiry, without renewing it on hits. Observed in-process clock rollback forces durable refresh; teacher entries are cleared on rollback. `TestLearningLifetimeDoesNotSlideOrSurviveRollback` covers saved teacher reuse at t=59, expiry at t=60 and backward clock movement.
+- `TestUnsafeDossierInvalidatesBeforeDispatch` checks each identified sensitive, truncated, evidence-limited, sample-limited and security dossier against real SQLite, including deletion inside the provider callback and no publication afterward. `TestLearningLimitedBatchPreservesIndependentReview` covers both saved and newly generated teacher paths for a nine-sample batch. `TestDurableLifetimeMetadataStaysLocal` checks effective bounds, JSON exclusion and rejection of provider-injected lifetime fields.
+
+## Neighboring-path audit
+
+Inspected identity construction and scope, complete tickets/generations, Observe/Publish/Invalidate, batching and fanout, all durable cache modes, provider response validation, review IDs, reviewed artifacts, teacher candidate state and reports, CLI provider contracts, Store lookup/write/schema migration and checkpoint/report serialization. Existing regressions continue to cover safe audit replacement versus failed/unsafe audits, explicit rescore and veto, stale-generation durable publication and learning, reversed discovery/eviction order, source/pod scope, baseline, masking/strategy, protected literals, provider contract and reviewed rule version.
+
+Ineligible events still receive no reusable family ticket; no family identity is inferred from unsafe evidence to broaden reuse. Identified unsafe dossiers invalidate their existing family. Teacher escalation remains process-local and never becomes a durable verdict or an active reviewed rule. The new learning gate preserves human veto, stale-generation rejection and limited-evidence independent review in both saved-state reads and generated escalation fanout. Review/report and cache identity namespaces are unchanged.
+
+SQLite schema and stored judgment JSON are unchanged: existing v2 family rows retain their original timestamps, and local lifetime fields cannot be supplied through strict provider JSON. Old v1 sample-specific rows remain unreachable as before. Store rollback checks still reject times before persisted creation; Grouper additionally detects backward movement it observes in the running process. Across restart, a wall-clock rollback that remains between persisted creation and expiry cannot be distinguished from ordinary elapsed time; no claim of a persistent monotonic clock is made. Expiry is exclusive, and SQLite's existing whole-second precision remains conservatively bounded.
+
+## Executed offline validation
+
+Environment: Darwin arm64, Go 1.27.1, Node 24.19.0, Python 3.14.7 and Rust 1.94.0. Commands ran from this worktree with the following settings (Cargo commands also explicitly use `--offline`):
+
+```sh
+export PATH=/opt/homebrew/opt/node@24/bin:$PATH
+export GOPROXY=off GOSUMDB=off CARGO_NET_OFFLINE=true PIP_NO_INDEX=1
+```
+
+| Exact command | Result |
+| --- | --- |
+| `gofmt -w internal/analysis/engine.go internal/analysis/group.go internal/analysis/learning.go internal/analysis/learning_test.go internal/controller/judge.go internal/controller/store.go internal/controller/blind_review_test.go internal/event/event.go`; `gofmt -l cmd internal examples` | Passed; no unformatted files |
+| `go test -count=1 ./internal/controller ./internal/analysis ./internal/event ./internal/provider` | All affected packages passed; `.cache/blind-targeted.log` |
+| `go test -race -count=1 ./internal/controller ./internal/analysis ./internal/event ./internal/provider` | All affected packages passed, no race report; `.cache/blind-race.log` |
+| Focused reproduction command above | Passed after fixes; `.cache/blind-after.log` |
+| `tools/check.sh` | Passed: tidy/no dependency diff, all Go tests/race/vet, Linux amd64/386/arm cross-builds, six JS suites across both trees, 122 Python tests, source/privacy checks and 14-workflow/17-suite parity inventory with retirement disabled; `.cache/blind-check.log` |
+| `tools/release.sh` | Passed: both Go executable names, classification/private-report/signals, SQLite migration/reopen/state-volume smoke, binary/source archives and source-byte/privacy checks; `.cache/blind-release.log` |
+| `cargo fmt --check` | Passed |
+| `cargo clippy --locked --offline --all-targets --all-features -- -D warnings` | Passed |
+| `cargo test --locked --offline --all-features` | 38 library and 7 CLI tests passed |
+| `cargo build --locked --offline --release` | Passed |
+| `python3 tests/rust/tui_pty.py target/release/jevernetes` | Search, Ctrl-C and SIGTERM passed, with terminal restoration and private reports |
+| `cargo package --list --allow-dirty --offline` | Passed; coexistence sources retained; `.cache/blind-rust-package.txt` |
+| `.venv/bin/python -m build --no-isolation --outdir dist/python` | Wheel and sdist built; `.cache/blind-python-build.log` |
+| `python3 tools/check_release.py --dist dist/python` | Both companion archives passed; `.cache/blind-python-archives.log` |
+| `.venv/bin/python tools/check_python_package.py dist/python/*.whl` | Installed entry point/assets and all 122 tests passed; `.cache/blind-python-installed.log` |
+| `for file in internal/dashboard/web/*.js jevernetes/web/*.js; do node --check "$file"; done` | Both trees passed; `.cache/blind-js-syntax.log` |
+| `go test -count=1 -v ./internal/controller -run 'TestPrivateStateDirectory/foreign_owner\|TestPrepareVolumeRejectsConflicts/foreign-owner\|TestWALUnsafeSHMRejectedBeforeInitialization/foreign-owner'` | Confirmed the three existing ownership-capability skips; `.cache/blind-privileged.log` |
+| `git diff --check` | Passed |
+
+Rust command output is retained in `.cache/blind-rust.log`. Generated artifacts/logs stay ignored under `.cache/`, `dist/` and `target/`. Existing macOS minimum-deployment-target linker warnings were nonfatal. No required runnable gate was skipped.
+
+## Unverified boundaries
+
+No live model accuracy/billing, live Kubernetes/provider/notification integration, production soak, hosted CI, container/PVC execution or privileged foreign-owner checks were performed. Linux targets were cross-built, not executed. The three named ownership subtests require capabilities unavailable to UID 501 and retain their existing skips. These offline results do not authorize runtime retirement. Earlier validation entries below are historical and do not describe production access during this implementation pass.
+
+---
+
 # Stable audit families and review identities — 2026-10-11
 
 This narrow follow-up starts from the verified clean branch `fix/go-full-parity-20261011` at exactly `3558887ff88c4f88deba61e83d2451e962e73f53`. Work and validation use local synthetic providers, SQLite databases, streams, loopback servers and Git fixtures. No production access, live provider/cluster calls, pushes, deployments or GitHub changes occurred. Staged Rust/Python/Go coexistence and all prior fixes remain in place.

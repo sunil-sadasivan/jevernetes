@@ -308,5 +308,7 @@ func (s *Store) Lookup(ctx context.Context, key string, now int64, ttl time.Dura
 	if provider.Strict([]byte(raw), &j) != nil || !j.Reusable() {
 		return nil, nil
 	}
+	j.CacheCreatedAt = time.Unix(created, 0)
+	j.CacheExpiresAt = time.Unix(min(expires, created+int64(ttl.Seconds())), 0)
 	return &j, nil
 }

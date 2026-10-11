@@ -11,6 +11,7 @@ import (
 // CachedJudge persists only hashed semantic identities and validated verdicts.
 // Sensitive or incomplete dossiers always bypass durable reuse.
 type CachedJudge struct {
+	Now      func() time.Time
 	Store    *Store
 	Next     provider.Judge
 	Contract string
@@ -23,7 +24,11 @@ func (c CachedJudge) Judge(ctx context.Context, groups []provider.Dossier) ([]ev
 	pending := []provider.Dossier{}
 	indices := []int{}
 	keys := []string{}
-	now := time.Now().Unix()
+	clock := c.Now
+	if clock == nil {
+		clock = time.Now
+	}
+	now := clock().Unix()
 	for i, g := range groups {
 		key := ""
 		if g.TemplateID != "" {
@@ -32,7 +37,8 @@ func (c CachedJudge) Judge(ctx context.Context, groups []provider.Dossier) ([]ev
 			// new namespace leaves old sample-specific entries unreachable.
 			key = event.Hash([]any{"go-group-cache-v2", c.Contract, g.ScopeID, g.TemplateID, g.VersionID, g.BaselineImportant})
 		}
-		if key != "" && (c.Rescore || g.CacheMode != provider.CacheDefault) {
+		unsafe := g.Sensitive || g.Truncated || g.EvidenceLimited || g.SamplesLimited || g.SecuritySignal
+		if key != "" && (c.Rescore || g.CacheMode != provider.CacheDefault || unsafe) {
 			// Invalidate before dispatch: failed/unsafe reassessment must not
 			// resurrect the previous verdict after a process restart.
 			if err := c.Store.deleteVerdict(ctx, key); err != nil {
@@ -41,7 +47,7 @@ func (c CachedJudge) Judge(ctx context.Context, groups []provider.Dossier) ([]ev
 		}
 		// Unsafe evidence still invalidates on reassessment, but can neither
 		// consume nor publish a reusable family verdict.
-		if g.Sensitive || g.Truncated || g.EvidenceLimited || g.SamplesLimited || g.SecuritySignal {
+		if unsafe {
 			key = ""
 		}
 		if key != "" && !c.Rescore && g.CacheMode == provider.CacheDefault {
@@ -72,12 +78,14 @@ func (c CachedJudge) Judge(ctx context.Context, groups []provider.Dossier) ([]ev
 		return nil, provider.ErrSchema
 	}
 	for n, j := range js {
-		out[indices[n]] = j
 		if keys[n] != "" && provider.Validate(j) == nil && j.Reusable() {
 			if err := c.Store.PutVerdict(ctx, keys[n], j, now, c.TTL); err != nil {
 				return nil, err
 			}
+			j.CacheCreatedAt = time.Unix(now, 0)
+			j.CacheExpiresAt = time.Unix(now+int64(c.TTL.Seconds()), 0)
 		}
+		out[indices[n]] = j
 	}
 	return out, nil
 }

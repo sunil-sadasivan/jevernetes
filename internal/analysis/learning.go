@@ -26,6 +26,7 @@ type learned struct {
 	next       int
 }
 type learning struct {
+	observed   time.Time
 	teacher    provider.Teacher
 	entries    map[string]*learned
 	decisions  []LearningDecision
@@ -107,7 +108,12 @@ func (e *Engine) teach(ctx context.Context, events []event.Event) {
 	if l == nil || ctx.Err() != nil {
 		return
 	}
-	now := time.Now()
+	now := e.config.Now()
+	// A rollback cannot extend the lifetime of saved teacher authority.
+	if !l.observed.IsZero() && now.Before(l.observed) {
+		clear(l.entries)
+	}
+	l.observed = now
 	for k, v := range l.entries {
 		if !now.Before(v.expires) {
 			delete(l.entries, k)
@@ -119,7 +125,7 @@ func (e *Engine) teach(ctx context.Context, events []event.Event) {
 		// Stable semantic IDs can outlive an evicted ticket. Learning must
 		// preserve the engine's stale-generation rejection, including when a
 		// current incarnation of that same family appears later in this batch.
-		if !Eligible(ev) || ev.AnalysisError == "stale template generation" {
+		if !e.learningEligible(ev) {
 			continue
 		}
 		key, version := "", ""
@@ -195,7 +201,7 @@ func (e *Engine) teach(ctx context.Context, events []event.Event) {
 					decision.Outcome = "escalated"
 					e.Metrics["refine_escalations"]++
 					for i := range events {
-						if events[i].Assessment != nil && events[i].Assessment.TemplateID == key && events[i].Assessment.VersionID == p.version && Eligible(events[i]) && events[i].AnalysisError != "stale template generation" && events[i].Importance != "important" {
+						if events[i].Assessment != nil && events[i].Assessment.TemplateID == key && events[i].Assessment.VersionID == p.version && e.learningEligible(events[i]) && events[i].Importance != "important" {
 							events[i].Judgment = *j
 						}
 					}
@@ -209,4 +215,16 @@ func (e *Engine) teach(ctx context.Context, events []event.Event) {
 		}
 		l.decisions = append(l.decisions, decision)
 	}
+}
+
+// Learning cannot override the safety decision made by the primary lane. Apply
+// this gate both before reading saved state and before same-batch escalation.
+func (e *Engine) learningEligible(ev event.Event) bool {
+	if !Eligible(ev) || ev.AnalysisError == "stale template generation" {
+		return false
+	}
+	if a := ev.Assessment; a != nil {
+		return a.Reason != "review_required" && !e.groups.review[a.TemplateID] && !a.EvidenceLimited && !a.SamplesLimited
+	}
+	return true
 }

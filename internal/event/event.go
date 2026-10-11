@@ -24,13 +24,17 @@ const MaxInput = 32 << 20
 type Source map[string]any
 
 type Judgment struct {
-	Importance           string   `json:"importance"`
-	Severity             string   `json:"severity"`
-	Category             string   `json:"category"`
-	ImportanceConfidence *float64 `json:"importance_confidence,omitempty"`
-	SeverityConfidence   *float64 `json:"severity_confidence,omitempty"`
-	CategoryConfidence   *float64 `json:"category_confidence,omitempty"`
-	AnalysisError        string   `json:"analysis_error,omitempty"`
+	// Cache bounds are trusted local metadata, never provider/report/SQLite JSON.
+	// A zero expiry denotes a fresh judgment without a durable lifetime.
+	CacheCreatedAt       time.Time `json:"-"`
+	CacheExpiresAt       time.Time `json:"-"`
+	Importance           string    `json:"importance"`
+	Severity             string    `json:"severity"`
+	Category             string    `json:"category"`
+	ImportanceConfidence *float64  `json:"importance_confidence,omitempty"`
+	SeverityConfidence   *float64  `json:"severity_confidence,omitempty"`
+	CategoryConfidence   *float64  `json:"category_confidence,omitempty"`
+	AnalysisError        string    `json:"analysis_error,omitempty"`
 }
 
 func Unknown(reason string) Judgment {

@@ -11,6 +11,8 @@ import (
 )
 
 type Config struct {
+	// Now supplies the local clock; nil uses time.Now.
+	Now                                  func() time.Time
 	Teacher                              provider.Teacher
 	TemplateMinSamples, TemplateCapacity int
 	TemplateConfidence                   float64
@@ -69,6 +71,9 @@ func New(c Config, j provider.Judge) (*Engine, error) {
 	if !c.Offline && j == nil {
 		return nil, errors.New("provider required")
 	}
+	if c.Now == nil {
+		c.Now = time.Now
+	}
 	g := NewGrouper(c.Strategy, c.Masking, c.Capacity, c.TTL, c.Adaptive, c.NormalInterval)
 	g.Veto(c.ReviewIDs)
 	g.rules = c.Rules
@@ -93,7 +98,7 @@ func (e *Engine) Batch(ctx context.Context, events []event.Event) []event.Event 
 	}
 	groups := []group{}
 	byTicket := map[Ticket]int{}
-	now := time.Now()
+	now := e.config.Now()
 	for i, ev := range out {
 		ticket, cached, reason := e.groups.Observe(ev, now)
 		if cached != nil {
@@ -112,7 +117,7 @@ func (e *Engine) Batch(ctx context.Context, events []event.Event) []event.Event 
 		}
 		d := provider.Dossier{TemplateID: ticket.TemplateID, VersionID: ticket.VersionID, ScopeID: event.Hash(Scope(ev, true)), Source: event.Hash(ev.Source), SourceMetadata: event.SafeSource(ev.Source), EvidenceID: ev.ID, Reason: reason, Samples: []string{}}
 		switch reason {
-		case "stable_audit":
+		case "stable_audit", "clock_rollback":
 			d.CacheMode = provider.CacheRefresh
 		case "review_required":
 			d.CacheMode = provider.CacheBypass
@@ -167,7 +172,12 @@ func (e *Engine) Batch(ctx context.Context, events []event.Event) []event.Event 
 		}
 		reusable := safe && current && j.Reusable()
 		if reusable {
-			reusable = e.groups.Publish(g.ticket, j, out[g.indices[0]].ID, now)
+			// Fresh judgments start their non-sliding lifetime at dispatch;
+			// durable hits already carry the original (possibly shorter) window.
+			if j.CacheExpiresAt.IsZero() {
+				j.CacheCreatedAt, j.CacheExpiresAt = now, now.Add(e.config.TTL)
+			}
+			reusable = e.groups.Publish(g.ticket, j, out[g.indices[0]].ID, e.config.Now())
 		} else if g.eligible {
 			e.groups.Invalidate(g.ticket)
 		}
