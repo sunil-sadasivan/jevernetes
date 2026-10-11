@@ -280,6 +280,15 @@ func (s *Store) PutVerdict(ctx context.Context, key string, j event.Judgment, no
 	}
 	return nil
 }
+func (s *Store) deleteVerdict(ctx context.Context, key string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, err := s.db.ExecContext(ctx, "DELETE FROM verdicts WHERE key=?", key); err != nil {
+		return ErrState
+	}
+	return nil
+}
+
 func (s *Store) Lookup(ctx context.Context, key string, now int64, ttl time.Duration) (*event.Judgment, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

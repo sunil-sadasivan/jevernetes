@@ -27,7 +27,17 @@ const Instructions = "Assess each log group's operational risk, including securi
 var endpoints = map[string]string{"typesafe": "https://api.typesafe.ai/v1/systemone", "openai": "https://api.openai.com/v1/responses", "anthropic": "https://api.anthropic.com/v1/messages"}
 var modelID = regexp.MustCompile(`^[A-Za-z0-9._:/-]{1,128}$`)
 
+// CacheMode is local scheduling policy, never provider-supplied evidence.
+type CacheMode uint8
+
+const (
+	CacheDefault CacheMode = iota
+	CacheRefresh           // Reassess, replacing a safe durable verdict only after success.
+	CacheBypass            // Reassess without publishing a durable verdict (human veto).
+)
+
 type Dossier struct {
+	CacheMode           CacheMode    `json:"-"`
 	TemplateID          string       `json:"template_id"`
 	VersionID           string       `json:"version_id"`
 	ScopeID             string       `json:"scope_id"`

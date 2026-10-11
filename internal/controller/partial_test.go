@@ -27,37 +27,7 @@ func TestTransportPartialThroughReuseGates(t *testing.T) {
 		if !d.EvidenceLimited || !d.Truncated || analysis.Eligible(e) {
 			t.Error("partial evidence reusable")
 		}
-		// Exercise both grouping/fanout and durable reuse with a local fixed
-		// judgment fixture; no provider transport or credentials are involved.
-		store := openTest(t)
-		calls := 0
-		judge := CachedJudge{Store: store, Contract: "partial", TTL: time.Minute, Next: partialJudge(func(groups []provider.Dossier) []event.Judgment {
-			calls++
-			out := make([]event.Judgment, len(groups))
-			for i := range out {
-				out[i] = event.Judgment{Importance: "routine", Severity: "info", Category: "routine", ImportanceConfidence: event.Confidence(.99), SeverityConfidence: event.Confidence(.99), CategoryConfidence: event.Confidence(.99)}
-			}
-			return out
-		})}
-		engine, err := analysis.New(analysis.Config{Strategy: "drain", Masking: "strict", Capacity: 8, BatchSize: 8, TTL: time.Minute, NormalInterval: 32}, judge)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for range 2 {
-			for _, result := range engine.Batch(context.Background(), []event.Event{e, e}) {
-				if result.AnalysisReused || result.Importance != "uncertain" || !result.Assessment.EvidenceLimited || DefaultPolicy().Decide(result) != "review" {
-					t.Fatal("partial event acquired routine safety", result)
-				}
-			}
-		}
-		var cached int
-		if err := store.db.QueryRow("SELECT count(*) FROM verdicts").Scan(&cached); err != nil || cached != 0 || calls != 2 {
-			t.Fatal("partial result cached", cached, calls, err)
-		}
-		e.Judgment = occurrence(1).Judgment
-		if DefaultPolicy().Decide(e) != "review" {
-			t.Error("partial event bypassed policy review")
-		}
+		assertUnsafeEvidence(t, e)
 	}
 	p := event.NewParser(event.Source{"type": "file"})
 	p.Feed([]byte("INFO routine"))
@@ -71,4 +41,68 @@ type partialJudge func([]provider.Dossier) []event.Judgment
 
 func (f partialJudge) Judge(_ context.Context, groups []provider.Dossier) ([]event.Judgment, error) {
 	return f(groups), nil
+}
+
+func assertUnsafeEvidence(t *testing.T, e event.Event) {
+	t.Helper()
+	// Exercise both grouping/fanout and durable reuse with a local fixed
+	// judgment fixture; no provider transport or credentials are involved.
+	store := openTest(t)
+	calls := 0
+	judge := CachedJudge{Store: store, Contract: "partial", TTL: time.Minute, Next: partialJudge(func(groups []provider.Dossier) []event.Judgment {
+		calls++
+		out := make([]event.Judgment, len(groups))
+		for i := range out {
+			out[i] = event.Judgment{Importance: "routine", Severity: "info", Category: "routine", ImportanceConfidence: event.Confidence(.99), SeverityConfidence: event.Confidence(.99), CategoryConfidence: event.Confidence(.99)}
+		}
+		return out
+	})}
+	engine, err := analysis.New(analysis.Config{Strategy: "drain", Masking: "strict", Capacity: 8, BatchSize: 8, TTL: time.Minute, NormalInterval: 32}, judge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		for _, result := range engine.Batch(context.Background(), []event.Event{e, e}) {
+			if result.AnalysisReused || result.Importance != "uncertain" || !result.Assessment.EvidenceLimited || DefaultPolicy().Decide(result) != "review" {
+				t.Fatal("partial event acquired routine safety", result)
+			}
+		}
+	}
+	// Supply an identity explicitly as well, so durable safety is tested even
+	// independently of the grouper's ineligible-ticket protection.
+	d := provider.Dossier{TemplateID: event.Hash("unsafe-evidence")}
+	d.Observe(e)
+	for range 2 {
+		if _, err := judge.Judge(context.Background(), []provider.Dossier{d}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var cached int
+	if err := store.db.QueryRow("SELECT count(*) FROM verdicts").Scan(&cached); err != nil || cached != 0 || calls != 4 {
+		t.Fatal("partial result cached", cached, calls, err)
+	}
+	e.Judgment = occurrence(1).Judgment
+	if DefaultPolicy().Decide(e) != "review" {
+		t.Error("partial event bypassed policy review")
+	}
+}
+
+func TestDuplicateJSONThroughReuseAndPolicyGates(t *testing.T) {
+	for _, raw := range []string{
+		`{"level":"ERROR","level":"INFO"}`,
+		`{"level":"ERROR","level":"INFO","to\u006ben":{"hidden":"synthetic-secret"},"token":"other-secret"}`,
+	} {
+		p := event.NewParser(event.Source{"type": "file"})
+		p.Feed([]byte(raw + "\n"))
+		e := p.Finish(false)[0]
+		if !e.ParseUncertain || !e.Baseline.Important || analysis.Eligible(e) {
+			t.Fatal(e)
+		}
+		var d provider.Dossier
+		d.Observe(e)
+		if !d.BaselineImportant || !d.EvidenceLimited {
+			t.Fatal(d)
+		}
+		assertUnsafeEvidence(t, e)
+	}
 }

@@ -25,5 +25,5 @@ prune .cache
 prune bin
 
 # The companion archive ships its active suites; Go/Rust suites are in the full source archive.
-exclude tests/test_dashboard_ui.cjs tests/parity.json
+exclude tests/test_dashboard_ui.cjs tests/parity.json tests/test_ci_parity.py
 prune tests/rust

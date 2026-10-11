@@ -11,7 +11,6 @@ import (
 	"os"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -203,13 +202,18 @@ func (o *options) runWith(cmd *cobra.Command, paths []string, stdin io.Reader, d
 		state.Add("coverage_"+reason, 1)
 	}
 	in := make(chan event.Event, o.queue)
-	var total atomic.Int64
+	// Serialize admissions across live streams so the Nth successful enqueue
+	// stops intake without racing or cancelling earlier admissions.
+	var admission sync.Mutex
+	total := 0
 	emit := func(e event.Event) error {
-		n := total.Add(1)
-		if o.maxEvents > 0 && n > int64(o.maxEvents) {
-			gap(e.Source, "event_limit")
-			cancel()
+		admission.Lock()
+		defer admission.Unlock()
+		if o.maxEvents > 0 && total >= o.maxEvents {
 			return errCap
+		}
+		if err := ctx.Err(); err != nil {
+			return err
 		}
 		state.Add("received", 1)
 		if o.k.Follow {
@@ -220,15 +224,22 @@ func (o *options) runWith(cmd *cobra.Command, paths []string, stdin io.Reader, d
 			default:
 				state.Add("dropped", 1)
 				gap(e.Source, "queue_drop")
+				return nil
 			}
-			return nil
+		} else {
+			select {
+			case in <- e:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 		}
-		select {
-		case in <- e:
-			return nil
-		case <-ctx.Done():
-			return ctx.Err()
+		total++
+		if o.maxEvents > 0 && total == o.maxEvents {
+			gap(e.Source, "event_limit")
+			cancel()
+			return errCap
 		}
+		return nil
 	}
 	var collector logCollector
 	if paths == nil {

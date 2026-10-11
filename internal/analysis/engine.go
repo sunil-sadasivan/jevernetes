@@ -111,6 +111,12 @@ func (e *Engine) Batch(ctx context.Context, events []event.Event) []event.Event 
 			continue
 		}
 		d := provider.Dossier{TemplateID: ticket.TemplateID, VersionID: ticket.VersionID, ScopeID: event.Hash(Scope(ev, true)), Source: event.Hash(ev.Source), SourceMetadata: event.SafeSource(ev.Source), EvidenceID: ev.ID, Reason: reason, Samples: []string{}}
+		switch reason {
+		case "stable_audit":
+			d.CacheMode = provider.CacheRefresh
+		case "review_required":
+			d.CacheMode = provider.CacheBypass
+		}
 		d.Observe(ev)
 		if eligible {
 			byTicket[ticket] = len(groups)

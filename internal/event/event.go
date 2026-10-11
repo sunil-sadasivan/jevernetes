@@ -146,7 +146,23 @@ func clean(v any) any {
 	return v
 }
 func Redact(s string) (string, bool) {
+	safe, changed, _ := redact(s)
+	return safe, changed
+}
+func redact(s string) (string, bool, bool) {
 	s = ansi.ReplaceAllString(s, "")
+	if json.Valid([]byte(s)) {
+		d := json.NewDecoder(strings.NewReader(s))
+		d.UseNumber()
+		raw, safe, duplicate, err := redactJSON(d, 0)
+		if err != nil {
+			// Refuse excessive nesting without exposing escaped secret fields.
+			return "[REDACTED JSON: nesting limit]", true, true
+		}
+		if duplicate {
+			return safe, raw != safe, true
+		}
+	}
 	var v any
 	d := json.NewDecoder(strings.NewReader(s))
 	d.UseNumber()
@@ -155,11 +171,11 @@ func Redact(s string) (string, bool) {
 		if d.Decode(&extra) == io.EOF {
 			a, _ := json.Marshal(v)
 			b, _ := json.Marshal(clean(v))
-			return string(b), string(a) != string(b)
+			return string(b), string(a) != string(b), false
 		}
 	}
 	t := scrub(s)
-	return t, t != s
+	return t, t != s, false
 }
 func SafeSource(s Source) Source {
 	b, _ := json.Marshal(s)
@@ -278,7 +294,7 @@ func (p *Parser) finishLine(partial bool) *Event {
 	if text == "" && !private && !trunc {
 		return nil
 	}
-	safe, changed := Redact(text)
+	safe, changed, ambiguous := redact(text)
 	if private {
 		safe = "[REDACTED PRIVATE KEY]"
 		changed = true
@@ -288,14 +304,14 @@ func (p *Parser) finishLine(partial bool) *Event {
 		e.LineEnd = p.line
 		e.LineCount++
 		e.Sensitive = e.Sensitive || changed
-		e.ParseUncertain = e.ParseUncertain || partial || invalid || (p.transport && !transportStamp)
+		e.ParseUncertain = e.ParseUncertain || partial || invalid || ambiguous || (p.transport && !transportStamp)
 		e.Truncated = e.Truncated || trunc || len(e.Text)+1+len(safe) > MaxEvent
 		e.Text = Clip(e.Text+"\n"+safe, MaxEvent)
 		return nil
 	}
 	orphan := continuation.MatchString(text) && p.pending == nil
 	prev := p.Flush()
-	p.pending = &Event{Source: p.source, Timestamp: ts, Text: Clip(safe, MaxEvent), LineStart: p.line, LineEnd: p.line, LineCount: 1, Truncated: trunc || len(safe) > MaxEvent, Sensitive: changed || p.sourceSensitive, ParseUncertain: partial || invalid || orphan || (p.transport && !transportStamp), Judgment: Unknown("")}
+	p.pending = &Event{Source: p.source, Timestamp: ts, Text: Clip(safe, MaxEvent), LineStart: p.line, LineEnd: p.line, LineCount: 1, Truncated: trunc || len(safe) > MaxEvent, Sensitive: changed || p.sourceSensitive, ParseUncertain: partial || invalid || ambiguous || orphan || (p.transport && !transportStamp), Judgment: Unknown("")}
 	return prev
 }
 func (p *Parser) Flush() *Event {
@@ -315,6 +331,11 @@ func (p *Parser) Finish(partial bool) []Event {
 		if e := p.finishLine(partial || p.transport); e != nil {
 			out = append(out, *e)
 		}
+	}
+	// Even a newline-terminated header can have missing continuation lines.
+	if partial && p.pending != nil {
+		p.pending.Truncated = true
+		p.pending.ParseUncertain = true
 	}
 	if e := p.Flush(); e != nil {
 		out = append(out, *e)

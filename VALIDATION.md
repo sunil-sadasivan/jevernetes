@@ -1,3 +1,46 @@
+# Independent review corrections — 2026-10-11
+
+This follow-up starts from clean branch `fix/go-full-parity-20261011` at `fba6e375033d228374224b3b8b3fe8688f7796a1`. Work is confined to this worktree; tests use local synthetic providers, streams, Git repositories and SQLite state. No live providers/clusters, production access, pushes, deployments or remote GitHub changes are involved. Staged coexistence and the runtime-retirement prohibition remain in force.
+
+## Regression evidence
+
+- `TestEngineDurableReassessmentAcrossRestart`: Engine → CachedJudge → local provider fixture, real SQLite close/reopen, ordinary persisted hits, occurrence-triggered `stable_audit`, updated safe cache, invalid/unknown/failed audit invalidation, and repeated review veto across restarts with no durable publication or fanout.
+- `tests/test_ci_parity.py`: a local `file://` shallow clone fails the fixed-base parity check; full history passes; removing a retained companion asset still fails. The test also requires explicit `fetch-depth: 0` on the Go CI checkout. This repository/CI-only test stays in the full source archive, outside the companion-only sdist.
+- `TestLiveTerminatedHeaderTransportFailureThroughReuseGates`: a newline-terminated Kubernetes header followed by pipe transport failure is truncated and parse-uncertain through live framing, Engine, durable cache and policy review. Clean EOF behavior remains covered by existing tests.
+- `TestDuplicateJSONPreservesRedactedEvidence`, `TestDuplicateJSONBoundsAndContinuation`, and `TestDuplicateJSONThroughReuseAndPolicyGates`: conflicting and escaped duplicate keys, nested secret-shaped values, continuation propagation, bounded evidence, repeated redaction, retained baseline signals, no grouping/durable reuse and policy review despite confident routine judgments.
+- `TestMaxEventsDrainsOnlineAnalysisBeforeAndDuringProviderCall` and `TestMaxEventsStopsQuietLiveProducerAndDrainsQueue`: an open stdin writer and a quiet live producer stop after exactly N admissions while blocked/queued online work finishes. A following header may be needed to finalize the Nth multiline event; no N+1 finalized event or EOF is needed. Queue drops do not count as admissions.
+- `TestControllerDeliversNotificationOnlyJSONOnStdout`: at least one actual notification is written and acknowledged in SQLite before collection ends; every stdout record decodes strictly as a notification, and plain evidence, judgments and summary appear on stderr.
+
+## Follow-up validation
+
+All gates below passed sequentially on Darwin arm64 with Go 1.27.1, Node 24.19.0 (`/opt/homebrew/opt/node@24/bin` prepended to `PATH`), Python 3.14.7 and Rust 1.94.0. Go dependency access was disabled with `GOPROXY=off GOSUMDB=off`; Cargo used `--offline`, and Python builds/installations used local dependencies. Local build outputs and `review-*` logs remain ignored under `.cache/`, `dist/` and `target/`.
+
+| Check | Result |
+| --- | --- |
+| `gofmt` on modified Go files; formatting gate in `tools/check.sh` | Passed |
+| `go test -count=1 ./internal/event ./internal/controller ./internal/kube ./internal/cli ./internal/analysis ./internal/provider` | All six packages passed |
+| Same six packages with `go test -race -count=1` | Passed; no race report |
+| `tools/check.sh` with Node 24 | Passed: tidy/no dependency diff, all Go packages, race, vet, Linux amd64/386/arm cross-builds, six JS suites, 122 Python tests, parity inventory and source/privacy checks |
+| `tools/release.sh` with Node 24 | Passed: both binary names, offline classification, private reports, SIGINT/SIGTERM, state migration/reopen smoke and source archive checks |
+| `PIP_NO_INDEX=1 .venv/bin/python -m build --no-isolation --outdir dist/python` | Wheel and sdist built |
+| `python3 tools/check_release.py --dist dist/python` | Both companion archives passed |
+| `.venv/bin/python tools/check_python_package.py dist/python/*.whl` | Installed entry point/assets and 122 tests passed (including the repository-level CI fixture) |
+| `cargo fmt --check` | Passed |
+| `cargo clippy --locked --offline --all-targets --all-features -- -D warnings` | Passed |
+| `cargo test --locked --offline --all-features` | 38 library and 7 CLI tests passed |
+| `cargo build --locked --offline --release` | Passed |
+| `python3 tests/rust/tui_pty.py target/release/jevernetes` | Search, Ctrl-C and SIGTERM passed; terminal restored and private report saved |
+| `cargo package --list --allow-dirty --offline` | Passed; coexistence sources retained |
+| `git diff --check` | Passed |
+
+The initial restricted test attempt could not write the shared Go cache or bind local test sockets. The successful runs had local cache/socket permission and still used only hermetic fixtures. Existing macOS deployment-target linker warnings remained nonfatal. No production workaround or live-service substitute was used.
+
+## Limits
+
+These tests establish local control flow, conservative evidence handling, cache behavior and packaging/coexistence contracts. They do not establish live model accuracy/billing, production Kubernetes compatibility, container/PVC execution or a production soak. The CI history test is hermetic; no hosted workflow is run. Non-root ownership tests retain their existing privilege-dependent skips. The earlier validation below is the pre-review record, including its then-current runtime versions and test counts.
+
+---
+
 # Full-parity staged-coexistence validation — 2026-10-11
 
 This run started at `629918de491be1fdbf45119ec89e06fb247c1a28`, compared with main at `3a08dcb1c3611c0014b000074006701ad767bfa2`, on the isolated `fix/go-full-parity-20261011` branch. No live providers, clusters, production systems, pushes, deployments or PR actions were used. Tests use synthetic evidence and local fakes. Build dependencies came from local caches.
