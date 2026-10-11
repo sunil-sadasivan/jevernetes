@@ -40,6 +40,7 @@ func LoadReport(raw []byte) (*ReportView, error) {
 		return nil, errors.New("escaped report summary exceeds limit")
 	}
 	v.complete, _ = summary["complete_within_window"].(bool)
+	v.complete = v.schema == 2 && v.complete
 	if json.Unmarshal(value["events"], &v.events) != nil || v.events == nil || len(v.events) > 100000 {
 		return nil, errors.New("invalid report events")
 	}
@@ -106,12 +107,16 @@ func (v *ReportView) page(w http.ResponseWriter, r *http.Request) {
 	// measure escaped JSON bytes, including HTML escaping, before admission.
 	for next < len(matches) && len(page) < limit {
 		raw, _ := json.Marshal(v.events[matches[next]])
+		oversized := false
 		if len(raw) > inspect.MaxResponse-(40<<10) {
 			raw, _ = json.Marshal(map[string]any{"text": "Event exceeds dashboard page limit; inspect the original report", "importance": "unknown", "event_unavailable": true, "report_index": matches[next]})
-			unavailable++
+			oversized = true
 		}
 		if used+len(raw)+1 > inspect.MaxResponse-(40<<10) {
 			break
+		}
+		if oversized {
+			unavailable++
 		}
 		page = append(page, raw)
 		used += len(raw) + 1

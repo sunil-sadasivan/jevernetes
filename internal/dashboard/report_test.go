@@ -99,3 +99,16 @@ func TestReportValidation(t *testing.T) {
 		}
 	}
 }
+
+func TestSummaryCannotEscapePageByteBudgetOrClaimLegacyCompleteness(t *testing.T) {
+	raw, _ := json.Marshal(map[string]any{"schema_version": 1, "summary": map[string]any{"complete_within_window": true}, "events": []any{}})
+	v, err := LoadReport(raw)
+	if err != nil || v.complete {
+		t.Fatal("legacy completeness inferred", err)
+	}
+	// A compact input may expand six-fold under HTML-safe JSON serialization.
+	raw = []byte(`{"schema_version":2,"summary":{"note":"` + strings.Repeat("<", 10000) + `"},"events":[]}`)
+	if _, err := LoadReport(raw); err == nil {
+		t.Fatal("escaped summary exceeded reserved page space")
+	}
+}

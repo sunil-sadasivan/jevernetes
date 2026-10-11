@@ -394,7 +394,11 @@ func (o *options) runWith(cmd *cobra.Command, paths []string, stdin io.Reader, d
 		}
 	} else {
 		summary := value["summary"].(map[string]any)
-		fmt.Fprintf(cmd.OutOrStdout(), "events=%v important=%v uncertain=%v unknown=%v complete=%v\n", summary["events"], summary["important"], summary["uncertain"], summary["unknown"], summary["complete_within_window"])
+		writer := cmd.OutOrStdout()
+		if store != nil {
+			writer = cmd.ErrOrStderr()
+		}
+		fmt.Fprintf(writer, "events=%v important=%v uncertain=%v unknown=%v complete=%v\n", summary["events"], summary["important"], summary["uncertain"], summary["unknown"], summary["complete_within_window"])
 	}
 	if budgetStopped {
 		return errors.New("provider budget exhausted; collection stopped, restart under supervision after reviewing budget policy")
