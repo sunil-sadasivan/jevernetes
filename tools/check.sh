@@ -1,6 +1,6 @@
 #!/bin/sh
 set -eu
-[ -z "$(gofmt -l cmd internal)" ]
+[ -z "$(gofmt -l cmd internal examples)" ]
 go mod tidy
 git diff --exit-code -- go.mod go.sum
 go test ./...

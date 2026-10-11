@@ -1,6 +1,6 @@
 # Contributing
 
-Use Go 1.25+ and Node 20+ for development. Product execution needs only the compiled binary. Run `tools/check.sh` and `tools/release.sh` before proposing changes. Unit tests use synthetic evidence, fake Kubernetes clients, in-memory HTTP transports and temporary SQLite files. Never use cluster credentials, live providers, private reports or real notifications in tests.
+Use Go 1.25+, Rust 1.94+, Python 3.11+ and Node 20+ for development. Go and Rust binaries run independently; the investigation companion requires Python. Run `tools/check.sh` and `tools/release.sh` before proposing changes, plus `cargo fmt --check`, `cargo clippy --locked --all-targets --all-features -- -D warnings`, `cargo test --locked --all-features`, and `python3 tests/rust/tui_pty.py target/debug/jevernetes` after `cargo build --locked`. The executable inventory is `python3 tools/check_parity.py --run`. Unit tests use synthetic evidence, fake Kubernetes clients, in-memory HTTP transports and temporary SQLite files. Never use cluster credentials, live providers, private reports or real notifications in tests.
 
 Keep producer/analysis ownership explicit. Carry `context.Context` across I/O, bound every queue and evidence collection, and join goroutines before returning. Preserve original events when assigning group judgments. A cached judgment must never escape its scope, template/version, generation, safety gate or TTL. Provider schemas reject unknown properties, duplicate keys, missing fields and invalid confidence.
 

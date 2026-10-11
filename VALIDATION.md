@@ -1,3 +1,61 @@
+# Full-parity staged-coexistence validation — 2026-10-11
+
+This run started at `629918de491be1fdbf45119ec89e06fb247c1a28`, compared with main at `3a08dcb1c3611c0014b000074006701ad767bfa2`, on the isolated `fix/go-full-parity-20261011` branch. No live providers, clusters, production systems, pushes, deployments or PR actions were used. Tests use synthetic evidence and local fakes. Build dependencies came from local caches.
+
+## Current recommendation
+
+**CONDITIONAL PASS for staged coexistence.** The existing Rust terminal/search runtime and Python investigation runtime remain supported, packaged and tested. This is not approval to remove them or to claim a complete Go-native investigation product. `tests/parity.json` and `python3 tools/check_parity.py --run` form the executable acceptance inventory; its retirement gate requires the base runtime/test assets to remain active. The detailed status matrix and rollback/import instructions are in [migration](docs/migration.md).
+
+The blockers are addressed by restoring the working investigation implementations and their original tests; separating Go release names; accepting schema-1 reports; importing human review rules without replacement; separating intake cancellation from admitted analysis; exiting exhausted controllers nonzero under supervision; emitting plain evidence and preserving notification JSON; byte-bounded report pagination with explicit completeness; header/end-based Go multiline framing; descriptive TypeSafe criteria with per-group attribution; and real local HTTP/SPDY/package/state integration tests.
+
+## Executed checks and results
+
+Environment: Darwin arm64, Go 1.27.1, Rust 1.94.0, Python 3.14.7, Node 20.10.0. Linux amd64, 386 and arm binaries were cross-compiled, not executed. macOS linker deployment-target warnings were emitted; no linker failure occurred.
+
+| Check | Result |
+| --- | --- |
+| `gofmt -l cmd internal examples` | No output |
+| `go mod tidy` and `git diff --exit-code -- go.mod go.sum` | Exit 0; no dependency changes |
+| `go test ./...` (also captured with `-json`) | 9 packages passed; 128 top-level tests passed, 220 passing test/subtest records; 0 failures; 3 subtests skipped |
+| `go test -race ./...` | 9 packages passed; no race report |
+| `go vet ./...` | Exit 0 |
+| `tools/check.sh` | Exit 0: formatting/tidy, Go/race/vet, three Linux cross-builds, Python, all six JS suites, inventory and source/security checks |
+| `python3 tools/check_parity.py --run` | 14 workflows, 17 distinct executable suite commands; exit 0 |
+| Python source acceptance | 121 tests passed |
+| JavaScript acceptance | All six suites passed: context, Go dashboard, grouping, prompt, review and search |
+| `cargo fmt --check` | Exit 0 |
+| `cargo clippy --locked --offline --all-targets --all-features -- -D warnings` | Exit 0 |
+| `cargo test --locked --offline --all-features` | 38 library tests and 7 CLI tests passed; no failures |
+| `cargo build --release --locked --offline` | Exit 0 |
+| `python3 tests/rust/tui_pty.py target/release/jevernetes` | Search, Ctrl-C and SIGTERM scenarios passed; terminal restored and private report saved in each |
+| `tools/release.sh` | Exit 0: Go executable/alias, offline classification, private reports, signals, state-volume migration/reopen smoke, source archive byte/privacy checks |
+| Python wheel and sdist build | Built with cached build/setuptools/wheel dependencies; both archives passed privacy checks |
+| `tools/check_python_package.py` against built wheel | Entry point and packaged web assets passed; all 121 Python tests passed from a temporary directory using installed site-packages |
+| `cargo package --list --allow-dirty --offline` | Exit 0; restored Rust sources/tests and coexistence documentation included |
+| `git diff --check` | Exit 0 |
+
+The three skipped non-root checks are `TestPrivateStateDirectory/foreign_owner`, `TestPrepareVolumeRejectsConflicts/foreign-owner`, and `TestWALUnsafeSHMRejectedBeforeInitialization/foreign-owner`. They require ownership-changing privileges. Other symlink/hardlink/FIFO/mode, crashed WAL, hot-journal, schema migration and private-volume cases ran.
+
+The initial restricted sandbox denied Python loopback binding; the same hermetic suite passed with local socket permission. One Go validation attempt overlapped the Rust release build and raced a removed temporary directory under `target/`; final gates were serialized after the Rust build. There was no production workaround or skipped test to hide either environment issue.
+
+## Focused acceptance evidence
+
+- `internal/cli/lifecycle_test.go`: caps before/during blocked provider analysis preserve admitted judgments; duration expiry drains in-flight work; three supervised process cycles reopen the same SQLite state and terminate on provider budget exhaustion with hold and inspection enabled; plain evidence and notification stdout remain distinct.
+- `internal/dashboard/report_test.go`: 301 large events, both report schemas, escaped JSON response limits, complete pagination without duplicates/loss, literal query across all retained events, hostile query rejection, explicit oversized-event markers and conservative legacy completeness.
+- `tests/test_migration.py`: unchanged source bytes, private destination, identical rerun without rewriting, conflicting/malformed/duplicate inputs, interrupted publication, scope/disabled-state/acknowledgement preservation and reversal to original judgments.
+- `internal/provider/http_contract_test.go`: actual serialized HTTP requests and typed decoding for all three fixed-host adapters through local-only injected transports; TypeSafe descriptions, group indexes, evidence IDs, source attribution and metered usage. This does not measure model accuracy.
+- `internal/kube/http_contract_test.go`: actual client-go HTTP discovery pagination, regular/init/ephemeral/previous snapshots, per-open identity checks, transport timestamps, reconnect wire query and replay suppression.
+- `internal/inspect/spdy_test.go`: real SPDY handshake, error/data streams, loopback port forward, HTTP inspection handler/client, credential separation and joined cancellation against a fake Kubernetes endpoint.
+- Existing controller suites and native release smoke exercise versioned SQLite upgrades, preserved committed WAL data, interrupted migration/conflict refusal, outbox/delivery/eviction/backpressure and manifest-aligned private-volume preparation.
+
+## Limits and remaining verification
+
+No actual container image build/run, Kubernetes mount/fsGroup upgrade, live provider semantic/billing validation, production cluster/SPDY proxy compatibility or long-duration production soak was performed. Container guarantees here are manifest/security assertions and host filesystem/process simulations of the exact preparation command. Cross-build success does not establish Linux execution. The three privileged ownership subtests remain unverified locally. Live source cursors remain process-local and collection coverage is explicitly partial. A supervised restart renews process provider budgets; it is not a daily spending cap. Idle Go singleton events wait for a following header or stream end to avoid splitting delayed traces. Human reviews continue in the supported companion and are not silently translated into Go model-template rules.
+
+Logs and local binaries/archives are in ignored `.cache/`, `target/` and `dist/`. They are not shipped as source or committed. The historical record below predates this staged change: its runtime-retirement statements, old file counts and prior validation environments are historical only, not current claims.
+
+---
+
 # Production-hardening validation
 
 ## SHM secure-opening correction (2026-10-06)

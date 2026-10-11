@@ -1,6 +1,6 @@
 # Architecture
 
-`cmd/jevernetes` and `cmd/jev` invoke the same Cobra command tree. Packages under `internal/` provide the complete runtime.
+`cmd/jevernetes` and `cmd/jev` invoke the same Cobra command tree. Packages under `internal/` provide the Go runtime. `src/` retains the supported Rust terminal/search runtime; `jevernetes/` retains the supported Python investigation service and UI. No runtime implicitly launches another. Release names keep installations side-by-side.
 
 | Package | Responsibility |
 | --- | --- |
@@ -20,7 +20,7 @@ Controller transitions and notification intents share a transaction. The single 
 
 Established libraries are pinned in `go.mod`/`go.sum`: client-go, Prometheus client_golang, modernc SQLite, Cobra/pflag and x/sys file locking. The [axiomhq/drain3 API](https://github.com/axiomhq/drain3) was evaluated: its similarity-based generalization and immutable trained matcher do not supply protected-field, exact scope or verdict-generation guards. The bounded conservative implementation keeps those application invariants explicit. It generalizes a fixed grammar, not arbitrary similar strings.
 
-Kubernetes transport timestamps are removed from each physical line before multiline framing; the first physical line supplies the event timestamp. Chunk boundaries do not change framing. Live idle flushes still bound latency; an orphan continuation is marked parse-uncertain. Invalid UTF-8 and missing transport timestamps also mark parse uncertainty, which prevents reusable grouping and requires controller review.
+Kubernetes transport timestamps are removed from each physical line before multiline framing; the first physical line supplies the event timestamp. Chunk boundaries do not change framing. Go live framing finalizes at the next header or stream end, never a quiet timer; an orphan continuation is marked parse-uncertain. Invalid UTF-8 and missing transport timestamps also mark parse uncertainty, which prevents reusable grouping and requires controller review.
 
 Completeness is derived from cumulative report metrics, not retained coverage samples. Every `coverage_*` signal, truncation, parse uncertainty, queue drop, retention eviction, state eviction, event/byte limit and interrupted collection prevents `complete_within_window=true`. Kubernetes and live reports always remain incomplete. Coverage records are capped at 500 with an omitted-record counter. Prometheus and inspection expose collection gaps and cursor/capacity signals alongside ingestion counters.
 

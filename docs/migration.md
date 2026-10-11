@@ -22,3 +22,20 @@ python3 -m jevernetes.migrate backup/.review-rules.json investigation-copy/.revi
 ```
 
 This is an explicit import into the coexisting investigation runtime, not into Go's provider-template rules. It preserves literal scopes, enabled/disabled states, rule IDs, acknowledgement report keys/event IDs, duplicates and reversible projections. Keep report filenames unchanged when copying schema-1 reports alongside it: acknowledgement keys identify those filenames. Source files are never modified. An identical rerun does nothing; a differing destination, malformed input, conflicting duplicate identity, symlink or special-file input fails without replacement. Import uses private temporary files, fsync and atomic no-clobber publication. Interrupted pre-publication staging can be ignored; rerun the command. A destination published before an interruption is complete and recognized on rerun. Maximum input is 16 MiB. ReviewStore's restored tests and migration tests exercise scope isolation and restoring original judgments after disabling/removing projections.
+
+## Acceptance status for this staged change
+
+| Workflow | Status | Executable coverage |
+| --- | --- | --- |
+| Existing Rust CLI, TUI, exact/semantic search | Coexistence; base implementation restored | 38 Rust library tests, 7 CLI tests, PTY search/Ctrl-C/SIGTERM |
+| Python live dashboard, investigation API, search/context/review/expected rules | Coexistence; active packaged companion | Full Python suite and installed-wheel suite; five legacy browser suites |
+| Prompt/export assets | Exact base assets | `tests/test_prompt_ui.cjs` |
+| Go intake, plain evidence output, provider attribution, controller stop lifecycle | Equivalent bounded contracts | Delayed online intake/duration tests, three supervised-state restart cycles, fake provider HTTP |
+| Report/rule continuity | Schema-1 view plus coexistence importer | Bounded paging/escaped-byte tests; idempotent no-clobber review import and reversible projection tests |
+| Kubernetes and remote inspection | Equivalent wire contracts | Actual client-go HTTP snapshots/reconnect and SPDY port-forward against local fakes |
+| State migrations, outbox, packaging, RBAC | Hermetic equivalent contracts | SQLite crash/recovery/upgrade tests; native manifest-volume smoke; private archive checks |
+| Live provider accuracy/billing, actual clusters/container runtime, long production soak | Unverified | No live execution authorized or performed |
+
+The merged change must remain staged coexistence. Full Go-native investigation parity is still deferred; removing either existing runtime would fail the retirement gate. Provider budgets are process bounds, so a deployment supervisor can renew them by restarting the process. That policy must be chosen deliberately. Runtime files/state remain separate, enabling rollback by restoring a quiescent backup and the previous executable without translating human review rules into model-template rules.
+
+TypeSafe questions now name their exact `groups[index]` and evidence ID, retain descriptive importance/severity/category criteria, and carry redacted source metadata alongside opaque group identity. The controller risk-contract namespace changes to `go-v2-attributed-criteria`, preventing reuse of judgments cached under the prior request semantics. All three adapters are covered by real local HTTP serialization/decoding tests; provider model quality and billing remain unverified.

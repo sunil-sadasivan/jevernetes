@@ -72,3 +72,4 @@ jobs:
           python -m pip install -r requirements-dev.txt
           python -m build
           python tools/check_release.py --dist dist
+          python tools/check_python_package.py dist/*.whl

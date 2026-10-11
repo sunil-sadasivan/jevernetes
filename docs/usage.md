@@ -1,14 +1,14 @@
 # CLI usage
 
 ```sh
-jevernetes files examples/mixed.log --offline --json
-jevernetes files application.txt.gz - --offline --output report.json
-jevernetes k8s --namespace demo --selector app=api --offline --since 30m
-jevernetes k8s -f --namespace demo --offline --tail 0 --duration 60
-jevernetes dashboard --report report.json
+jevernetes-go files examples/mixed.log --offline --json
+jevernetes-go files application.txt.gz - --offline --output report.json
+jevernetes-go k8s --namespace demo --selector app=api --offline --since 30m
+jevernetes-go k8s -f --namespace demo --offline --tail 0 --duration 60
+jevernetes-go dashboard --report report.json
 ```
 
-`kubernetes` aliases `k8s`; `--live` aliases `--follow`/`-f`. Build `cmd/jev` for the compatible executable name. `--help` is the authoritative flag list. Unknown options and unsupported compatibility options fail before inputs or credentials are opened.
+`kubernetes` aliases `k8s`; `--live` aliases `--follow`/`-f`. The Go release supplies the `jev-go` executable alias; existing Rust command names remain available. `--help` is the authoritative flag list. Unknown options and unsupported compatibility options fail before inputs or credentials are opened.
 
 Files support plain text, JSONL, stack-trace continuations, gzip including concatenated members, and `-` once for stdin. Missing files produce coverage gaps while subsequent inputs continue. `--max-file-bytes` limits decompressed input (default 32 MiB). Lines are bounded at 65,536 bytes and events at 16,000 UTF-8 bytes. Incomplete byte-limit fragments and oversized lines/events are marked truncated. Unterminated Kubernetes physical lines also mark the containing event truncated and parse-uncertain; normal file EOF does not. Secret-like fields, authorization strings, URL credentials and private-key blocks are redacted before event storage. Redaction is best effort; reports remain sensitive.
 
@@ -23,3 +23,5 @@ Use exact grouping by default; `--no-grouping`/`--grouping-strategy off` disable
 SIGINT/SIGTERM cancels collection and provider requests, drains queued events conservatively, joins workers and attempts a final report. Blocking stdin is closed on cancellation. `--json` reserves stdout for JSON; progress and errors use stderr. Reports use schema 2 with `runtime: "go"`, `summary`, `events`, `coverage`, `important_groups`, `usage`, `provider_usage`, `metrics` and learning sections. `--output` uses a 0600 temporary file, sync and atomic rename; newly created directories use 0700.
 
 Exit codes: 0 complete within the requested file window; 1 configuration/runtime failure; 2 partial coverage or CLI option parsing failure; 130 interruption. Important events alone do not change the code. Every Kubernetes report is partial. No exactly-once or complete-history claim is made.
+
+The Go dashboard accepts schema-1 and schema-2 reports with bounded pagination; see [migration](migration.md). Terminal TUI/semantic search and investigation context/review/prompt workflows remain in the supported Rust/Python runtimes. Go live framing waits for the next header or stream end; a quiet singleton can remain pending. Plain output includes source, judgment and multiline evidence as each finalized event is analyzed. Intake caps and duration allow admitted work to drain. Controller provider exhaustion exits nonzero for supervisor restart even with inspection/hold enabled.
