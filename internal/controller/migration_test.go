@@ -90,7 +90,7 @@ func TestPristineHistoricalMigrations(t *testing.T) {
 				t.Fatal(st, err)
 			}
 			ctx := context.Background()
-			verdict, err := s.Lookup(ctx, event.Hash("legacy verdict"), 1001, time.Hour)
+			verdict, err := s.Lookup(ctx, event.Hash("legacy verdict"), time.Unix(1001, 0), time.Hour)
 			if err != nil || (version < 3 && verdict != nil) || (version == 3 && verdict == nil) {
 				t.Fatal("verdict migration", verdict, err)
 			}

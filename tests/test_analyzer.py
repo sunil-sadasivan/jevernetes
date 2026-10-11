@@ -37,6 +37,21 @@ class ParsingTests(unittest.TestCase):
         self.assertEqual(es[0]["line_end"], 3)
         self.assertEqual(es[0]["timestamp"], "2026-09-20T12:00:00Z")
 
+    def test_file_kubernetes_stack_continuation_parity(self):
+        for source in ("file", "kubernetes"):
+            for stamped in (False, True):
+                with self.subTest(source=source, stamped=stamped):
+                    lines = ["ERROR failed", "  at demo.run", "Caused by: upstream timeout", "INFO ready"]
+                    if stamped:
+                        lines = [f"2026-01-01T00:00:0{i}Z {line}" for i, line in enumerate(lines)]
+                    es, warnings = parse_stream(io.BytesIO(("\n".join(lines) + "\n").encode()), {"type": source}, 100)
+                    self.assertFalse(warnings)
+                    self.assertEqual([e["line_count"] for e in es], [3, 1])
+                    self.assertEqual(es[0]["text"], "ERROR failed\n  at demo.run\nCaused by: upstream timeout")
+                    self.assertEqual(es[0]["line_end"], 3)
+                    self.assertEqual(es[1]["line_start"], 4)
+                    self.assertEqual(es[0]["timestamp"], "2026-01-01T00:00:00Z" if stamped else None)
+
     def test_event_limit_is_visible(self):
         es, warnings = parse_stream(io.BytesIO(b"one\ntwo\nthree\n"), {}, 2)
         self.assertEqual(len(es), 2)

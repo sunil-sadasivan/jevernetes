@@ -317,7 +317,7 @@ func TestUnsafeDossierInvalidatesBeforeDispatch(t *testing.T) {
 			if _, err := judge.Judge(ctx, []provider.Dossier{d}); err != nil {
 				t.Fatal(err)
 			}
-			got, err := store.Lookup(ctx, key, time.Now().Unix(), time.Minute)
+			got, err := store.Lookup(ctx, key, time.Now(), time.Minute)
 			if err != nil || got != nil || calls != 1 {
 				t.Fatal("unsafe publication/reuse", got, calls, err)
 			}
@@ -333,7 +333,7 @@ func TestDurableLifetimeMetadataStaysLocal(t *testing.T) {
 	if err := store.PutVerdict(ctx, key, j, 1000, time.Minute); err != nil {
 		t.Fatal(err)
 	}
-	got, err := store.Lookup(ctx, key, 1029, 30*time.Second)
+	got, err := store.Lookup(ctx, key, time.Unix(1029, 0), 30*time.Second)
 	if err != nil || got == nil || !got.CacheCreatedAt.Equal(time.Unix(1000, 0)) || !got.CacheExpiresAt.Equal(time.Unix(1030, 0)) {
 		t.Fatal("effective durable bounds", got, err)
 	}
@@ -342,10 +342,10 @@ func TestDurableLifetimeMetadataStaysLocal(t *testing.T) {
 		t.Fatal(err)
 	}
 	var decoded event.Judgment
-	if err := provider.Strict(raw, &decoded); err != nil || !decoded.CacheCreatedAt.IsZero() || !decoded.CacheExpiresAt.IsZero() {
+	if err := provider.Strict(raw, &decoded); err != nil || !decoded.CacheCreatedAt.IsZero() || !decoded.CacheExpiresAt.IsZero() || !decoded.CacheObservedAt.IsZero() || !decoded.CacheDeadline.IsZero() {
 		t.Fatal("local metadata entered persisted/provider schema", string(raw), err)
 	}
-	for _, field := range []string{"CacheExpiresAt", "cache_expires_at", "CacheCreatedAt", "cache_created_at"} {
+	for _, field := range []string{"CacheExpiresAt", "cache_expires_at", "CacheCreatedAt", "cache_created_at", "CacheObservedAt", "cache_observed_at", "CacheDeadline", "cache_deadline"} {
 		injected := append([]byte(fmt.Sprintf(`{"%s":"2099-01-01T00:00:00Z",`, field)), raw[1:]...)
 		if provider.Strict(injected, &decoded) == nil {
 			t.Fatal("untrusted lifetime accepted", field)

@@ -1,3 +1,58 @@
+# Final parity hardening — 2026-10-11
+
+Started in the clean current worktree at exactly `0fe8eaf35966b45664a3a6bf70d55bf088785ea7`. All evidence is synthetic/local. No push, PR mutation, deployment, production access or live provider/cluster contact occurred.
+
+## Reproductions and fixes
+
+Before production edits, the initial executable regressions failed with this command (`.cache/hardening-before.log`):
+
+```sh
+GOCACHE="$PWD/.cache/build" GOPROXY=off GOSUMDB=off go test -count=1 ./internal/controller ./internal/event -run 'TestDurableMonotonicLifetime|TestStackContinuationParity|TestTimestampedContinuationSafety'
+```
+
+Durable reuse survived backwards wall steps despite advancing monotonic time, delayed durable hits fanned out, and a fresh provider result outlived its elapsed deadline. Timestamped file stacks split into four events and lost combined safety flags. The final regressions additionally anchor wall time at 1000 with genuine monotonic components, cover expiry at 1060/load at 1059/rollback to 1020/wall 1049 after 30 elapsed seconds, and test recovered wall time, fractional remaining lifetime, forward steps, shorter/longer TTLs, delayed publication, and subsecond rollback during provider work. The test-only clock helper alters the reflected monotonic field and verifies both readings; unsupported Go time representations fail explicitly.
+
+`Store.Lookup` now receives a full `time.Time` and attaches a monotonic deadline for precisely the remaining persisted lifetime. Wall bounds and elapsed deadlines are checked independently. Observe/Publish compare wall-only values to detect rollback, retain the original deadline, and force durable refresh after expiry or rejected publication so a row cannot reload with renewed authority. Provider delay consumes the original lifetime; already-invalid fresh results are not persisted. Local observation/deadline metadata is excluded from JSON and rejected by the strict provider schema. SQLite schema and stored JSON remain unchanged.
+
+After timestamp removal, explicit stack markers join file and Kubernetes events. Timestamped normal lines, including indented normal lines, remain separate. Unstamped continuation framing is retained. Go tests check every input split, header timestamps, `[3,1]` line counts, orphan uncertainty, redaction, invalid UTF-8, oversized continuations and partial completion. The retained Python parser has matching timestamped/unstamped file/Kubernetes fixture assertions.
+
+## Exact validation evidence
+
+Darwin arm64; Go 1.27.1, Python 3.14.7, Rust 1.94.0. Shell gates used Node 24 from `/opt/homebrew/opt/node@24/bin`, with the following environment (Go dependency cache remained read-only; build output was local):
+
+```sh
+export PATH=/opt/homebrew/opt/node@24/bin:$PATH
+export GOCACHE="$PWD/.cache/build" GOPROXY=off GOSUMDB=off CARGO_NET_OFFLINE=true PIP_NO_INDEX=1
+```
+
+| Exact command | Result |
+| --- | --- |
+| `go test -count=1 ./internal/controller ./internal/analysis ./internal/event` | Passed all affected packages; `.cache/hardening-affected.log` |
+| `go test -race -count=1 ./internal/controller ./internal/analysis ./internal/event` | Passed all affected packages; no race report; `.cache/hardening-affected-race.log` |
+| `go test -count=1 ./internal/controller ./internal/analysis ./internal/event -run 'TestDurableMonotonicLifetime\|TestStackContinuationParity\|TestTimestampedContinuationSafety\|TestEngineDurableTTL\|TestDurableLifetime'` | Passed; analysis had no matching tests in this focused command (its full suite passed separately); `.cache/hardening-after.log` |
+| `python3 -m unittest tests.test_analyzer.ParsingTests -v` | Nine tests passed, including the Python parity fixture |
+| `tools/check.sh` | **Failed** at `go test ./...`: sandbox denied local socket binding in CLI, inspection, Kubernetes and provider tests. CLI notification test also timed out waiting for delivery from its listener-based controller. Formatting/tidy/dependency-diff checks passed. Later script stages did not execute; separate results below do not convert this gate to a pass. `.cache/hardening-check.log` |
+| `tools/release.sh` | Passed both executable names, classification/private-report/signals, SQLite migration/reopen/state-volume smoke and source/archive byte/privacy checks; `.cache/hardening-release.log` |
+| `go vet ./...` | Passed; `.cache/hardening-vet.log` |
+| `tools/check-cross.sh` | Passed Linux amd64, 386 and arm cross-builds; not executed on Linux; `.cache/hardening-cross.log` |
+| `for file in tests/*_ui.cjs; do node "$file" \|\| exit; done` | Six UI suites passed |
+| `for file in internal/dashboard/web/*.js jevernetes/web/*.js; do node --check "$file" \|\| exit; done` | Passed |
+| `python3 -m unittest discover -s tests -q` | **Failed**: 119 tests ran; one class-setup error in dashboard HTTP tests due to socket-bind permission denial; `.cache/hardening-python.log` |
+| `python3 tools/check_release.py`; `python3 tools/check_parity.py`; `node tools/check-release.mjs` | Passed source/privacy checks and 14-workflow/17-suite inventory; inventory execution with `--run` was not performed |
+| `cargo fmt --check`; `cargo clippy --locked --offline --all-targets --all-features -- -D warnings` | Passed |
+| `cargo test --locked --offline --all-features` | **Failed**: library tests 24 passed, 14 failed at local listener setup with permission denial; CLI test phase was not reached |
+| `cargo build --locked --offline` | Passed; `.cache/hardening-rust-build.log` |
+| `python3 tests/rust/tui_pty.py target/debug/jevernetes` | Search, Ctrl-C and SIGTERM passed, with terminal restoration and private reports; `.cache/hardening-tui.log` |
+| `git diff --check`; `git diff --cached --check` | Passed |
+
+The broader targeted Go commands that also included `./internal/provider` failed at its HTTP listener fixtures, including under race; the three affected packages passed in both runs. Nonfatal macOS linker warnings and denied writes to the shared Go module stat cache appeared during some builds; build commands listed as passed exited zero. Logs/build artifacts remain ignored under `.cache/`, `dist/` and `target/`. No test or gate was weakened to bypass sandbox restrictions.
+
+## Remaining limits
+
+Full Go, Python and Rust gates require rerunning where local loopback binding is permitted; this session cannot claim those gates passed. No hosted CI, live integrations, production soak or container/PVC runtime was exercised. Existing foreign-owner capability skips remain. Monotonic lifetime is intentionally process-local: a rollback across restart that remains between durable creation and expiry cannot be distinguished from elapsed wall time. Runtime retirement remains disabled. Earlier entries below are historical and do not describe this pass.
+
+---
+
 # Blind-review P2 implementation — 2026-10-11
 
 Started on clean `fix/go-full-parity-20261011` at exactly `c89497263cdca871fa705f53e5b7ef35d0b78115`. Changes and commits are confined to this worktree. All provider, teacher, cluster, stream and notification fixtures are synthetic/local. No live providers/clusters, production access, push, deployment or GitHub mutation occurred. Rust/Python coexistence is retained and retirement remains disabled.

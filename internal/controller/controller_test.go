@@ -146,12 +146,12 @@ func TestPersistedVerdictTTLAndRollbackClock(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, at := range []int64{999, 1060} {
-		got, err := s.Lookup(ctx, key, at, time.Minute)
+		got, err := s.Lookup(ctx, key, time.Unix(at, 0), time.Minute)
 		if err != nil || got != nil {
 			t.Fatal(got, err)
 		}
 	}
-	got, err := s.Lookup(ctx, key, 1001, time.Minute)
+	got, err := s.Lookup(ctx, key, time.Unix(1001, 0), time.Minute)
 	if err != nil || got == nil {
 		t.Fatal(err)
 	}

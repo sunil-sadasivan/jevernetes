@@ -289,7 +289,7 @@ func (s *Store) deleteVerdict(ctx context.Context, key string) error {
 	return nil
 }
 
-func (s *Store) Lookup(ctx context.Context, key string, now int64, ttl time.Duration) (*event.Judgment, error) {
+func (s *Store) Lookup(ctx context.Context, key string, now time.Time, ttl time.Duration) (*event.Judgment, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var raw string
@@ -301,7 +301,7 @@ func (s *Store) Lookup(ctx context.Context, key string, now int64, ttl time.Dura
 	if err != nil {
 		return nil, ErrState
 	}
-	if len(raw) > 4096 || now < created || now >= expires || now-created >= int64(ttl.Seconds()) {
+	if len(raw) > 4096 || ttl <= 0 || ttl > 7*24*time.Hour || now.Unix() < created || now.Unix() >= expires || now.Unix()-created >= int64(ttl.Seconds()) {
 		return nil, nil
 	}
 	var j event.Judgment
@@ -310,5 +310,9 @@ func (s *Store) Lookup(ctx context.Context, key string, now int64, ttl time.Dura
 	}
 	j.CacheCreatedAt = time.Unix(created, 0)
 	j.CacheExpiresAt = time.Unix(min(expires, created+int64(ttl.Seconds())), 0)
+	// Preserve the caller's monotonic reading, including time spent waiting for
+	// SQLite. Subtract wall-only values without rounding away fractional seconds.
+	j.CacheObservedAt = now.Round(0)
+	j.CacheDeadline = now.Add(j.CacheExpiresAt.Sub(now.Round(0)))
 	return &j, nil
 }

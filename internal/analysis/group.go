@@ -120,6 +120,7 @@ type partition struct {
 	verdict        event.Judgment
 	expires        time.Time
 	observed       time.Time
+	refresh        bool
 	representative string
 	last           uint64
 	auditAt        uint64
@@ -201,13 +202,19 @@ func (g *Grouper) Observe(e event.Event, now time.Time) (Ticket, *event.Judgment
 		p.verdict = event.Unknown("")
 		return p.ticket, nil, "review_required"
 	}
-	rollback := !p.observed.IsZero() && now.Before(p.observed)
-	p.observed = now
+	rollback := !p.observed.IsZero() && now.Round(0).Before(p.observed)
+	p.observed = now.Round(0)
 	if rollback {
+		p.refresh = true
 		p.verdict = event.Unknown("")
 		return p.ticket, nil, "clock_rollback"
 	}
-	if p.verdict.Reusable() && now.Before(p.expires) {
+	if p.refresh || (p.verdict.Reusable() && (!now.Before(p.expires) || !p.verdict.CacheValidAt(now))) {
+		p.verdict = event.Unknown("")
+		p.refresh = true
+		return p.ticket, nil, "cache_expired"
+	}
+	if p.verdict.Reusable() {
 		if !g.adaptive || p.seen < p.auditAt {
 			j := p.verdict
 			return p.ticket, &j, "cached"
@@ -227,15 +234,17 @@ func (g *Grouper) Publish(t Ticket, j event.Judgment, representative string, now
 		p.interval = 16
 		return false
 	}
-	expires := now.Add(g.ttl)
-	if !j.CacheExpiresAt.IsZero() {
-		expires = minTime(expires, j.CacheExpiresAt)
-		if now.Before(j.CacheCreatedAt) || !now.Before(expires) {
-			return false
-		}
+	if (!p.observed.IsZero() && now.Round(0).Before(p.observed)) || !j.CacheValidAt(now) {
+		p.refresh = true
+		return false
 	}
+	expires := now.Add(g.ttl)
+	if !j.CacheDeadline.IsZero() {
+		expires = minTime(expires, j.CacheDeadline)
+	}
+	p.refresh = false
 	p.verdict = j
-	p.observed = now
+	p.observed = now.Round(0)
 	p.representative = representative
 	p.expires = expires
 	if j.Importance == "routine" {

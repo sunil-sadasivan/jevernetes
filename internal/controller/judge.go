@@ -28,7 +28,7 @@ func (c CachedJudge) Judge(ctx context.Context, groups []provider.Dossier) ([]ev
 	if clock == nil {
 		clock = time.Now
 	}
-	now := clock().Unix()
+	now := clock()
 	for i, g := range groups {
 		key := ""
 		if g.TemplateID != "" {
@@ -79,11 +79,17 @@ func (c CachedJudge) Judge(ctx context.Context, groups []provider.Dossier) ([]ev
 	}
 	for n, j := range js {
 		if keys[n] != "" && provider.Validate(j) == nil && j.Reusable() {
-			if err := c.Store.PutVerdict(ctx, keys[n], j, now, c.TTL); err != nil {
-				return nil, err
+			j.CacheCreatedAt = time.Unix(now.Unix(), 0)
+			j.CacheExpiresAt = time.Unix(now.Unix()+int64(c.TTL.Seconds()), 0)
+			j.CacheObservedAt = now.Round(0)
+			j.CacheDeadline = now.Add(j.CacheExpiresAt.Sub(now.Round(0)))
+			// Provider latency consumes the original window. Never persist a result
+			// whose wall or monotonic lifetime has already failed closed.
+			if j.CacheValidAt(clock()) {
+				if err := c.Store.PutVerdict(ctx, keys[n], j, now.Unix(), c.TTL); err != nil {
+					return nil, err
+				}
 			}
-			j.CacheCreatedAt = time.Unix(now, 0)
-			j.CacheExpiresAt = time.Unix(now+int64(c.TTL.Seconds()), 0)
 		}
 		out[indices[n]] = j
 	}

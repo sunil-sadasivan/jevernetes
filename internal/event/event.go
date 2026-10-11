@@ -28,6 +28,8 @@ type Judgment struct {
 	// A zero expiry denotes a fresh judgment without a durable lifetime.
 	CacheCreatedAt       time.Time `json:"-"`
 	CacheExpiresAt       time.Time `json:"-"`
+	CacheObservedAt      time.Time `json:"-"`
+	CacheDeadline        time.Time `json:"-"`
 	Importance           string    `json:"importance"`
 	Severity             string    `json:"severity"`
 	Category             string    `json:"category"`
@@ -35,6 +37,16 @@ type Judgment struct {
 	SeverityConfidence   *float64  `json:"severity_confidence,omitempty"`
 	CategoryConfidence   *float64  `json:"category_confidence,omitempty"`
 	AnalysisError        string    `json:"analysis_error,omitempty"`
+}
+
+// CacheValidAt checks wall bounds independently of the elapsed-time deadline.
+// Comparing two monotonic times directly would hide a backwards wall step.
+func (j Judgment) CacheValidAt(now time.Time) bool {
+	wall := now.Round(0)
+	return (j.CacheCreatedAt.IsZero() || !wall.Before(j.CacheCreatedAt.Round(0))) &&
+		(j.CacheObservedAt.IsZero() || !wall.Before(j.CacheObservedAt.Round(0))) &&
+		(j.CacheExpiresAt.IsZero() || wall.Before(j.CacheExpiresAt.Round(0))) &&
+		(j.CacheDeadline.IsZero() || now.Before(j.CacheDeadline))
 }
 
 func Unknown(reason string) Judgment {
@@ -104,6 +116,10 @@ func Clip(s string, n int) string {
 var ansi = regexp.MustCompile("\x1b(?:\\[[0-?]*[ -/]*[@-~]|\\][^\x07\x1b]*(?:\x07|\x1b\\\\))")
 var stamp = regexp.MustCompile(`^\d{4}-\d\d-\d\d[T ][\d:.]+(?:Z|[+-]\d\d:\d\d)?[ \t]`)
 var continuation = regexp.MustCompile(`^(?:\s+\S|Caused by:|Suppressed:|Traceback |[\w.]+(?:Error|Exception):|\s*\.\.\. \d+ more)`)
+
+// Timestamped normal lines may be indented for formatting. Require an
+// explicit stack marker in that case; unstamped lines retain legacy framing.
+var stackContinuation = regexp.MustCompile(`^\s*(?:at\s+\S|File ["']|Caused by:|Suppressed:|Traceback |[\w.]+(?:Error|Exception):|\.\.\. \d+ more)`)
 var field = regexp.MustCompile(`(?i)password|passwd|secret|token|authorization|cookie|api[-_]?key|access[-_]?key|private[-_]?key|credential`)
 var secret = regexp.MustCompile(`(?i)(["']?(?:password|passwd|secret|(?:access_|refresh_)?token|api[-_]?key|access[-_]?key(?:[-_]?id)?|private[-_]?key|authorization|cookie|credentials?)["']?\s*[:=]\s*)("(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'|[^\s,;]+)`)
 var auth = regexp.MustCompile(`(?i)\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+`)
@@ -303,7 +319,11 @@ func (p *Parser) finishLine(partial bool) *Event {
 		safe = "[REDACTED PRIVATE KEY]"
 		changed = true
 	}
-	if (ts == nil || transportStamp) && continuation.MatchString(text) && p.pending != nil {
+	isContinuation := continuation.MatchString(text)
+	if ts != nil {
+		isContinuation = stackContinuation.MatchString(text)
+	}
+	if isContinuation && p.pending != nil {
 		e := p.pending
 		e.LineEnd = p.line
 		e.LineCount++
@@ -313,7 +333,7 @@ func (p *Parser) finishLine(partial bool) *Event {
 		e.Text = Clip(e.Text+"\n"+safe, MaxEvent)
 		return nil
 	}
-	orphan := continuation.MatchString(text) && p.pending == nil
+	orphan := isContinuation && p.pending == nil
 	prev := p.Flush()
 	p.pending = &Event{Source: p.source, Timestamp: ts, Text: Clip(safe, MaxEvent), LineStart: p.line, LineEnd: p.line, LineCount: 1, Truncated: trunc || len(safe) > MaxEvent, Sensitive: changed || p.sourceSensitive, ParseUncertain: partial || invalid || ambiguous || orphan || (p.transport && !transportStamp), Judgment: Unknown("")}
 	return prev

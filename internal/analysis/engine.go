@@ -117,7 +117,7 @@ func (e *Engine) Batch(ctx context.Context, events []event.Event) []event.Event 
 		}
 		d := provider.Dossier{TemplateID: ticket.TemplateID, VersionID: ticket.VersionID, ScopeID: event.Hash(Scope(ev, true)), Source: event.Hash(ev.Source), SourceMetadata: event.SafeSource(ev.Source), EvidenceID: ev.ID, Reason: reason, Samples: []string{}}
 		switch reason {
-		case "stable_audit", "clock_rollback":
+		case "stable_audit", "clock_rollback", "cache_expired":
 			d.CacheMode = provider.CacheRefresh
 		case "review_required":
 			d.CacheMode = provider.CacheBypass
@@ -175,7 +175,8 @@ func (e *Engine) Batch(ctx context.Context, events []event.Event) []event.Event 
 			// Fresh judgments start their non-sliding lifetime at dispatch;
 			// durable hits already carry the original (possibly shorter) window.
 			if j.CacheExpiresAt.IsZero() {
-				j.CacheCreatedAt, j.CacheExpiresAt = now, now.Add(e.config.TTL)
+				j.CacheCreatedAt, j.CacheExpiresAt = now.Round(0), now.Round(0).Add(e.config.TTL)
+				j.CacheObservedAt, j.CacheDeadline = now.Round(0), now.Add(e.config.TTL)
 			}
 			reusable = e.groups.Publish(g.ticket, j, out[g.indices[0]].ID, e.config.Now())
 		} else if g.eligible {
