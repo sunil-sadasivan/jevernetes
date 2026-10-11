@@ -28,22 +28,23 @@ var endpoints = map[string]string{"typesafe": "https://api.typesafe.ai/v1/system
 var modelID = regexp.MustCompile(`^[A-Za-z0-9._:/-]{1,128}$`)
 
 type Dossier struct {
-	TemplateID          string   `json:"template_id"`
-	VersionID           string   `json:"version_id"`
-	ScopeID             string   `json:"scope_id"`
-	Source              string   `json:"source"`
-	WindowOccurrences   int      `json:"window_occurrences"`
-	LifetimeOccurrences *uint64  `json:"lifetime_occurrences"`
-	Samples             []string `json:"samples"`
-	BaselineImportant   bool     `json:"baseline_important"`
-	LocalRisk           bool     `json:"local_risk"`
-	SecuritySignal      bool     `json:"security_signal"`
-	Truncated           bool     `json:"truncated"`
-	Sensitive           bool     `json:"sensitive"`
-	EvidenceLimited     bool     `json:"evidence_limited"`
-	SamplesLimited      bool     `json:"samples_limited"`
-	Reason              string   `json:"assessment_reason"`
-	EvidenceID          string   `json:"evidence_id"`
+	TemplateID          string       `json:"template_id"`
+	VersionID           string       `json:"version_id"`
+	ScopeID             string       `json:"scope_id"`
+	Source              string       `json:"source"`
+	SourceMetadata      event.Source `json:"source_metadata,omitempty"`
+	WindowOccurrences   int          `json:"window_occurrences"`
+	LifetimeOccurrences *uint64      `json:"lifetime_occurrences"`
+	Samples             []string     `json:"samples"`
+	BaselineImportant   bool         `json:"baseline_important"`
+	LocalRisk           bool         `json:"local_risk"`
+	SecuritySignal      bool         `json:"security_signal"`
+	Truncated           bool         `json:"truncated"`
+	Sensitive           bool         `json:"sensitive"`
+	EvidenceLimited     bool         `json:"evidence_limited"`
+	SamplesLimited      bool         `json:"samples_limited"`
+	Reason              string       `json:"assessment_reason"`
+	EvidenceID          string       `json:"evidence_id"`
 }
 
 func (d *Dossier) Observe(e event.Event) {
@@ -179,9 +180,9 @@ func Request(kind, model string, groups []Dossier) any {
 		for _, name := range []string{"importance", "severity", "category"} {
 			criteria := map[string]string{}
 			for _, s := range props[name].(map[string]any)["enum"].([]string) {
-				criteria[s] = s
+				criteria[s] = choiceCriteria[name][s]
 			}
-			questions[fmt.Sprintf("g%d_%s", i, name)] = map[string]any{"type": "choice", "criteria": criteria, "instructions": Instructions}
+			questions[fmt.Sprintf("g%d_%s", i, name)] = map[string]any{"type": "choice", "criteria": criteria, "instructions": fmt.Sprintf("Classify only groups[%d], evidence_id=%s, for %s. Other groups are not evidence of its recovery. Consider consequences rather than log level: successful retries and health checks are routine; zero-byte backups, empty payment responses, dangerous privilege grants, worsening lag and expiring certificates can be important at INFO. Choose uncertain when context is insufficient. %s", i, groups[i].EvidenceID, name, Instructions)}
 		}
 	}
 	return map[string]any{"model": model, "state": state, "questions": questions}

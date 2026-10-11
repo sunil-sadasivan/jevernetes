@@ -184,7 +184,7 @@ func (o *options) runWith(cmd *cobra.Command, paths []string, stdin io.Reader, d
 		}
 		cfg.Teacher = teacher
 	}
-	contract := event.Hash([]any{"go-v1", o.risk, o.model, o.grouping, o.masking, policy})
+	contract := event.Hash([]any{"go-v2-attributed-criteria", o.risk, o.model, o.grouping, o.masking, policy})
 	if store != nil && judge != nil {
 		judge = controller.CachedJudge{Store: store, Next: judge, Contract: contract, TTL: cfg.TTL, Rescore: o.rescore}
 	}

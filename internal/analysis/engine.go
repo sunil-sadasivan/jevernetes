@@ -110,7 +110,7 @@ func (e *Engine) Batch(ctx context.Context, events []event.Event) []event.Event 
 			g.d.Observe(ev)
 			continue
 		}
-		d := provider.Dossier{TemplateID: ticket.TemplateID, VersionID: ticket.VersionID, ScopeID: event.Hash(Scope(ev, true)), Source: event.Hash(ev.Source), EvidenceID: ev.ID, Reason: reason, Samples: []string{}}
+		d := provider.Dossier{TemplateID: ticket.TemplateID, VersionID: ticket.VersionID, ScopeID: event.Hash(Scope(ev, true)), Source: event.Hash(ev.Source), SourceMetadata: event.SafeSource(ev.Source), EvidenceID: ev.ID, Reason: reason, Samples: []string{}}
 		d.Observe(ev)
 		if eligible {
 			byTicket[ticket] = len(groups)
