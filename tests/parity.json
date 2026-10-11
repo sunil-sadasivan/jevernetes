@@ -1,0 +1,171 @@
+{
+  "base": "3a08dcb1c3611c0014b000074006701ad767bfa2",
+  "retirement_allowed": false,
+  "workflows": [
+    {
+      "workflow": "ingestion",
+      "status": "equivalent",
+      "assets": [
+        "internal/event",
+        "internal/cli",
+        "src/events.rs"
+      ],
+      "commands": [
+        "go test ./internal/event ./internal/cli",
+        "cargo test --locked --offline --all-features",
+        "python3 -m unittest discover -s tests -q"
+      ]
+    },
+    {
+      "workflow": "tui-search",
+      "status": "coexistence",
+      "assets": [
+        "src/tui.rs",
+        "src/search.rs",
+        "jevernetes/tui.py",
+        "jevernetes/search.py"
+      ],
+      "commands": [
+        "cargo test --locked --offline --all-features",
+        "python3 -m unittest discover -s tests -q"
+      ]
+    },
+    {
+      "workflow": "context-reviews-acknowledgements",
+      "status": "coexistence",
+      "assets": [
+        "jevernetes/context.py",
+        "jevernetes/reviews.py",
+        "tests/test_context_reviews.py"
+      ],
+      "commands": [
+        "python3 -m unittest discover -s tests -q",
+        "node tests/test_context_ui.cjs",
+        "node tests/test_review_ui.cjs"
+      ]
+    },
+    {
+      "workflow": "live-dashboard-investigation-api",
+      "status": "coexistence",
+      "assets": [
+        "jevernetes/dashboard.py",
+        "jevernetes/live.py",
+        "tests/test_dashboard.py",
+        "tests/test_live.py"
+      ],
+      "commands": [
+        "python3 -m unittest discover -s tests -q",
+        "node tests/test_search_ui.cjs",
+        "node tests/test_grouping_ui.cjs"
+      ]
+    },
+    {
+      "workflow": "prompt-export",
+      "status": "exact",
+      "assets": [
+        "jevernetes/web/prompt.js",
+        "tests/test_prompt_ui.cjs"
+      ],
+      "commands": [
+        "node tests/test_prompt_ui.cjs"
+      ]
+    },
+    {
+      "workflow": "reports-private-writes",
+      "status": "equivalent",
+      "assets": [
+        "internal/report",
+        "jevernetes/report.py"
+      ],
+      "commands": [
+        "go test ./internal/report",
+        "python3 -m unittest discover -s tests -q"
+      ]
+    },
+    {
+      "workflow": "go-dashboard",
+      "status": "equivalent",
+      "assets": [
+        "internal/dashboard",
+        "tests/test_dashboard_ui.cjs"
+      ],
+      "commands": [
+        "go test ./internal/dashboard",
+        "node tests/test_dashboard_ui.cjs"
+      ]
+    },
+    {
+      "workflow": "provider-contracts",
+      "status": "equivalent",
+      "assets": [
+        "internal/provider",
+        "src/jev.rs",
+        "jevernetes/jev.py"
+      ],
+      "commands": [
+        "go test ./internal/provider",
+        "cargo test --locked --offline --all-features",
+        "python3 -m unittest discover -s tests -q"
+      ]
+    },
+    {
+      "workflow": "kubernetes-snapshot-follow-reconnect",
+      "status": "equivalent",
+      "assets": [
+        "internal/kube",
+        "src/kubernetes.rs"
+      ],
+      "commands": [
+        "go test ./internal/kube",
+        "cargo test --locked --offline --all-features"
+      ]
+    },
+    {
+      "workflow": "controller-state-outbox-inspection",
+      "status": "equivalent",
+      "assets": [
+        "internal/controller",
+        "internal/inspect"
+      ],
+      "commands": [
+        "go test ./internal/controller ./internal/inspect"
+      ]
+    },
+    {
+      "workflow": "env-aliases-flags",
+      "status": "coexistence",
+      "assets": [
+        "internal/cli",
+        "src/main.rs",
+        "jevernetes/cli.py"
+      ],
+      "commands": [
+        "go test ./internal/cli",
+        "cargo test --locked --offline --all-features",
+        "python3 -m unittest discover -s tests -q"
+      ]
+    },
+    {
+      "workflow": "packaging-rbac-upgrade",
+      "status": "equivalent",
+      "assets": [
+        "Dockerfile",
+        "deploy/base/resources.json",
+        "pyproject.toml",
+        "Cargo.toml"
+      ],
+      "commands": [
+        "node tools/check-release.mjs",
+        "python3 tools/check_release.py"
+      ]
+    },
+    {
+      "workflow": "live-provider-cluster-container",
+      "status": "unverified",
+      "assets": [
+        "docs/migration.md"
+      ],
+      "commands": []
+    }
+  ]
+}

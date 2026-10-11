@@ -2,15 +2,15 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import {spawn,spawnSync} from 'node:child_process';
-const binary='./dist/bin/jevernetes';
-assert.ok(fs.readFileSync(binary).equals(fs.readFileSync('./dist/bin/jev')));
+const binary='./dist/bin/jevernetes-go';
+assert.ok(fs.readFileSync(binary).equals(fs.readFileSync('./dist/bin/jev-go')));
 // This pair tests warning-based offline triage, not semantic security accuracy.
 // An unflagged benign event remains uncertain; local rules do not certify safety.
 const risky='WARN synthetic configuration changed: authentication disabled on public admin endpoint';
 const benign='INFO synthetic configuration reload completed with no changes';
 const temporary=fs.mkdtempSync('./dist/offline-smoke-');
 try {
-  for(const executable of [binary,'./dist/bin/jev']) {
+  for(const executable of [binary,'./dist/bin/jev-go']) {
     for(const lines of [[risky,benign],[benign,risky]]) {
       const output=`${temporary}/report.json`;
       fs.writeFileSync(output,'stale report\n');

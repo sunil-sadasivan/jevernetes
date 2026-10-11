@@ -1,25 +1,11 @@
 # Jevernetes
 
-Jevernetes is a Go CLI and read-only Kubernetes log controller. It frames and redacts bounded log events, groups equivalent evidence, obtains typed operational-risk judgments, and retains advisory incidents in SQLite. A local dashboard inspects reports and continuously monitors one configured controller.
+Read-only log triage and investigation. This branch stages the Go controller alongside the working Rust terminal and Python investigation companion. No existing runtime or user data is retired.
 
-```sh
-go build -o bin/jevernetes ./cmd/jevernetes
-printf 'ERROR synthetic failure\nINFO ready\n' | bin/jevernetes files - --offline --json
-bin/jevernetes dashboard --report report.json
-```
+- **Rust (existing CLI/TUI):** `cargo build --locked --release`; run `target/release/jevernetes files app.log --offline --tui`. Exact and semantic search remain in the native terminal. See [usage](docs/usage-rust.md).
+- **Python (investigation):** `python3 -m pip install .`; run `jevernetes-legacy --help` or `python3 -m jevernetes --help`. Dashboard live collection, report browsing, context, search, review/acknowledgements, expected rules and prompt export remain supported. See [legacy usage](docs/legacy-usage.md) and [dashboard](docs/legacy-dashboard.md).
+- **Go (new CLI/controller):** `go build -o bin/jevernetes-go ./cmd/jevernetes`; run `bin/jevernetes-go --help`. `tools/release.sh` produces `jevernetes-go` / `jev-go`, leaving existing commands untouched. See [Go usage](docs/usage.md), [controller](docs/controller.md) and [deployment](deploy/README.md).
 
-Go 1.25+ is required to build. The product is one native executable; `cmd/jev` provides the same entry point for installations that need that name. No interpreter, paid dependency, or external service is required for offline analysis. Linux and macOS are supported.
+Keep existing schema-1 reports and `.review-rules.json` with the companion. Go reviewed-template artifacts are a separate contract, not a replacement for human reviews. The Go container runs only the Go controller; it does not replace an investigation installation.
 
-- Files, stdin, concatenated gzip, Kubernetes snapshots and live collection.
-- Exact or conservative Drain-style grouping; bounded group evidence and a 350ms microbatch deadline.
-- TypeSafe, OpenAI and Anthropic adapters with strict response validation, fixed hosts and cumulative request/cost reservations.
-- Adaptive audits, reviewed JSON rules, shadow template proposals and escalation-only template reviews.
-- Durable policy, idempotent outbox, webhook/stdout notifications, health/readiness and Prometheus metrics.
-- Loopback inspection and remote status/watch/incident through client-go port-forwarding.
-- Embedded read-only dashboard with fixed controller targets, stale-state reporting and text-safe evidence rendering.
-
-This release has explicit compatibility limits. It does **not** claim complete behavioral parity with every previous command. See [migration](docs/migration.md) for unsupported commands, stricter grouping, schema changes and learning restrictions. [VALIDATION.md](VALIDATION.md) records the exact checks and environment limitations.
-
-Read [usage](docs/usage.md), [controller operations](docs/controller.md), [remote inspection](docs/remote-controller.md), [architecture](docs/architecture.md) and [security](SECURITY.md). The checked-in deployment is a template, not an instruction to deploy. No cluster or provider is contacted by tests.
-
-Licensed under the [MIT License](LICENSE), copyright 2026 Sunil Sadasivan.
+See [migration and rollback](docs/migration.md), the [executable parity inventory](tests/parity.json), and [validation](VALIDATION.md) for tested boundaries. All external provider and cluster operations require explicit operator configuration; acceptance tests use synthetic inputs and local fakes.

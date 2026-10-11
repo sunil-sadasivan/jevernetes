@@ -26,3 +26,10 @@ kubeconfig.*
 *.sqlite.lock
 /.cache/
 /bin/
+
+# Coexisting runtimes
+/target/
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/

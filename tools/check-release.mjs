@@ -3,7 +3,6 @@ import fs from 'node:fs';
 import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
 import path from 'node:path';
-const forbidden = new RegExp(['ru'+'st', 'car'+'go', '\\.r'+'s\\b'].join('|'), 'i');
 const secrets = /(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{30,}|AKIA[0-9A-Z]{16}|sk-[A-Za-z0-9_-]{40,})/;
 const personal = /\/(?:Users|home)\/[A-Za-z0-9_.-]+\//;
 const privateParts = new Set(['.cache','.runs','reports','.git','.kube','dist','bin','build']);
@@ -31,9 +30,7 @@ for (const name of files) {
   const content = readRegular(name, binary.test(name) ? undefined : 'utf8');
   if (binary.test(name)) continue;
   textCount++;
-  if (forbidden.test(name) || forbidden.test(content)) throw new Error(`Retired-language reference in ${name}`);
   if (secrets.test(content) || personal.test(content)) throw new Error(`Potential credential/personal path in ${name}; values suppressed`);
-  if (/\.py$/.test(name)) throw new Error(`Unexpected interpreter dependency: ${name}`);
 }
 const listAt = process.argv.indexOf('--write-list');
 if (listAt>=0) fs.writeFileSync(process.argv[listAt+1],files.join('\n')+'\n');
@@ -92,4 +89,4 @@ for (const resource of resources.items) {
 const docker=readRegular('Dockerfile','utf8');
 if (!docker.includes('CGO_ENABLED=0 go build')||!docker.includes('USER 65532:65532')||!docker.includes('ARG GO_IMAGE')) throw new Error('Container build contract');
 assert.match(docker,/ENTRYPOINT \["\/usr\/local\/bin\/jevernetes"\]/);
-console.log(`Checked ${files.length} source files (${textCount} text): retired-language references=0; credential/personal-path signatures=0; private/build paths=0; controller/container checks passed.`);
+console.log(`Checked ${files.length} source files (${textCount} text): coexisting runtimes included; credential/personal-path signatures=0; private/build paths=0; controller/container checks passed.`);
