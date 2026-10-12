@@ -22,7 +22,7 @@ import (
 
 // One instance per Open, like client-go's stateful SPDY upgrader. The raw
 // connection is cancellable before proxy/TLS negotiation or ReadResponse starts.
-// The tunnel owns raw socket shutdown; client-go owns SPDY stream cleanup.
+// The tunnel owns raw socket shutdown and the internal adapter joins streams.
 type cancellableSPDY struct {
 	base   *streamspdy.SpdyRoundTripper
 	mu     sync.Mutex // protects socket publication against tunnel shutdown
@@ -252,9 +252,9 @@ func (s *cancellableSPDY) NewConnection(response *http.Response) (httpstream.Con
 		response.Body = &rejectedUpgradeBody{body: response.Body, socket: s.socket, remaining: maxUpgradeErrorBytes}
 		conn, err = s.base.NewConnection(response)
 	} else {
-		// Same constructor and ping period as the pinned roundtripper, with
-		// the buffered bytes that follow the HTTP header terminator preserved.
-		conn, err = streamspdy.NewClientConnectionWithPings(s.conn, 5*time.Second)
+		// Keep the pinned wire engine and ping period with an owned lifecycle;
+		// preserve bytes buffered after the HTTP header terminator.
+		conn, err = newOwnedStreams(s.conn)
 	}
 	if s.socket != nil {
 		if err != nil {
@@ -334,8 +334,8 @@ func (c *upgradeSocket) closeRaw() error {
 }
 func (c *upgradeSocket) Close() error { err := c.closeRaw(); c.detach(); return err }
 
-// Called before signaling tunnel stop and again after ForwardPorts joins,
-// including failures where client-go never calls NewConnection. Socket
+// Called before signaling tunnel stop and on failed handshakes, including
+// failures where client-go never calls NewConnection. Socket
 // registration and shutdown can race while a custom dialer is returning.
 func (s *cancellableSPDY) close() {
 	s.mu.Lock()

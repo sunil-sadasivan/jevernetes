@@ -3,17 +3,19 @@ package kube
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/httpstream"
 	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/portforward"
 	"k8s.io/client-go/transport"
 	"k8s.io/client-go/transport/spdy"
 )
@@ -30,20 +32,27 @@ type Forwarder interface {
 type SPDYForwarder struct{ Config *rest.Config }
 type tunnel struct {
 	url         string
-	stop        chan struct{}
-	done        chan struct{}
+	stop, done  chan struct{}
 	once        sync.Once
 	closeSocket func()
+	listener    net.Listener
+	conn        httpstream.Connection
+	mu          sync.Mutex
+	locals      map[net.Conn]struct{}
+	workers     sync.WaitGroup
 }
 
 func (t *tunnel) BaseURL() string { return t.url }
 func (t *tunnel) shutdown() {
 	t.once.Do(func() {
-		// client-go v0.35.3 resets streams and moby/spdystream v0.5.0
-		// writes GOAWAY synchronously before closing the connection. Interrupt
-		// raw I/O first so a non-reading peer cannot block that cleanup.
 		t.closeSocket()
 		close(t.stop)
+		_ = t.listener.Close()
+		t.mu.Lock()
+		for local := range t.locals {
+			_ = local.Close()
+		}
+		t.mu.Unlock()
 	})
 }
 func (t *tunnel) Close() error { t.shutdown(); <-t.done; return nil }
@@ -63,46 +72,131 @@ func (f SPDYForwarder) Open(ctx context.Context, namespace, pod string, port int
 	u.RawQuery = ""
 	u.Fragment = ""
 	client := &http.Client{Transport: rt, Timeout: 20 * time.Second, CheckRedirect: rejectRedirect}
-	dialer := spdy.NewDialer(upgrader, client, "POST", u)
-	stop := make(chan struct{})
-	ready := make(chan struct{})
-	pf, err := portforward.NewOnAddresses(dialer, []string{"127.0.0.1"}, []string{fmt.Sprintf("0:%d", port)}, stop, ready, io.Discard, io.Discard)
+	conn, protocol, err := spdy.NewDialer(upgrader, client, "POST", u).Dial("portforward.k8s.io")
 	if err != nil {
+		upgrader.close()
+		return nil, errors.New("port-forward failed")
+	}
+	if protocol != "portforward.k8s.io" {
+		upgrader.close()
+		conn.Close()
 		return nil, errors.New("port-forward unavailable")
 	}
-	t := &tunnel{stop: stop, done: make(chan struct{}), closeSocket: upgrader.close}
-	result := make(chan error, 1)
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		upgrader.close()
+		conn.Close()
+		return nil, errors.New("port-forward unavailable")
+	}
+	t := &tunnel{url: "http://" + listener.Addr().String(), stop: make(chan struct{}), done: make(chan struct{}), closeSocket: upgrader.close, listener: listener, conn: conn, locals: make(map[net.Conn]struct{})}
+	go t.run(ctx, port)
+	if ctx.Err() != nil {
+		t.Close()
+		return nil, ctx.Err()
+	}
+	return t, nil
+}
+
+func (t *tunnel) run(ctx context.Context, port int) {
+	defer close(t.done)
+	accepted := make(chan struct{})
 	go func() {
-		defer close(t.done)
-		defer upgrader.close()
-		watched := make(chan struct{})
-		stopWatch := context.AfterFunc(ctx, func() {
-			t.shutdown()
-			close(watched)
-		})
-		defer func() {
-			if !stopWatch() {
-				<-watched
+		defer close(accepted)
+		for id := uint64(0); ; id++ {
+			local, err := t.listener.Accept()
+			if err != nil {
+				return
 			}
-		}()
-		result <- pf.ForwardPorts()
+			t.mu.Lock()
+			select {
+			case <-t.stop:
+				t.mu.Unlock()
+				local.Close()
+				return
+			default:
+			}
+			// Bound simultaneous local forwarding workers as well as response bytes.
+			if len(t.locals) >= 64 {
+				t.mu.Unlock()
+				local.Close()
+				continue
+			}
+			t.locals[local] = struct{}{}
+			t.workers.Add(1)
+			t.mu.Unlock()
+			go func() {
+				defer t.workers.Done()
+				defer func() { local.Close(); t.mu.Lock(); delete(t.locals, local); t.mu.Unlock() }()
+				t.handleConnection(local, port, id)
+			}()
+		}
 	}()
 	select {
 	case <-ctx.Done():
-		t.Close()
-		return nil, ctx.Err()
-	case <-result:
-		t.Close()
-		return nil, errors.New("port-forward failed")
-	case <-ready:
+	case <-t.stop:
+	case <-t.conn.CloseChan():
+	case <-accepted:
 	}
-	ports, err := pf.GetPorts()
-	if err != nil || len(ports) != 1 {
-		t.Close()
-		return nil, errors.New("port-forward unavailable")
+	t.shutdown()
+	<-accepted // No worker can be added after this join.
+	_ = t.conn.Close()
+	t.workers.Wait()
+}
+
+func (t *tunnel) handleConnection(local net.Conn, port int, id uint64) {
+	headers := http.Header{}
+	headers.Set(v1.StreamType, v1.StreamTypeError)
+	headers.Set(v1.PortHeader, strconv.Itoa(port))
+	headers.Set(v1.PortForwardRequestIDHeader, strconv.FormatUint(id, 10))
+	errorStream, err := t.conn.CreateStream(headers)
+	if err != nil {
+		return
 	}
-	t.url = fmt.Sprintf("http://127.0.0.1:%d", ports[0].Local)
-	return t, nil
+	defer t.conn.RemoveStreams(errorStream)
+	_ = errorStream.Close()
+	var readers sync.WaitGroup
+	readers.Add(1)
+	go func() {
+		defer readers.Done()
+		// Any nonempty error stream means failure. Inspect only one byte, never
+		// accumulate or print attacker-controlled error text, and do not require FIN.
+		var b [1]byte
+		n, err := errorStream.Read(b[:])
+		if n > 0 || (err != nil && err != io.EOF) {
+			t.shutdown()
+		}
+	}()
+	defer func() { _ = errorStream.Reset(); readers.Wait() }()
+	headers = headers.Clone()
+	headers.Set(v1.StreamType, v1.StreamTypeData)
+	data, err := t.conn.CreateStream(headers)
+	if err != nil {
+		return
+	}
+	defer t.conn.RemoveStreams(data)
+	remoteDone, localDone := make(chan struct{}), make(chan struct{})
+	go func() { defer close(remoteDone); _, _ = io.Copy(local, data) }()
+	localError := make(chan struct{})
+	go func() {
+		defer close(localDone)
+		_, err := io.Copy(data, local)
+		_ = data.Close()
+		if err != nil {
+			close(localError)
+		}
+	}()
+	select {
+	case <-remoteDone:
+	case <-localError:
+	case <-t.stop:
+	}
+	local.Close()
+	_ = data.Reset()
+	<-localDone
+	<-remoteDone
+	// Preserve a final error status that arrives after data EOF. Shutdown resets
+	// the stream and joins this reader even if the peer never sends FIN.
+	readers.Wait()
 }
 
 // Use the same bounded exec auth for upgrade requests. client-go's SPDY dialer

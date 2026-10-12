@@ -127,7 +127,7 @@ func HTTPClientFor(cfg *rest.Config) (*http.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &http.Client{Transport: rt, Timeout: cfg.Timeout, CheckRedirect: rejectRedirect}, nil
+	return &http.Client{Transport: responseTransport{rt}, Timeout: cfg.Timeout, CheckRedirect: rejectRedirect}, nil
 }
 
 // Reject before another RoundTrip: auth wrappers can reattach credentials even
