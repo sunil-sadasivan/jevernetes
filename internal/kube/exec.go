@@ -24,6 +24,7 @@ import (
 	"golang.org/x/term"
 	authv1 "k8s.io/client-go/pkg/apis/clientauthentication/v1"
 	upstream "k8s.io/client-go/plugin/pkg/client/auth/exec"
+	_ "k8s.io/client-go/plugin/pkg/client/auth/oidc" // Register standard cached-token/refresh support.
 	"k8s.io/client-go/rest"
 	api "k8s.io/client-go/tools/clientcmd/api"
 	"k8s.io/client-go/transport"

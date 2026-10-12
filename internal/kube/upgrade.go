@@ -30,20 +30,26 @@ func (s *cancellableSPDY) WrappedRoundTripper() http.RoundTripper { return s.bas
 
 type upgradeRequestKey struct{}
 
-func newCancellableSPDY(tc *transport.Config, tlsConfig *tls.Config, proxier func(*http.Request) (*url.URL, error)) (*cancellableSPDY, error) {
+func newCancellableSPDY(tc *transport.Config, tlsConfig *tls.Config, targetHost string, proxier func(*http.Request) (*url.URL, error)) (*cancellableSPDY, error) {
 	s := &cancellableSPDY{}
 	dial := (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext
 	if tc.DialHolder != nil {
 		dial = tc.DialHolder.Dial
 	}
-	// DialURL supplies target TLS, including SNI and HTTP/1.1 ALPN. A non-nil
+	// DialURL supplies target TLS and HTTP/1.1 ALPN. A non-nil
 	// config is essential: its nil fallback allows insecure TLS with custom dialers.
 	if tlsConfig == nil {
 		tlsConfig = &tls.Config{}
 	}
+	// DialURL only infers SNI when verification is enabled. Match Go TLS
+	// dialing for insecure targets too, without changing proxy TLS identity.
+	targetTLS := tlsConfig.Clone()
+	if targetTLS.ServerName == "" {
+		targetTLS.ServerName = targetHost
+	}
 	base, err := streamspdy.NewRoundTripperWithConfig(streamspdy.RoundTripperConfig{
 		PingPeriod: 5 * time.Second,
-		UpgradeTransport: &http.Transport{TLSClientConfig: tlsConfig, DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+		UpgradeTransport: &http.Transport{TLSClientConfig: targetTLS, DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
 			req := ctx.Value(upgradeRequestKey{}).(*http.Request)
 			p, err := proxier(req)
 			if err != nil {

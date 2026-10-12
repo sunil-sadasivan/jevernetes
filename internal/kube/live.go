@@ -30,7 +30,7 @@ func (c *Collector) Follow(ctx context.Context, emit func(event.Event) error, ga
 		present := map[string]bool{}
 		for _, p := range pods {
 			for _, s := range streams(p, false, true) {
-				source := s.source(c.Config)
+				source := c.source(s)
 				id := event.Hash(source)
 				present[id] = true
 				if _, ok := active[id]; ok {
@@ -64,7 +64,7 @@ func (c *Collector) Follow(ctx context.Context, emit func(event.Event) error, ga
 			if !present[id] {
 				stop()
 				// Keep the slot until the reader has actually joined.
-				gap(event.Source{"type": "kubernetes"}, "stream_removed")
+				gap(c.discoverySource(), "stream_removed")
 			}
 		}
 		return nil
@@ -89,13 +89,13 @@ func (c *Collector) Follow(ctx context.Context, emit func(event.Event) error, ga
 			delete(active, id)
 		case <-ticker.C:
 			if err := discover(); err != nil {
-				gap(event.Source{"type": "kubernetes"}, "discovery_unavailable")
+				gap(c.discoverySource(), "discovery_unavailable")
 			}
 		}
 	}
 }
 func (c *Collector) followStream(ctx context.Context, s stream, emit func(event.Event) error, gap func(event.Source, string)) error {
-	source := s.source(c.Config)
+	source := c.source(s)
 	parser := event.NewParser(source)
 	cursor := newCursor(func(reason string) { gap(source, reason) })
 	parser.AcceptLine = cursor.accept

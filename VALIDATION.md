@@ -1,3 +1,60 @@
+# Endpoint identity, target SNI and OIDC compatibility — 2026-10-11
+
+Started clean on `fix/go-full-parity-20261011` at exactly `aa75b6ce58f56e888ec8c936f8f11c9f7d8bdaf0`. Read `CONTRIBUTING.md`; no applicable `AGENTS.md` was found. These changes are implemented and the complete acceptance gates passed in independent host-level verification, superseding the earlier builder-sandbox listener failures. Staging and the intended local commit have not yet occurred; HEAD remains `aa75b6ce` and the worktree is dirty. No push, deployment, GitHub mutation, live provider/cluster contact or runtime retirement occurred. Historical entries below are not results for this change.
+
+## Regression-first evidence
+
+[Failure evidence](docs/validation/compatibility-before-aa75b6ce.txt) records the final baseline run before any production edits. At that point only the new regression test file was untracked. The full ignored log is `.cache/compat-before-final.log`.
+
+- Production `kube.New` collectors using different resolved endpoints emitted identical event sources and drain scopes, both with a shared named context and with empty default/in-cluster-style contexts. Synthetic snapshot regular/init/ephemeral/previous events and live events reproduce the collision. Reopening SQLite between batches caused the two clusters to share a single provider judgment (`calls=1`, expected 2). A separately seeded exact pre-fix durable key was still reachable.
+- Actual TLS ClientHello/handshake tests required target SNI, then read the upgrade HTTP request. Direct, HTTP CONNECT, HTTPS CONNECT (TLS inside TLS) and SOCKS5 all failed when verification was disabled and ServerName was unset. Verified TLS, explicit ServerName and IP-host cases served as controls. The final matrix has 16 cases, plus stalled-negotiation cancellation for all four routes.
+- A synthetic HTTPS kubeconfig with a populated OIDC auth provider failed initialization with `no Auth Provider found for name "oidc"`. The retained test loads a private kubeconfig through production `LoadContext`, forwards an unexpired synthetic cached JWT through ordinary HTTP and the SPDY transport, and asserts an issuer-transport tripwire observed zero refresh/discovery calls. It does not claim signature validation by a Kubernetes API server. Unsupported providers and mixed OIDC/exec configurations are also rejected.
+
+An initial listener fixture was denied TCP bind permission. The retained TLS fixtures use real cryptographic TLS over `net.Pipe`; CONNECT/SOCKS protocol negotiation and nested HTTPS-proxy TLS still execute. Initial test setup also needed a mode-0700 SQLite parent and an HTTPS kubeconfig so client-go retained authentication. Both were corrected before the recorded baseline failures and before production edits. No existing listener tests were weakened or edited.
+
+## Fixes and adjacent audit
+
+Every production Collector is constructed through `kube.New`. Its immutable `cluster_id` is a versioned hash derived with client-go's resolved API URL semantics: scheme, lowercased hostname, effective port and path prefix (ignoring trailing slashes). Userinfo, query and fragment never enter the hash or source metadata. Existing context, namespace, pod/UID, container ID/kind, previous flag and restart attribution remain intact. Snapshot/live events and discovery/stream gaps carry the identity. Drain scope retains it while permitting same-cluster replica reuse. Different hosts, schemes, ports and prefixes isolate reuse; equivalent endpoint spellings and repeated collection remain stable. The added scope component makes pre-change Kubernetes durable keys unreachable without deleting old state or changing file-source caches. The regression explicitly seeds an old key and verifies a fresh assessment. Endpoint identity is not a Kubernetes cluster UID: aliases can partition reuse, and replacement behind an unchanged endpoint retains the same routing identity.
+
+The SPDY upgrade transport clones target TLS config and derives missing ServerName from the resolved API hostname independently of InsecureSkipVerify. Explicit ServerName and Go's IP/no-SNI behavior remain authoritative. Proxy TLS uses its original config, preserving its own hostname inference and existing explicit-name behavior; custom dial, CONNECT/SOCKS negotiation and cancellation socket ownership are unchanged. Verified TLS runs in the new local matrix. Existing network-listener mTLS/SPDY end-to-end tests passed in the independent host-level runs.
+
+The shared Kubernetes transport imports standard client-go OIDC registration. Dependency versions/checksums remain unchanged. Both executables reach that package; ordinary collector/remote HTTP and SPDY use the same auth configuration boundary. The custom exec runner and its lifecycle, schema, credential precedence, rotation, concurrency and PTY tests remain active. OIDC intentionally retains upstream cache/refresh/persistence/CA-file behavior: its process-wide cache is keyed by cluster address, issuer and client ID. Upstream issuer refresh does not inherit the custom exec runner's cancellation guarantee. Only cached-token behavior is validated here; no live refresh or issuer security claim follows. Docs distinguish these auth contracts and explain template-ID/veto changes.
+
+## Verification
+
+Native Darwin arm64, Go 1.27.1, Rust 1.94.0, Python 3.14.7, Node 24.19.0. All runs used offline dependency settings: `GOPROXY=off`, `GOSUMDB=off`, `GOTOOLCHAIN=local`, `CARGO_NET_OFFLINE=true`, `PIP_NO_INDEX=1`; Go build cache is under ignored `.cache/build`.
+
+The independent host-level passes below supersede the earlier builder-sandbox failures caused by denied local TCP/Unix listener binds. Those earlier attempts remain recorded in `.cache/compat-check.log`, `.cache/compat-all-race.log`, `.cache/compat-parity-run.log`, `.cache/compat-rust-test.log` and `.cache/compat-python.log`; they are not outstanding acceptance failures.
+
+| Check | Result / evidence |
+| --- | --- |
+| Focused new tests, then gofmt | Passed before broader gates; `.cache/compat-focused.log` |
+| Focused `go test -race -count=1` including new regressions, existing exec/upgrade-socket and durable identity tests | Passed; `.cache/compat-focused-race.log` |
+| Final new regression suite `go test -race -count=2 ./internal/kube -run 'TestCollectorEndpoint\|TestSPDYTargetSNI\|TestOIDCCachedTokenCompatibility\|TestUnsupportedAuthCompatibility'` | Passed twice; `.cache/compat-regression-final.log` |
+| `tools/check.sh` | Complete host-level gate passed: full Go tests/race including listener suites, vet, tidy/module diff and formatting, Linux amd64/386/arm cross-builds, six UI suites, all 124 Python tests, retained-asset regression, 60 retained assets verified with retirement disabled, and source/privacy checks; `.cache/independent-compat-check.log` |
+| `go test -race ./...` (inside `tools/check.sh`) | Passed every package, including CLI, inspection and Kubernetes listener tests, with no race reports; `.cache/independent-compat-check.log` |
+| Focused affected race packages: kube, analysis, controller, cli, inspect | Passed host-level command; `.cache/independent-compat-race.log`. Analysis reported no matching tests in this focused selection; its full race suite passed in `.cache/independent-compat-check.log` |
+| `go vet ./...`; `go mod tidy`; module diff; `go mod verify` | Passed, no module changes; `.cache/compat-vet.log`, `.cache/compat-modules.log` |
+| `tools/release.sh` | Passed independent host-level release, including native smoke for both executable names, signal/private-report checks, native state migration/reopen smoke and source/archive byte/privacy checks; `.cache/independent-compat-release.log` |
+| `tools/check-cross.sh`; additional `CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath` | Passed pure-Go Linux amd64/386/arm/arm64 builds; `.cache/compat-cross.log`, `.cache/compat-cross-arm64.log`; cross-built binaries were not executed |
+| `python3 tools/check_parity.py --run` | Complete host-level pass: 14 workflows / 18 executable suites, all 60 retained assets byte/type/mode verified, retirement disabled; `.cache/independent-compat-parity.log` |
+| Static parity and retained-asset mutation regression | Passed: 14 workflows / 18 suites inventoried, all 60 retained assets match byte/type/mode, retirement disabled; valid baseline and 45 rejected mutations; `.cache/compat-parity-static.log`, `.cache/compat-retained-tests.log` |
+| Rust fmt / clippy (`--locked --offline --all-targets --all-features -- -D warnings`) / build | Passed; `.cache/compat-rust-{fmt,clippy,build}.log` |
+| `cargo test --locked --offline --all-features` | Passed all 38 library and 7 CLI tests, plus binary/doc-test targets, in host-level executable parity; `.cache/independent-compat-parity.log` |
+| Rust PTY suite | Passed search, Ctrl-C and SIGTERM, terminal restoration/private reports; `.cache/compat-rust-pty.log` |
+| `python3 -m unittest discover -s tests -q` | All 124 tests passed in both host-level complete check and executable parity; `.cache/independent-compat-check.log`, `.cache/independent-compat-parity.log` |
+| Six UI suites and both JavaScript trees' syntax checks | Passed; `.cache/compat-ui.log` |
+| Retained implementation/package/tests/license diff against baseline | Passed: no changes to `src`, `jevernetes`, Cargo/Python manifests/locks, tests or LICENSE |
+| `git diff --check`; `git diff --exit-code -- go.mod go.sum` | Passed; module files unchanged. Nothing has been staged or committed yet |
+
+## Commit and operational limits
+
+The complete acceptance gates passed independently on the host. Staging and the intended local commit have not yet occurred. No new commit exists; HEAD remains `aa75b6ce58f56e888ec8c936f8f11c9f7d8bdaf0` (its existing parent is `3338ea130d7daaca9d4916985654c047af296612`). The intended parent for the requested new commit is `aa75b6ce58f56e888ec8c936f8f11c9f7d8bdaf0`. The worktree contains the implementation, tests and docs and is **not clean**. These validation results do not claim a completed commit.
+
+Host-level verification exercised local listeners, including the existing mTLS/SPDY end-to-end suites, as well as the new in-memory TLS fixtures. No live provider/cluster, deployment, container runtime, external proxy, hosted CI or production soak was used. Nonfatal macOS minimum-version linker warnings remain. Rust/Python coexistence and every retained asset are preserved; runtime retirement remains disabled. No push or deployment occurred.
+
+---
+
 # Upgrade sockets, interactive terminals and retained assets — 2026-10-11
 
 Started in the exact existing worktree on `fix/go-full-parity-20261011`, clean at `3338ea130d7daaca9d4916985654c047af296612`. Read `CONTRIBUTING.md`; no applicable `AGENTS.md` was present. All endpoints, credentials, helper processes and evidence are synthetic/local. No push, deployment, GitHub mutation, live provider or cluster contact occurred. Rust/Python coexistence is preserved and runtime retirement remains disabled.

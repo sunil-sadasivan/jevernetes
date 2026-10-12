@@ -36,7 +36,7 @@ func Scope(e event.Event, drain bool) event.Source {
 		return e.Source
 	}
 	s := event.Source{}
-	for _, k := range []string{"type", "context", "namespace", "container", "kind", "previous", "restart_count"} {
+	for _, k := range []string{"type", "cluster_id", "context", "namespace", "container", "kind", "previous", "restart_count"} {
 		if v, ok := e.Source[k]; ok {
 			s[k] = v
 		}

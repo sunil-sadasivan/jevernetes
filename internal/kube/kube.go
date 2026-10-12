@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -86,14 +87,30 @@ type API interface {
 	Pods(string) core.PodInterface
 }
 type Collector struct {
-	API     API
-	Config  Config
-	OpenLog func(context.Context, string, string, *v1.PodLogOptions) (io.ReadCloser, error)
+	// Immutable endpoint identity is set only from the resolved REST config.
+	clusterID string
+	API       API
+	Config    Config
+	OpenLog   func(context.Context, string, string, *v1.PodLogOptions) (io.ReadCloser, error)
 }
 
 func New(cfg *rest.Config, c Config) (*Collector, error) {
 	copy := rest.CopyConfig(cfg)
 	copy.Timeout = 0
+	endpoint, _, err := rest.DefaultServerUrlFor(copy)
+	if err != nil || endpoint.Hostname() == "" || (endpoint.Scheme != "http" && endpoint.Scheme != "https") {
+		return nil, errors.New("Kubernetes endpoint unavailable")
+	}
+	port := endpoint.Port()
+	if port == "" {
+		if endpoint.Scheme == "https" {
+			port = "443"
+		} else {
+			port = "80"
+		}
+	}
+	// Only routing identity enters the hash: never userinfo, query, or fragment.
+	clusterID := event.Hash([]any{"kubernetes-endpoint-v1", endpoint.Scheme, net.JoinHostPort(strings.ToLower(endpoint.Hostname()), port), strings.TrimRight(endpoint.EscapedPath(), "/")})
 	httpClient, err := HTTPClientFor(copy)
 	if err != nil {
 		return nil, errors.New("Kubernetes transport unavailable")
@@ -103,7 +120,7 @@ func New(cfg *rest.Config, c Config) (*Collector, error) {
 	if err != nil {
 		return nil, errors.New("Kubernetes client unavailable")
 	}
-	return &Collector{API: client, Config: c, OpenLog: func(ctx context.Context, ns, pod string, o *v1.PodLogOptions) (io.ReadCloser, error) {
+	return &Collector{clusterID: clusterID, API: client, Config: c, OpenLog: func(ctx context.Context, ns, pod string, o *v1.PodLogOptions) (io.ReadCloser, error) {
 		return client.Pods(ns).GetLogs(pod, o).Stream(ctx)
 	}}, nil
 }
@@ -162,6 +179,14 @@ func streams(p v1.Pod, previous bool, live bool) []stream {
 func (s stream) source(c Config) event.Source {
 	return event.Source{"type": "kubernetes", "context": c.Context, "namespace": s.pod.Namespace, "pod": s.pod.Name, "pod_uid": string(s.pod.UID), "container": s.name, "kind": s.kind, "previous": s.previous, "restart_count": s.restart, "container_id": s.containerID}
 }
+func (c *Collector) source(s stream) event.Source {
+	source := s.source(c.Config)
+	source["cluster_id"] = c.clusterID
+	return source
+}
+func (c *Collector) discoverySource() event.Source {
+	return event.Source{"type": "kubernetes", "context": c.Config.Context, "cluster_id": c.clusterID}
+}
 func (c *Collector) list(ctx context.Context) ([]v1.Pod, error) {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
@@ -199,7 +224,7 @@ func (c *Collector) Snapshot(ctx context.Context, emit func(event.Event) error, 
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			source := s.source(c.Config)
+			source := c.source(s)
 			bounded, cancel := context.WithTimeout(ctx, 30*time.Second)
 			if err := c.validateStream(bounded, s); err != nil {
 				gap(source, identityGap(err))

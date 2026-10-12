@@ -110,7 +110,11 @@ func spdyTransport(ctx context.Context, cfg *rest.Config) (http.RoundTripper, *c
 	if cfg.Proxy != nil {
 		proxy = cfg.Proxy
 	}
-	upgrade, err := newCancellableSPDY(tc, tlsConfig, proxy)
+	endpoint, _, err := rest.DefaultServerUrlFor(cfg)
+	if err != nil {
+		return nil, nil, errors.New("Kubernetes endpoint unavailable")
+	}
+	upgrade, err := newCancellableSPDY(tc, tlsConfig, endpoint.Hostname(), proxy)
 	if err != nil {
 		return nil, nil, err
 	}
