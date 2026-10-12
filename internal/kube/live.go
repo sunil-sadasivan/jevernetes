@@ -16,6 +16,12 @@ import (
 // reconnects. Queue ownership/backpressure belongs to the caller. finalize must
 // make bounded admissions of already-read evidence even after intake cancellation.
 func (c *Collector) Follow(ctx context.Context, emit, finalize func(event.Event) error, gap func(event.Source, string)) error {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	return c.follow(ctx, emit, finalize, gap, ticker.C)
+}
+
+func (c *Collector) follow(ctx context.Context, emit, finalize func(event.Event) error, gap func(event.Source, string), ticks <-chan time.Time) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var wg sync.WaitGroup
@@ -41,11 +47,13 @@ func (c *Collector) Follow(ctx context.Context, emit, finalize func(event.Event)
 					gap(source, "stream_capacity")
 					continue
 				}
-				child, stop := context.WithCancel(ctx)
+				child, cancelChild := context.WithCancel(ctx)
+				stop := sync.OnceFunc(cancelChild)
 				active[id] = stop
 				wg.Add(1)
 				go func(s stream, id string) {
 					defer wg.Done()
+					defer stop()
 					err := c.followStreamWithFinalizer(child, s, emit, finalize, gap)
 					if err != nil && child.Err() == nil {
 						select {
@@ -74,8 +82,6 @@ func (c *Collector) Follow(ctx context.Context, emit, finalize func(event.Event)
 		cancel()
 		return err
 	}
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
@@ -88,7 +94,7 @@ func (c *Collector) Follow(ctx context.Context, emit, finalize func(event.Event)
 			}
 		case id := <-done:
 			delete(active, id)
-		case <-ticker.C:
+		case <-ticks:
 			if err := discover(); err != nil {
 				gap(c.discoverySource(), "discovery_unavailable")
 			}

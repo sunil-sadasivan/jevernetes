@@ -6,9 +6,11 @@ import (
 	"crypto/tls"
 	"encoding/base64"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -160,6 +162,14 @@ func (s *cancellableSPDY) RoundTrip(req *http.Request) (*http.Response, error) {
 	return response, err
 }
 func (s *cancellableSPDY) NewConnection(response *http.Response) (httpstream.Connection, error) {
+	// client-go reads rejected bodies in full. Keep its Kubernetes Status
+	// decoder, but force a fixed read error beyond the cap. Match its upgrade
+	// predicate so successful SPDY sockets retain their existing ownership.
+	if response.StatusCode != http.StatusSwitchingProtocols ||
+		!strings.Contains(strings.ToLower(response.Header.Get(httpstream.HeaderConnection)), strings.ToLower(httpstream.HeaderUpgrade)) ||
+		!strings.Contains(strings.ToLower(response.Header.Get(httpstream.HeaderUpgrade)), strings.ToLower(streamspdy.HeaderSpdy31)) {
+		response.Body = &rejectedUpgradeBody{body: response.Body, socket: s.socket, remaining: maxUpgradeErrorBytes}
+	}
 	conn, err := s.base.NewConnection(response)
 	if s.socket != nil {
 		if err != nil {
@@ -171,6 +181,41 @@ func (s *cancellableSPDY) NewConnection(response *http.Response) (httpstream.Con
 		}
 	}
 	return conn, err
+}
+
+const maxUpgradeErrorBytes = 64 << 10
+
+// Read at most cap+1 bytes: the extra byte distinguishes an exact-cap body
+// from truncation. Never hand a truncated Status or attacker-controlled prefix
+// to client-go's error decoder as a complete response.
+type rejectedUpgradeBody struct {
+	body      io.ReadCloser
+	socket    *upgradeSocket
+	remaining int64
+}
+
+func (b *rejectedUpgradeBody) Read(p []byte) (int, error) {
+	if b.remaining < 0 {
+		return 0, errors.New("upgrade error response too large")
+	}
+	if int64(len(p)) > b.remaining+1 {
+		p = p[:b.remaining+1]
+	}
+	n, err := b.body.Read(p)
+	b.remaining -= int64(n)
+	if b.remaining < 0 {
+		return n, errors.New("upgrade error response too large")
+	}
+	return n, err
+}
+
+func (b *rejectedUpgradeBody) Close() error {
+	// http.ReadResponse bodies may drain on Close. Close the transport first
+	// so cleanup cannot consume the rest of an untrusted response or stall.
+	if b.socket != nil {
+		_ = b.socket.Close()
+	}
+	return b.body.Close()
 }
 
 // Cancellation closes the underlying socket, never this wrapper (which joins

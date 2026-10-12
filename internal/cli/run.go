@@ -273,8 +273,10 @@ func (o *options) runWith(cmd *cobra.Command, paths []string, stdin io.Reader, d
 		}
 	}
 	collected := make(chan error, 1)
+	state.Ready.Store(true)
 	go func() {
 		defer close(in)
+		defer state.Ready.Store(false)
 		if paths != nil {
 			collected <- collectFiles(ctx, paths, stdin, o.k.MaxBytes, emit, gap)
 			return
@@ -285,7 +287,6 @@ func (o *options) runWith(cmd *cobra.Command, paths []string, stdin io.Reader, d
 			collected <- collector.Snapshot(ctx, emit, gap)
 		}
 	}()
-	state.Ready.Store(true)
 	budgetStopped := false
 	var evidenceErr error
 	// Intake limits stop producers only. Admitted provider work uses the process
@@ -293,21 +294,19 @@ func (o *options) runWith(cmd *cobra.Command, paths []string, stdin io.Reader, d
 	analysisErr := engine.Run(process, in, func(e event.Event) error {
 		state.Merge(engine.Metrics)
 		if store != nil {
-			applyCtx := process
-			var stop context.CancelFunc
-			if process.Err() != nil {
-				applyCtx, stop = context.WithTimeout(context.Background(), 5*time.Second)
-			}
+			// Admission commits us to bounded persistence even if the operator
+			// cancels during the transaction. Detach before Apply, never after
+			// checking Err (which races cancellation); provider work stays on
+			// process and backpressure waits stay on the intake context.
 			applied, err := waitForState(ctx, func() (controller.Applied, error) {
+				applyCtx, stop := context.WithTimeout(context.WithoutCancel(process), 5*time.Second)
+				defer stop()
 				return store.Apply(applyCtx, e, contract, policy, time.Now().Unix())
 			}, func() {
 				state.Add("outbox_backpressure", 1)
 				gap(e.Source, "outbox_backpressure")
 			})
 			state.Merge(store.Metrics())
-			if stop != nil {
-				stop()
-			}
 			if err != nil {
 				cancel()
 				return err
@@ -364,7 +363,7 @@ func (o *options) runWith(cmd *cobra.Command, paths []string, stdin io.Reader, d
 	}
 	state.Ready.Store(false)
 	state.Stopped.Store(true)
-	if store != nil && o.hold && !budgetStopped && (analysisErr == nil || errors.Is(analysisErr, context.Canceled) || errors.Is(analysisErr, context.DeadlineExceeded)) && (collectionErr == nil || errors.Is(collectionErr, context.DeadlineExceeded) || errors.Is(collectionErr, context.Canceled) || errors.Is(collectionErr, errCap)) {
+	if store != nil && o.hold && !budgetStopped && evidenceErr == nil && (analysisErr == nil || errors.Is(analysisErr, context.Canceled) || errors.Is(analysisErr, context.DeadlineExceeded)) && (collectionErr == nil || errors.Is(collectionErr, context.DeadlineExceeded) || errors.Is(collectionErr, context.Canceled) || errors.Is(collectionErr, errCap)) {
 		select {
 		case <-process.Done():
 		case err := <-background:

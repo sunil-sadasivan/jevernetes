@@ -1,0 +1,48 @@
+Regression-first evidence for the review of 8424644ca7e2ca23437126e8b0ca686d9038bed3
+
+Starting branch: fix/go-full-parity-20261011, clean at the exact commit above.
+All fixtures are synthetic; controller tests require loopback health listeners.
+GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local CARGO_NET_OFFLINE=true PIP_NO_INDEX=1
+GOCACHE="$PWD/.cache/build"
+
+Before behavior changes (only a discovery-clock test seam was introduced):
+
+TestControllerCancellationInsideFirstApplyDrains
+  SQLite BEFORE INSERT trigger cancels inside the first Store.Apply transaction.
+  Reported admissions = 0, want 4; durable admissions = 0, want 4.
+TestControllerEvidenceFailureDoesNotHold/failed and /blocked
+  Both stayed in --hold-after-stop until the 4-second test deadline and returned
+  context deadline exceeded instead of the evidence output error.
+TestControllerNotReadyWhileProviderDrains
+  Readiness stayed true after collection returned with provider work blocked.
+TestSPDYRejectedBodyAllocationBound
+  A generated 32 MiB body was consumed in full; TotalAlloc increased by
+  479742496 bytes. The oversized response was exposed in the upgrade error.
+TestSPDYLargeFast403ClosesSocket
+  The fast pipe peer sent all 33554432 body bytes before rejection.
+TestFollowRepeatedIdentityRetirementReleasesChildren
+  The first normally retired worker retained its uncanceled child context.
+
+Full local baseline logs: .cache/stop-cli-before.log, .cache/stop-kube-before.log.
+The initial sandbox run could not bind loopback listeners; the controller
+baseline above was rerun with local-listener permission before behavior edits.
+
+Fix boundaries:
+- Each admitted persistence transaction gets a five-second deadline detached
+  from operator cancellation before Apply begins. Intake/provider work remains
+  cancelable; outbox backpressure retries retain the intake context.
+- Evidence failure suppresses normal hold, while the admitted queue and final
+  report still drain before returning the error.
+- Readiness clears in the collector's exit path, before closing its event queue.
+- Rejected SPDY bodies permit at most 64 KiB plus one overflow-detection byte.
+  Client-go still decodes complete Kubernetes Status bodies, including at the
+  exact cap. Oversized bodies produce a fixed error; cleanup closes the socket
+  before closing the body to prevent HTTP body draining. Valid upgrade ownership
+  remains unchanged. Tests also cover a rejected 101 missing upgrade headers.
+- A once-guarded child cancellation runs on every follow worker exit and on
+  discovery removal. Repeated retirement tests observe cancellation while the
+  parent is alive and reuse a single stream slot over three discovery cycles.
+
+Persistence still fails closed on real storage failures/capacity exhaustion;
+this change does not retry arbitrary transaction failures or hide lost storage.
+No retained Rust/Python runtime or acceptance asset is changed.
