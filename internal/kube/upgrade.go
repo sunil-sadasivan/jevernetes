@@ -22,10 +22,11 @@ import (
 
 // One instance per Open, like client-go's stateful SPDY upgrader. The raw
 // connection is cancellable before proxy/TLS negotiation or ReadResponse starts.
-// client-go still owns HTTP/SPDY negotiation, auth wrappers and stream handling.
+// client-go still owns dialing, auth wrappers and SPDY stream handling.
 type cancellableSPDY struct {
 	base   *streamspdy.SpdyRoundTripper
 	socket *upgradeSocket
+	conn   net.Conn
 }
 
 func (s *cancellableSPDY) WrappedRoundTripper() http.RoundTripper { return s.base }
@@ -100,8 +101,7 @@ func newCancellableSPDY(tc *transport.Config, tlsConfig *tls.Config, targetHost 
 				if err := connect.Write(conn); err != nil {
 					return nil, err
 				}
-				reader := bufio.NewReader(conn)
-				response, err := http.ReadResponse(reader, connect)
+				response, reader, err := readUpgradeResponse(conn, connect)
 				if err != nil {
 					return nil, err
 				}
@@ -148,6 +148,64 @@ type bufferedUpgradeConn struct {
 
 func (c *bufferedUpgradeConn) Read(p []byte) (int, error) { return c.reader.Read(p) }
 
+const maxUpgradeHeaderBytes = 64 << 10
+
+var errUpgradeHeadersTooLarge = errors.New("upgrade response headers too large")
+
+func readUpgradeResponse(r io.Reader, req *http.Request) (*http.Response, *bufio.Reader, error) {
+	limited := &upgradeHeaderReader{reader: r}
+	reader := bufio.NewReader(limited)
+	response, err := http.ReadResponse(reader, req)
+	// net/textproto can replace an underlying read error with a syntax error
+	// containing the partial header. Keep over-limit failures fixed and small.
+	if limited.read > maxUpgradeHeaderBytes {
+		return nil, reader, errUpgradeHeadersTooLarge
+	}
+	return response, reader, err
+}
+
+// Bound plaintext before net/http can allocate status lines or MIME headers.
+// Only the header section counts; read-ahead after its terminator is retained
+// verbatim and all later reads are unlimited. Accept LF as well as CRLF, like
+// net/http, so a valid LF-only response cannot leave a cap on the SPDY stream.
+type upgradeHeaderReader struct {
+	reader    io.Reader
+	read      int
+	lineBytes int
+	last      byte
+	done      bool
+}
+
+func (r *upgradeHeaderReader) Read(p []byte) (int, error) {
+	if r.done {
+		return r.reader.Read(p)
+	}
+	if r.read > maxUpgradeHeaderBytes {
+		return 0, errUpgradeHeadersTooLarge
+	}
+	if limit := maxUpgradeHeaderBytes + 1 - r.read; len(p) > limit {
+		p = p[:limit]
+	}
+	n, err := r.reader.Read(p)
+	for _, b := range p[:n] {
+		r.read++
+		if r.read > maxUpgradeHeaderBytes {
+			return 0, errUpgradeHeadersTooLarge
+		}
+		if b == '\n' {
+			if r.lineBytes == 0 || (r.lineBytes == 1 && r.last == '\r') {
+				r.done = true
+				break
+			}
+			r.lineBytes = 0
+		} else {
+			r.lineBytes++
+		}
+		r.last = b
+	}
+	return n, err
+}
+
 func (s *cancellableSPDY) RoundTrip(req *http.Request) (*http.Response, error) {
 	// Match the request seen by client-go's native proxier, including upgrade
 	// headers. Keep it separate from the clone the SPDY transport mutates.
@@ -155,22 +213,38 @@ func (s *cancellableSPDY) RoundTrip(req *http.Request) (*http.Response, error) {
 	proxyRequest.Header.Add(httpstream.HeaderConnection, httpstream.HeaderUpgrade)
 	proxyRequest.Header.Add(httpstream.HeaderUpgrade, streamspdy.HeaderSpdy31)
 	ctx := context.WithValue(req.Context(), upgradeRequestKey{}, proxyRequest)
-	response, err := s.base.RoundTrip(req.Clone(ctx))
-	if err != nil && s.socket != nil {
-		s.socket.Close()
+	// v0.35.3's RoundTrip uses unbounded ReadResponse and discards its reader
+	// on upgrade. Use its Dial (including request write and target TLS), then
+	// retain our bounded reader for both rejected bodies and upgraded streams.
+	conn, err := s.base.Dial(proxyRequest.Clone(ctx))
+	if err != nil {
+		s.close()
+		return nil, err
 	}
-	return response, err
+	response, reader, err := readUpgradeResponse(conn, nil)
+	if err != nil {
+		s.close()
+		return nil, err
+	}
+	s.conn = &bufferedUpgradeConn{Conn: conn, reader: reader}
+	return response, nil
 }
 func (s *cancellableSPDY) NewConnection(response *http.Response) (httpstream.Connection, error) {
 	// client-go reads rejected bodies in full. Keep its Kubernetes Status
 	// decoder, but force a fixed read error beyond the cap. Match its upgrade
 	// predicate so successful SPDY sockets retain their existing ownership.
+	var conn httpstream.Connection
+	var err error
 	if response.StatusCode != http.StatusSwitchingProtocols ||
 		!strings.Contains(strings.ToLower(response.Header.Get(httpstream.HeaderConnection)), strings.ToLower(httpstream.HeaderUpgrade)) ||
 		!strings.Contains(strings.ToLower(response.Header.Get(httpstream.HeaderUpgrade)), strings.ToLower(streamspdy.HeaderSpdy31)) {
 		response.Body = &rejectedUpgradeBody{body: response.Body, socket: s.socket, remaining: maxUpgradeErrorBytes}
+		conn, err = s.base.NewConnection(response)
+	} else {
+		// Same constructor and ping period as the pinned roundtripper, with
+		// the buffered bytes that follow the HTTP header terminator preserved.
+		conn, err = streamspdy.NewClientConnectionWithPings(s.conn, 5*time.Second)
 	}
-	conn, err := s.base.NewConnection(response)
 	if s.socket != nil {
 		if err != nil {
 			s.socket.Close()
