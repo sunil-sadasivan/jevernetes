@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"compress/gzip"
 	"context"
 	"encoding/json"
@@ -20,6 +21,7 @@ import (
 	"github.com/sunil-sadasivan/jevernetes/internal/event"
 	"github.com/sunil-sadasivan/jevernetes/internal/inspect"
 	"github.com/sunil-sadasivan/jevernetes/internal/kube"
+	"github.com/sunil-sadasivan/jevernetes/internal/output"
 	"github.com/sunil-sadasivan/jevernetes/internal/provider"
 	"github.com/sunil-sadasivan/jevernetes/internal/report"
 	"github.com/sunil-sadasivan/jevernetes/internal/safefile"
@@ -315,13 +317,17 @@ func (o *options) runWith(cmd *cobra.Command, paths []string, stdin io.Reader, d
 			if store != nil {
 				writer = cmd.ErrOrStderr()
 			}
+			var evidence bytes.Buffer
 			source, _ := json.Marshal(e.Source)
-			fmt.Fprintf(writer, "[%s/%s/%s] %s #%s\n", e.Importance, e.Severity, e.Category, event.Console(string(source)), e.ID)
+			fmt.Fprintf(&evidence, "[%s/%s/%s] %s #%s\n", e.Importance, e.Severity, e.Category, event.Console(string(source)), e.ID)
 			for _, line := range strings.Split(e.Text, "\n") {
-				fmt.Fprintf(writer, "  %s\n", event.Console(line))
+				fmt.Fprintf(&evidence, "  %s\n", event.Console(line))
 			}
 			if e.AnalysisError != "" {
-				fmt.Fprintf(writer, "  analysis: %s\n", event.Console(e.AnalysisError))
+				fmt.Fprintf(&evidence, "  analysis: %s\n", event.Console(e.AnalysisError))
+			}
+			if _, err := output.Write(process, writer, evidence.Bytes()); err != nil {
+				return err
 			}
 		}
 		if e.Truncated {
@@ -395,7 +401,7 @@ func (o *options) runWith(cmd *cobra.Command, paths []string, stdin io.Reader, d
 		}
 	}
 	if o.json {
-		if json.NewEncoder(cmd.OutOrStdout()).Encode(value) != nil {
+		if output.Final(cmd.OutOrStdout(), func(w io.Writer) error { return json.NewEncoder(w).Encode(value) }) != nil {
 			return errors.New("cannot write report output")
 		}
 	} else {
@@ -404,7 +410,12 @@ func (o *options) runWith(cmd *cobra.Command, paths []string, stdin io.Reader, d
 		if store != nil {
 			writer = cmd.ErrOrStderr()
 		}
-		fmt.Fprintf(writer, "events=%v important=%v uncertain=%v unknown=%v complete=%v\n", summary["events"], summary["important"], summary["uncertain"], summary["unknown"], summary["complete_within_window"])
+		if err := output.Final(writer, func(w io.Writer) error {
+			_, err := fmt.Fprintf(w, "events=%v important=%v uncertain=%v unknown=%v complete=%v\n", summary["events"], summary["important"], summary["uncertain"], summary["unknown"], summary["complete_within_window"])
+			return err
+		}); err != nil {
+			return err
+		}
 	}
 	if budgetStopped {
 		return errors.New("provider budget exhausted; collection stopped, restart under supervision after reviewing budget policy")

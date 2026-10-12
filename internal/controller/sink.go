@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sunil-sadasivan/jevernetes/internal/output"
 	"github.com/sunil-sadasivan/jevernetes/internal/provider"
 )
 
@@ -23,7 +24,7 @@ func (s StdoutSink) Send(ctx context.Context, id string, payload []byte) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	_, err := s.Writer.Write(append(append([]byte{}, payload...), '\n'))
+	_, err := output.Write(ctx, s.Writer, append(append([]byte{}, payload...), '\n'))
 	return err
 }
 

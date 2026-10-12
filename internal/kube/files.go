@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/sunil-sadasivan/jevernetes/internal/safefile"
@@ -113,6 +114,17 @@ func loadLocal(ctx context.Context, current string) (*rest.Config, error) {
 	cfg, err := clientcmd.NewNonInteractiveClientConfig(*merged, current, &clientcmd.ConfigOverrides{}, nil).ClientConfig()
 	if err != nil {
 		return nil, err
+	}
+	if cfg.AuthProvider != nil && cfg.AuthProvider.Name == "oidc" {
+		// A merged source is not a safe rotating-credential destination.
+		if len(paths) != 1 {
+			return nil, errOIDC
+		}
+		path, err := filepath.Abs(paths[0])
+		if err != nil {
+			return nil, errOIDC
+		}
+		cfg.AuthConfigPersister = &oidcStore{path: path, user: selected.AuthInfo}
 	}
 	if tokenFile != "" {
 		cfg.BearerToken = ""

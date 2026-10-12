@@ -24,7 +24,6 @@ import (
 	"golang.org/x/term"
 	authv1 "k8s.io/client-go/pkg/apis/clientauthentication/v1"
 	upstream "k8s.io/client-go/plugin/pkg/client/auth/exec"
-	_ "k8s.io/client-go/plugin/pkg/client/auth/oidc" // Register standard cached-token/refresh support.
 	"k8s.io/client-go/rest"
 	api "k8s.io/client-go/tools/clientcmd/api"
 	"k8s.io/client-go/transport"
@@ -36,15 +35,27 @@ var errExecAuth = errors.New("Kubernetes credential helper unavailable")
 // Foreground terminal ownership is process-wide, unlike each client cache.
 var interactiveExec = make(chan struct{}, 1)
 
-// Context-free client-go exec auth is deliberately bypassed at both transport
+// Context-free client-go exec/OIDC auth is deliberately bypassed at both transport
 // boundaries. Credentials are scoped to this client, never a global cache.
 func transportConfig(cfg *rest.Config) (*transport.Config, error) {
 	copy := rest.CopyConfig(cfg)
 	plugin := copy.ExecProvider
 	copy.ExecProvider = nil
+	oidc := copy.AuthProvider != nil && copy.AuthProvider.Name == "oidc"
+	if oidc {
+		if plugin != nil {
+			return nil, errOIDC
+		}
+		copy.AuthProvider = nil
+	}
 	tc, err := copy.TransportConfig()
 	if err != nil {
 		return nil, err
+	}
+	if oidc {
+		if err := configureOIDC(cfg, tc); err != nil {
+			return nil, err
+		}
 	}
 	if plugin == nil {
 		return tc, nil
@@ -106,7 +117,7 @@ func transportConfig(cfg *rest.Config) (*transport.Config, error) {
 	return tc, nil
 }
 
-// HTTPClientFor is the application's exec-aware counterpart of rest.HTTPClientFor.
+// HTTPClientFor is the application's context-aware counterpart of rest.HTTPClientFor.
 func HTTPClientFor(cfg *rest.Config) (*http.Client, error) {
 	tc, err := transportConfig(cfg)
 	if err != nil {

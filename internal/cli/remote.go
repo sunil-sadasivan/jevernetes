@@ -15,6 +15,7 @@ import (
 	"github.com/sunil-sadasivan/jevernetes/internal/dashboard"
 	"github.com/sunil-sadasivan/jevernetes/internal/inspect"
 	"github.com/sunil-sadasivan/jevernetes/internal/kube"
+	"github.com/sunil-sadasivan/jevernetes/internal/output"
 	"github.com/sunil-sadasivan/jevernetes/internal/report"
 )
 
@@ -65,9 +66,13 @@ func remoteCommand(o *options) *cobra.Command {
 					return err
 				}
 				if o.json {
-					_ = json.NewEncoder(c.OutOrStdout()).Encode(map[string]any{"sampled_at": time.Now().Unix(), "stale": true, "error": "controller inspection unavailable"})
+					if err := json.NewEncoder(output.Writer{Context: c.Context(), Output: c.OutOrStdout()}).Encode(map[string]any{"sampled_at": time.Now().Unix(), "stale": true, "error": "controller inspection unavailable"}); err != nil {
+						return err
+					}
 				} else {
-					fmt.Fprintln(c.ErrOrStderr(), "Controller sample unavailable; previous output is stale")
+					if _, err := fmt.Fprintln(output.Writer{Context: c.Context(), Output: c.ErrOrStderr()}, "Controller sample unavailable; previous output is stale"); err != nil {
+						return err
+					}
 				}
 			} else {
 				if o.output != "" {
@@ -76,7 +81,7 @@ func remoteCommand(o *options) *cobra.Command {
 					}
 				}
 				if o.json {
-					if json.NewEncoder(c.OutOrStdout()).Encode(value) != nil {
+					if json.NewEncoder(output.Writer{Context: c.Context(), Output: c.OutOrStdout()}).Encode(value) != nil {
 						return errors.New("cannot write inspection output")
 					}
 				} else {
@@ -85,7 +90,9 @@ func remoteCommand(o *options) *cobra.Command {
 					if len(text) > 32768 {
 						text = text[:32768] + "\n[output bounded]"
 					}
-					fmt.Fprintln(c.OutOrStdout(), text)
+					if _, err := fmt.Fprintln(output.Writer{Context: c.Context(), Output: c.OutOrStdout()}, text); err != nil {
+						return err
+					}
 				}
 			}
 			if !watch {
@@ -155,7 +162,9 @@ func dashboardCommand(o *options) *cobra.Command {
 			return errors.New("dashboard listener unavailable")
 		}
 		defer l.Close()
-		fmt.Fprintf(c.ErrOrStderr(), "Dashboard: http://%s\n", l.Addr().String())
+		if _, err := fmt.Fprintf(output.Writer{Context: c.Context(), Output: c.ErrOrStderr()}, "Dashboard: http://%s\n", l.Addr().String()); err != nil {
+			return err
+		}
 		return d.Serve(c.Context(), l)
 	}}
 	f := c.Flags()

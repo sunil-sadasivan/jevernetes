@@ -19,6 +19,7 @@ import (
 	"github.com/sunil-sadasivan/jevernetes/internal/analysis"
 	"github.com/sunil-sadasivan/jevernetes/internal/controller"
 	"github.com/sunil-sadasivan/jevernetes/internal/kube"
+	"github.com/sunil-sadasivan/jevernetes/internal/output"
 	"github.com/sunil-sadasivan/jevernetes/internal/provider"
 )
 
@@ -67,7 +68,7 @@ func Execute(ctx context.Context, args []string, in io.Reader, out, stderr io.Wr
 	var ee exitError
 	if errors.As(err, &ee) {
 		if ee.message != "" {
-			fmt.Fprintln(stderr, ee.message)
+			_ = output.Final(stderr, func(w io.Writer) error { _, err := fmt.Fprintln(w, ee.message); return err })
 		}
 		return ee.code
 	}
@@ -78,7 +79,7 @@ func Execute(ctx context.Context, args []string, in io.Reader, out, stderr io.Wr
 	if strings.HasPrefix(message, "unknown command") {
 		message = "unknown command; see --help"
 	}
-	fmt.Fprintln(stderr, message)
+	_ = output.Final(stderr, func(w io.Writer) error { _, err := fmt.Fprintln(w, message); return err })
 	return 1
 }
 func New(in io.Reader, out, stderr io.Writer) *cobra.Command {
