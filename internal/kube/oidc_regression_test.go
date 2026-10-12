@@ -56,6 +56,10 @@ func oidcServer(t *testing.T, handler func(*http.Request) string) {
 }
 func oidcServerConnection(t *testing.T, handler func(*http.Request) string, wrap func(net.Conn) net.Conn) {
 	t.Helper()
+	oidcWireServer(t, func(r *http.Request) (int, string) { return 200, handler(r) }, wrap)
+}
+func oidcWireServer(t *testing.T, handler func(*http.Request) (int, string), wrap func(net.Conn) net.Conn) {
+	t.Helper()
 	old := http.DefaultTransport
 	var wg sync.WaitGroup
 	var mu sync.Mutex
@@ -77,10 +81,12 @@ func oidcServerConnection(t *testing.T, handler func(*http.Request) string, wrap
 			if e != nil {
 				return
 			}
-			body := handler(r)
+			status, body := handler(r)
 			io.Copy(io.Discard, r.Body)
 			r.Body.Close()
-			fmt.Fprintf(peer, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", len(body), body)
+			if status != 0 {
+				fmt.Fprintf(peer, "HTTP/1.1 %d Status\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", status, len(body), body)
+			}
 		}()
 		return a, nil
 	}}

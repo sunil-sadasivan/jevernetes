@@ -62,6 +62,10 @@ func Execute(ctx context.Context, args []string, in io.Reader, out, stderr io.Wr
 	cmd := New(in, out, stderr)
 	cmd.SetArgs(args)
 	err := cmd.ExecuteContext(ctx)
+	// Cobra's built-in help/usage renderers discard some writer errors.
+	if err == nil {
+		err = errors.Join(cmd.OutOrStdout().(*commandOutput).Err(), cmd.ErrOrStderr().(*commandOutput).Err())
+	}
 	if err == nil {
 		return 0
 	}
@@ -90,8 +94,7 @@ func newCommand(in io.Reader, out, stderr io.Writer, deps runtimeDeps) *cobra.Co
 	o := &options{unsupported: map[string]*string{}}
 	root := &cobra.Command{Use: "jevernetes", Short: "Bounded, read-only Kubernetes log analysis", Version: Version, SilenceUsage: true, SilenceErrors: true}
 	root.SetIn(in)
-	root.SetOut(out)
-	root.SetErr(stderr)
+	configureCommandOutput(root, out, stderr)
 	root.SetFlagErrorFunc(func(_ *cobra.Command, _ error) error { return exitError{2, "invalid command-line option; see --help"} })
 	f := root.PersistentFlags()
 	f.BoolVar(&o.offline, "offline", false, "Use deterministic local rules; no provider credentials or calls")
@@ -190,6 +193,7 @@ func newCommand(in io.Reader, out, stderr io.Writer, deps runtimeDeps) *cobra.Co
 		}})
 	}
 	root.CompletionOptions.DisableDefaultCmd = true
+	configureHelpCommand(root)
 	return root
 }
 func collectionFlags(c *cobra.Command, k *kube.Config) {

@@ -45,7 +45,7 @@ func (f SPDYForwarder) Open(ctx context.Context, namespace, pod string, port int
 	if err != nil {
 		return nil, errors.New("port-forward unavailable")
 	}
-	u, err := url.Parse(f.Config.Host)
+	u, _, err := rest.DefaultServerUrlFor(f.Config)
 	if err != nil {
 		return nil, errors.New("port-forward unavailable")
 	}

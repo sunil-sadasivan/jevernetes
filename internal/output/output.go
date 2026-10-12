@@ -65,6 +65,17 @@ func Write(ctx context.Context, w io.Writer, p []byte) (n int, err error) {
 	if err = ctx.Err(); err != nil {
 		return
 	}
+	// Wrappers around command descriptors must preserve the caller's lifecycle,
+	// including Final's independent grace window after command cancellation.
+	if contextual, ok := w.(interface {
+		WriteContext(context.Context, []byte) (int, error)
+	}); ok {
+		n, err = contextual.WriteContext(ctx, p)
+		if err == nil && n != len(p) {
+			err = io.ErrShortWrite
+		}
+		return
+	}
 	f, ok := w.(*os.File)
 	if !ok {
 		// Library-provided writers are synchronous trusted code (buffers in tests).

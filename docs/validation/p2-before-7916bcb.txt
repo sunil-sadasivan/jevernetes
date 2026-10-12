@@ -1,0 +1,79 @@
+Regression-first run at 7916bcb970384e96da5975e0bd47addeac484d5d.
+Only regression test files were changed; production files were untouched.
+Command: go test ./internal/kube ./internal/cli -run 'TestOIDCRefreshAuthMethods|TestSPDYResolvedServerURL|TestRender|TestUsageWriteFailure' -count=1
+Linker warnings omitted and trailing whitespace trimmed; failure output follows.
+
+--- FAIL: TestOIDCRefreshAuthMethods (0.09s)
+    --- FAIL: TestOIDCRefreshAuthMethods/post (0.00s)
+        auth_method_regression_test.go:91: refresh error=Get "https://api.fixture.invalid": Kubernetes OIDC credentials unavailable, want failure=false
+        auth_method_regression_test.go:110: rotation not persisted
+    --- FAIL: TestOIDCRefreshAuthMethods/omitted-400-auth (0.00s)
+        auth_method_regression_test.go:91: refresh error=Get "https://api.fixture.invalid": Kubernetes OIDC credentials unavailable, want failure=false
+        auth_method_regression_test.go:94: token requests=1, want 2
+        auth_method_regression_test.go:110: rotation not persisted
+    --- FAIL: TestOIDCRefreshAuthMethods/unsupported (0.00s)
+        auth_method_regression_test.go:94: token requests=1, want 0
+    --- FAIL: TestOIDCRefreshAuthMethods/explicit-basic-rejected (0.01s)
+        auth_method_regression_test.go:91: refresh error=<nil>, want failure=true
+        auth_method_regression_test.go:94: token requests=2, want 1
+        auth_method_regression_test.go:102: failed refresh changed credentials
+--- FAIL: TestSPDYResolvedServerURL (0.00s)
+    --- FAIL: TestSPDYResolvedServerURL/schemeless-http (0.00s)
+        server_url_regression_test.go:73: upgrade never reached resolved endpoint: EOF
+    --- FAIL: TestSPDYResolvedServerURL/schemeless-https (0.00s)
+        server_url_regression_test.go:73: upgrade never reached resolved endpoint: EOF
+FAIL
+FAIL	github.com/sunil-sadasivan/jevernetes/internal/kube	0.947s
+--- FAIL: TestRenderWriteFailures (0.00s)
+    --- FAIL: TestRenderWriteFailures/version/short (0.00s)
+        render_regression_test.go:37: write failure exit=0, want 1
+    --- FAIL: TestRenderWriteFailures/unknown-help/failed (0.00s)
+        render_regression_test.go:37: write failure exit=0, want 1
+    --- FAIL: TestRenderWriteFailures/unknown-help/short (0.00s)
+        render_regression_test.go:37: write failure exit=0, want 1
+    --- FAIL: TestRenderWriteFailures/help/failed (0.00s)
+        render_regression_test.go:37: write failure exit=0, want 1
+    --- FAIL: TestRenderWriteFailures/help/short (0.00s)
+        render_regression_test.go:37: write failure exit=0, want 1
+    --- FAIL: TestRenderWriteFailures/command-help/failed (0.00s)
+        render_regression_test.go:37: write failure exit=0, want 1
+    --- FAIL: TestRenderWriteFailures/command-help/short (0.00s)
+        render_regression_test.go:37: write failure exit=0, want 1
+    --- FAIL: TestRenderWriteFailures/help-command/failed (0.00s)
+        render_regression_test.go:37: write failure exit=0, want 1
+    --- FAIL: TestRenderWriteFailures/help-command/short (0.00s)
+        render_regression_test.go:37: write failure exit=0, want 1
+    --- FAIL: TestRenderWriteFailures/root/failed (0.00s)
+        render_regression_test.go:37: write failure exit=0, want 1
+    --- FAIL: TestRenderWriteFailures/root/short (0.00s)
+        render_regression_test.go:37: write failure exit=0, want 1
+--- FAIL: TestRenderBlockedPipe (48.07s)
+    --- FAIL: TestRenderBlockedPipe/help/cancel (4.01s)
+        render_regression_test.go:131: blocked render did not exit: signal: killed
+    --- FAIL: TestRenderBlockedPipe/help/signal (4.01s)
+        render_regression_test.go:131: blocked render did not exit: signal: killed
+    --- FAIL: TestRenderBlockedPipe/command-help/cancel (4.01s)
+        render_regression_test.go:131: blocked render did not exit: signal: killed
+    --- FAIL: TestRenderBlockedPipe/command-help/signal (4.01s)
+        render_regression_test.go:131: blocked render did not exit: signal: killed
+    --- FAIL: TestRenderBlockedPipe/help-command/cancel (4.01s)
+        render_regression_test.go:131: blocked render did not exit: signal: killed
+    --- FAIL: TestRenderBlockedPipe/help-command/signal (4.01s)
+        render_regression_test.go:131: blocked render did not exit: signal: killed
+    --- FAIL: TestRenderBlockedPipe/root/cancel (4.00s)
+        render_regression_test.go:131: blocked render did not exit: signal: killed
+    --- FAIL: TestRenderBlockedPipe/root/signal (4.01s)
+        render_regression_test.go:131: blocked render did not exit: signal: killed
+    --- FAIL: TestRenderBlockedPipe/version/cancel (4.01s)
+        render_regression_test.go:131: blocked render did not exit: signal: killed
+    --- FAIL: TestRenderBlockedPipe/version/signal (4.00s)
+        render_regression_test.go:131: blocked render did not exit: signal: killed
+    --- FAIL: TestRenderBlockedPipe/unknown-help/cancel (4.01s)
+        render_regression_test.go:131: blocked render did not exit: signal: killed
+    --- FAIL: TestRenderBlockedPipe/unknown-help/signal (4.01s)
+        render_regression_test.go:131: blocked render did not exit: signal: killed
+--- FAIL: TestUsageWriteFailure (0.00s)
+    render_regression_test.go:142: usage write error ignored
+FAIL
+FAIL	github.com/sunil-sadasivan/jevernetes/internal/cli	49.358s
+FAIL

@@ -16,6 +16,29 @@ import (
 type shortWriter struct{}
 
 func (shortWriter) Write(p []byte) (int, error) { return len(p) - 1, nil }
+
+type contextualWriter struct {
+	shortWriter
+	ctx context.Context
+}
+
+func (w *contextualWriter) WriteContext(ctx context.Context, p []byte) (int, error) {
+	w.ctx = ctx
+	return w.Write(p)
+}
+
+func TestContextWriterContracts(t *testing.T) {
+	w := &contextualWriter{}
+	ctx, cancel := context.WithCancel(context.Background())
+	if _, err := Write(ctx, w, []byte("xx")); !errors.Is(err, io.ErrShortWrite) || w.ctx != ctx {
+		t.Fatalf("context or short write lost: %v", err)
+	}
+	cancel()
+	w.ctx = nil
+	if _, err := Write(ctx, w, []byte("xx")); !errors.Is(err, context.Canceled) || w.ctx != nil {
+		t.Fatalf("cancelled writer invoked: %v", err)
+	}
+}
 func TestWriteContracts(t *testing.T) {
 	var b bytes.Buffer
 	if n, e := Write(context.Background(), &b, []byte("fixture\n")); e != nil || n != 8 || b.String() != "fixture\n" {

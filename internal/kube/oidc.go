@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -212,8 +213,9 @@ func refreshOIDC(ctx context.Context, c map[string]string, path string) (map[str
 		return nil, errOIDC
 	}
 	var meta struct {
-		Issuer   string `json:"issuer"`
-		Endpoint string `json:"token_endpoint"`
+		Issuer      string   `json:"issuer"`
+		Endpoint    string   `json:"token_endpoint"`
+		AuthMethods []string `json:"token_endpoint_auth_methods_supported"`
 	}
 	if json.Unmarshal(b, &meta) != nil || (meta.Issuer != "" && meta.Issuer != issuer) || !oidcURL(meta.Endpoint) {
 		return nil, errOIDC
@@ -222,12 +224,33 @@ func refreshOIDC(ctx context.Context, c map[string]string, path string) (map[str
 		return nil, errOIDC
 	}
 	form := url.Values{"grant_type": {"refresh_token"}, "refresh_token": {c["refresh-token"]}}
-	b, status, err = request("POST", meta.Endpoint, form.Encode(), true)
-	// Only explicit authentication rejection permits retry with client credentials
-	// in the body. Never replay a possibly consumed refresh after an I/O failure.
-	if err == nil && status == http.StatusUnauthorized {
+	basic := true
+	if meta.AuthMethods != nil && !slices.Contains(meta.AuthMethods, "client_secret_basic") {
+		if !slices.Contains(meta.AuthMethods, "client_secret_post") {
+			return nil, errOIDC
+		}
+		basic = false
+	}
+	bodyCredentials := func() {
 		form.Set("client_id", c["client-id"])
-		form.Set("client_secret", c["client-secret"])
+		if c["client-secret"] != "" {
+			form.Set("client_secret", c["client-secret"])
+		}
+	}
+	if !basic {
+		bodyCredentials()
+	}
+	b, status, err = request("POST", meta.Endpoint, form.Encode(), basic)
+	// Metadata-free providers retain OAuth's Basic-first compatibility probe,
+	// but only explicit authentication rejection permits a second request.
+	// Never replay an ambiguous response, invalid grant or I/O failure.
+	var rejection struct {
+		Code string `json:"error"`
+	}
+	explicitAuthFailure := status == http.StatusUnauthorized ||
+		(status == http.StatusBadRequest && json.Unmarshal(b, &rejection) == nil && rejection.Code == "invalid_client")
+	if meta.AuthMethods == nil && err == nil && explicitAuthFailure {
+		bodyCredentials()
 		b, status, err = request("POST", meta.Endpoint, form.Encode(), false)
 	}
 	if err != nil || status != 200 {

@@ -1,3 +1,40 @@
+# PR 23 compatibility and render lifecycle fixes — 2026-10-11
+
+This pass started clean at exactly `7916bcb970384e96da5975e0bd47addeac484d5d` on `fix/go-full-parity-20261011`. It fixes the three P2 findings from the subsequent blind review. Earlier entries below are historical; their host passes do not validate this change. Coexistence and `retirement_allowed=false` are unchanged. No push, deployment, remote changes, or live cluster/issuer/provider calls occurred.
+
+## Regression-first evidence and behavior
+
+[Pre-fix failures](docs/validation/p2-before-7916bcb.txt) were recorded before production edits. The new tests reproduced a post-only issuer rejecting Basic with HTTP 400, scheme-less HTTP/HTTPS SPDY requests never reaching the endpoint, swallowed help/usage/short-write errors, and twelve blocked-pipe child processes requiring termination after cancellation or SIGTERM.
+
+- OIDC discovery now selects advertised Basic or form-body client authentication before token dispatch. Basic is preferred when both are advertised; unsupported advertised lists fail without a token request. Missing metadata retains Basic-first compatibility, with one fallback only for HTTP 401 or a complete HTTP 400 JSON `invalid_client` response. Network failures, invalid grants and server errors are not replayed. Credential escaping, private atomic rotation, bounded cancellation, verified TLS, redirect/downgrade rejection and body limits remain in place.
+- SPDY uses `rest.DefaultServerUrlFor` for the upgrade URL, matching REST's scheme-less server and TLS defaults while retaining explicit URL prefixes. Local in-memory HTTP/TLS tests cover scheme-less HTTP, scheme-less HTTPS, explicit HTTPS, path prefixes and explicit SNI.
+- Cobra writes use the existing cancellable output ownership path and retain discarded writer errors for `Execute` to report. The help command returns usage errors instead of invoking Cobra's process-exit helper. Successful text and exit codes are checked against raw Cobra rendering. Failed/short writers return 1 and cancelled rendering returns 130. Application writes retain their own context, including the final-report grace window; custom blocking library writers still own their own cancellation.
+
+## Verification and remaining host boundary
+
+Native Darwin arm64, Go 1.27.1, Rust 1.94.0, Python 3.14.7 and Node 24.19.0. Commands used offline dependency settings (`GOPROXY=off`, `GOSUMDB=off`, `GOTOOLCHAIN=local`, `CARGO_NET_OFFLINE=true`, `PIP_NO_INDEX=1`) and an ignored worktree Go build cache. Logs and machine-readable test events are in `.cache/p2/`.
+
+| Check | Result |
+| --- | --- |
+| New focused regression tests | Passed before broad verification; seven initial top-level tests / 53 results including subtests. The later wrapper-contract test is included below. |
+| Exact new regression selection, `-race -count=2` | Passed: eight top-level tests per run, 16 executions / 108 results including subtests; all kube/cli/output packages passed. `regressions-race.json` |
+| Unfiltered kube/cli/output normal and race tests | Attempted; existing controller and Kubernetes wire listener fixtures fail because this sandbox denies TCP bind. Output passed. `focused.json`, `focused-race.json` |
+| Fresh affected-package normal supplement | Passed: 85 top-level tests / 250 results including subtests in kube/cli/output, with the six named TCP listener tests excluded. `nonlistener-focused.json` |
+| Whole repository fresh race supplement | Passed: 210 top-level tests / 555 results including subtests across 11 test packages; three command/example packages have no tests. Nine named listener-dependent tests were excluded at invocation, without modifying assertions. `nonlistener-race.json` |
+| `tools/check.sh` | Attempted; formatting, module tidy/diff and initial Go tests ran, then the gate stopped at existing listener failures. This is not a full host pass. `check.log` |
+| `python3 tools/check_parity.py --run` | Attempted; stopped in the first Go suite on the same controller listener restrictions. The executable inventory still requires a host run. `parity-run.log` |
+| Static parity | Passed: 14 workflows, 18 executable suites, all 60 retained assets byte/type/mode verified, retirement disabled. |
+| `tools/release.sh` | Passed: native build and aliases, SIGINT/SIGTERM final-report smoke, state preparation/migration/reopen, source archive byte comparison and privacy checks. `release.log` |
+| `node tools/check-release.mjs` | Passed source/privacy/container checks. |
+| Vet, module verification, Linux cross-builds | Passed `go vet ./...`, `go mod verify`, amd64/386/arm pure-Go builds. Module files unchanged. `remaining.json` |
+| Retained checks | Rust fmt/clippy/build and all three Rust PTYs passed. Six UI suites, Python release/package checks and retained mutation regression passed. Full Rust tests: 24 passed, 14 listener-dependent failures. Full Python discovery: 120 tests ran, one HTTP class setup failed on denied bind (four tests could not run). `remaining.json` and associated logs |
+
+The race supplement excluded `TestControllerDeliversNotificationOnlyJSONOnStdout`, `TestControllerBudgetStopsEvenWithHoldAndInspection`, `TestKubernetesWireSnapshotAndReconnectContracts`, `TestSPDYStalledUpgradeCancellation`, `TestSPDYAuthenticatedTLSAndProxy`, `TestSPDYRejectsUntrustedTLS`, `TestRealSPDYInspectionAndCancellationContract`, `TestProviderHTTPContracts`, and `TestRejectSpecialFilesAndAliases`. These are invocation exclusions, not removed tests. The safe-file parent assertions separately passed under race detection with only the `socket` subtest excluded (`safefile-race.json`). This environment does not permit escalating to an unrestricted host; no host, live-service, container-runtime or remote-CI result is implied.
+
+Retained Rust/Python runtime, package and test assets are unchanged from the starting commit and match the accepted retained base `3338ea130d7daaca9d4916985654c047af296612`; the previously accepted migration module is preserved. `go.mod` and `go.sum` are unchanged. The final report records the local commit, final diff/status checks and verification counts. A separate blind review follows; this entry makes no merge-readiness claim.
+
+---
+
 # OIDC rotation and output ownership — 2026-10-11
 
 Started clean on `fix/go-full-parity-20261011` at exactly `d6161ff0e29ed0e84047be8897974883441e2ede`. Read `CONTRIBUTING.md` and the relevant architecture, migration, usage and controller documentation; no applicable `AGENTS.md` was found. Independent host-level acceptance passed. HEAD remains `d6161ff0`; this fix pass is **unstaged and uncommitted**. No push, deployment, live issuer/provider/cluster access, retained runtime changes or runtime retirement occurred. Earlier validation entries below describe earlier changes, not this worktree.
