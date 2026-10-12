@@ -52,7 +52,7 @@ func (f SPDYForwarder) Open(ctx context.Context, namespace, pod string, port int
 	u.Path = strings.TrimSuffix(u.Path, "/") + "/api/v1/namespaces/" + url.PathEscape(namespace) + "/pods/" + url.PathEscape(pod) + "/portforward"
 	u.RawQuery = ""
 	u.Fragment = ""
-	client := &http.Client{Transport: rt, Timeout: 20 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("redirect rejected") }}
+	client := &http.Client{Transport: rt, Timeout: 20 * time.Second, CheckRedirect: rejectRedirect}
 	dialer := spdy.NewDialer(upgrader, client, "POST", u)
 	stop := make(chan struct{})
 	ready := make(chan struct{})

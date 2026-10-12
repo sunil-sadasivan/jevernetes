@@ -132,7 +132,7 @@ func (quietCollector) Snapshot(context.Context, func(event.Event) error, func(ev
 	return errors.New("unexpected snapshot")
 }
 
-func (c quietCollector) Follow(ctx context.Context, emit func(event.Event) error, _ func(event.Source, string)) error {
+func (c quietCollector) Follow(ctx context.Context, emit, finalize func(event.Event) error, _ func(event.Source, string)) error {
 	if c.stopped != nil {
 		defer close(c.stopped)
 	}
@@ -287,7 +287,7 @@ type streamingCollector struct{ stopped chan struct{} }
 func (streamingCollector) Snapshot(context.Context, func(event.Event) error, func(event.Source, string)) error {
 	return errors.New("unexpected snapshot")
 }
-func (c streamingCollector) Follow(ctx context.Context, emit func(event.Event) error, _ func(event.Source, string)) error {
+func (c streamingCollector) Follow(ctx context.Context, emit, finalize func(event.Event) error, _ func(event.Source, string)) error {
 	if c.stopped != nil {
 		defer close(c.stopped)
 	}

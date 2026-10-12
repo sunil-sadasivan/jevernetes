@@ -13,8 +13,9 @@ import (
 )
 
 // Follow bounds stream concurrency, polls discovery and preserves parser state over
-// reconnects. Queue ownership/backpressure belongs to the caller's emit function.
-func (c *Collector) Follow(ctx context.Context, emit func(event.Event) error, gap func(event.Source, string)) error {
+// reconnects. Queue ownership/backpressure belongs to the caller. finalize must
+// make bounded admissions of already-read evidence even after intake cancellation.
+func (c *Collector) Follow(ctx context.Context, emit, finalize func(event.Event) error, gap func(event.Source, string)) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var wg sync.WaitGroup
@@ -45,7 +46,7 @@ func (c *Collector) Follow(ctx context.Context, emit func(event.Event) error, ga
 				wg.Add(1)
 				go func(s stream, id string) {
 					defer wg.Done()
-					err := c.followStream(child, s, emit, gap)
+					err := c.followStreamWithFinalizer(child, s, emit, finalize, gap)
 					if err != nil && child.Err() == nil {
 						select {
 						case fatal <- err:
@@ -95,8 +96,22 @@ func (c *Collector) Follow(ctx context.Context, emit func(event.Event) error, ga
 	}
 }
 func (c *Collector) followStream(ctx context.Context, s stream, emit func(event.Event) error, gap func(event.Source, string)) error {
+	return c.followStreamWithFinalizer(ctx, s, emit, emit, gap)
+}
+
+func (c *Collector) followStreamWithFinalizer(ctx context.Context, s stream, emit, finalize func(event.Event) error, gap func(event.Source, string)) (result error) {
 	source := c.source(s)
 	parser := event.NewParser(source)
+	defer func() {
+		if ctx.Err() != nil {
+			for _, e := range parser.Finish(true) {
+				if err := finalize(e); err != nil {
+					result = err
+					break
+				}
+			}
+		}
+	}()
 	cursor := newCursor(func(reason string) { gap(source, reason) })
 	parser.AcceptLine = cursor.accept
 	validationDelay := 100 * time.Millisecond
@@ -123,9 +138,12 @@ func (c *Collector) followStream(ctx context.Context, s stream, emit func(event.
 			continue
 		}
 		validationDelay = 100 * time.Millisecond
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		r, err := c.OpenLog(ctx, s.pod.Namespace, s.pod.Name, opts)
 		if err == nil {
-			err = readLive(ctx, r, parser, emit)
+			err = readLiveWithFinalizer(ctx, r, parser, emit, finalize)
 			r.Close()
 		} else {
 			err = errStreamRead
@@ -135,11 +153,6 @@ func (c *Collector) followStream(ctx context.Context, s stream, emit func(event.
 			return consumer.err
 		}
 		if ctx.Err() != nil {
-			for _, e := range parser.Finish(true) {
-				if err := emit(e); err != nil {
-					return err
-				}
-			}
 			return ctx.Err()
 		}
 		if err != nil && err != errStreamRead {
@@ -173,6 +186,10 @@ var errStreamRead = errors.New("log transport interrupted")
 // A quiet interval is not an event boundary: only a new header or stream end
 // finalizes a multiline event. The pending event remains byte-bounded.
 func readLive(ctx context.Context, r io.ReadCloser, p *event.Parser, emit func(event.Event) error) error {
+	return readLiveWithFinalizer(ctx, r, p, emit, emit)
+}
+
+func readLiveWithFinalizer(ctx context.Context, r io.ReadCloser, p *event.Parser, emit, finalize func(event.Event) error) error {
 	type chunk struct {
 		data []byte
 		err  error
@@ -183,8 +200,12 @@ func readLive(ctx context.Context, r io.ReadCloser, p *event.Parser, emit func(e
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		defer close(ch)
 		buf := make([]byte, 8192)
 		for {
+			if ctx.Err() != nil {
+				return
+			}
 			n, err := r.Read(buf)
 			v := chunk{append([]byte{}, buf[:n]...), err}
 			select {
@@ -198,23 +219,53 @@ func readLive(ctx context.Context, r io.ReadCloser, p *event.Parser, emit func(e
 		}
 	}()
 	defer func() { close(stop); r.Close(); wg.Wait() }()
+	// Only chunks already read may outlive intake. Closing the reader and draining
+	// its bounded channel joins the in-flight Read without starting another one.
+	finishReads := func() error {
+		r.Close()
+		for v := range ch {
+			for _, e := range p.Feed(v.data) {
+				if err := finalize(e); err != nil {
+					return &consumerError{err}
+				}
+			}
+		}
+		return ctx.Err()
+	}
+	deliver := func(e event.Event) error {
+		if ctx.Err() != nil {
+			return finalize(e)
+		}
+		err := emit(e)
+		// Admission may observe cancellation after the check above. A rejected
+		// admission can still use the bounded final path; cap/errors are final.
+		if ctx.Err() != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+			return finalize(e)
+		}
+		return err
+	}
 	for {
+		if ctx.Err() != nil {
+			return finishReads()
+		}
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
-		case v := <-ch:
+			return finishReads()
+		case v, ok := <-ch:
+			if !ok {
+				return ctx.Err()
+			}
 			for _, e := range p.Feed(v.data) {
-				if err := emit(e); err != nil {
+				if err := deliver(e); err != nil {
 					return &consumerError{err}
 				}
 			}
 			if v.err != nil {
-				for _, e := range p.Finish(v.err != io.EOF) {
-					if err := emit(e); err != nil {
+				for _, e := range p.Finish(v.err != io.EOF || ctx.Err() != nil) {
+					if err := deliver(e); err != nil {
 						return &consumerError{err}
 					}
 				}
-
 				return errStreamRead
 			}
 		}

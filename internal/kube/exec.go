@@ -127,7 +127,13 @@ func HTTPClientFor(cfg *rest.Config) (*http.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &http.Client{Transport: rt, Timeout: cfg.Timeout}, nil
+	return &http.Client{Transport: rt, Timeout: cfg.Timeout, CheckRedirect: rejectRedirect}, nil
+}
+
+// Reject before another RoundTrip: auth wrappers can reattach credentials even
+// when net/http strips Authorization on a cross-host redirect.
+func rejectRedirect(*http.Request, []*http.Request) error {
+	return errors.New("redirect rejected")
 }
 
 type execCredentials struct {

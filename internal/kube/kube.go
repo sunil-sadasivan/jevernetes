@@ -115,7 +115,6 @@ func New(cfg *rest.Config, c Config) (*Collector, error) {
 	if err != nil {
 		return nil, errors.New("Kubernetes transport unavailable")
 	}
-	httpClient.CheckRedirect = func(*http.Request, []*http.Request) error { return errors.New("redirect rejected") }
 	client, err := core.NewForConfigAndClient(copy, httpClient)
 	if err != nil {
 		return nil, errors.New("Kubernetes client unavailable")

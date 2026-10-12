@@ -1,3 +1,42 @@
+# Discovery redirects and shutdown draining — 2026-10-11
+
+Started at exact clean HEAD `eb5a98e3042cd29e7c334318fdd441e3ce4b526d` in the staged-coexistence worktree. Only this worktree was changed. No push, PR change, deployment or live service access occurred. Earlier entries below describe previous changes.
+
+## Regression-first evidence
+
+Before production edits, the new focused tests reproduced all three findings:
+
+- In-memory discovery transports observed a second authenticated request after both cross-host and same-host redirects, for bearer credentials and a credential-attaching wrapper.
+- With four admitted events, a delayed provider and plain output, cancellation saved only one event to the report. The controller variant also persisted only one `seen` row. Both variants now retain all four across the active batch and queue.
+- A live fake Kubernetes stream containing one timestamped quiet ERROR saved zero events on duration expiry and cancellation. Both now retain the event with truncated/parse-uncertain evidence and a conservative judgment.
+
+## Changes and bounds
+
+`HTTPClientFor` installs a reject-all redirect policy at the shared discovery/log HTTP client boundary; SPDY uses the same policy. Auth wrappers, TLS, OIDC refresh and exec credential behavior are otherwise unchanged.
+
+Plain evidence output is optional to persistence/report draining. A failed write stops fresh intake, suppresses subsequent evidence writes and is surfaced after admitted work and the saved report complete. Each evidence write has a one-second bound and process cancellation; cancelled processing skips optional evidence output. Final report output retains its existing independent one-second grace period. Tests also cover blocked output, failing writers, cancellation during a write and exit 130.
+
+Live stream finalization has a distinct nonblocking admission callback, sharing the normal admission lock, exact event cap and bounded queue/drop accounting. Cancellation closes and joins readers, drains only the bounded already-read chunks and conservatively finishes pending parser evidence. Readers check cancellation before opening/reading again. Additional tests cancel inside a Read, verify the reader is closed/joined without another read, and saturate final admission at both the queue bound and event cap.
+
+## Verification
+
+Validation uses the ignored worktree Go build cache, Node 24 and the existing Python virtual environment, with dependency network access disabled. Local fixture listeners required sandbox escalation; no tests were excluded or weakened. Focused regressions passed, including 30 repetitions of cancellation inside a Read. Unfiltered `go test -race ./internal/kube ./internal/cli -count=1` passed without race reports. The cancellation-during-write exit regression was added afterward and passes separately; the full repository gate includes it under race detection.
+
+| Check | Result |
+| --- | --- |
+| Focused regressions and touched-package race tests | Passed; no race reports. |
+| `tools/check.sh` | Passed: all Go tests/race/vet, tidy with no module diff, Linux amd64/386/arm cross-builds, six UI suites, 124 Python tests, retained-inventory and source/privacy checks. |
+| `python3 tools/check_parity.py --run` | Passed: 14 workflows, 18 executable suites, 60 retained assets verified byte-for-byte and by mode; retirement disabled. Rust reported 38 unit and 7 contract tests passing. |
+| `tools/release.sh` | Passed: native build/alias, SIGINT/SIGTERM report smoke, private state/migration/reopen smoke, source archive byte comparison and privacy checks. |
+| Retained contribution checks | `cargo fmt --check`, offline clippy with warnings denied, offline build and all three terminal PTY cases passed. |
+| Formatting and diff inspection | Touched Go files formatted; `git diff --check` clean; module and retained runtime files unchanged. |
+
+Logs are ignored under `.cache/p2-*.log`.
+
+Finalization remains subject to the configured queue and event cap: evidence that cannot be admitted is accounted as queue loss or event-limit coverage. Private persistence failures retain their existing fatal semantics. Arbitrary library writers must implement their own context ownership. No live cluster/provider validation is claimed. Coexistence, retained runtime assets, migration and cache identity are unchanged; retirement remains disabled.
+
+---
+
 # PR 23 compatibility and render lifecycle fixes — 2026-10-11
 
 This pass started clean at exactly `7916bcb970384e96da5975e0bd47addeac484d5d` on `fix/go-full-parity-20261011`. It fixes the three P2 findings from the subsequent blind review. Earlier entries below are historical; their host passes do not validate this change. Coexistence and `retirement_allowed=false` are unchanged. No push, deployment, remote changes, or live cluster/issuer/provider calls occurred.

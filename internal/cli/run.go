@@ -42,7 +42,7 @@ type riskProvider interface {
 	Usage() provider.Usage
 }
 type logCollector interface {
-	Follow(context.Context, func(event.Event) error, func(event.Source, string)) error
+	Follow(context.Context, func(event.Event) error, func(event.Event) error, func(event.Source, string)) error
 	Snapshot(context.Context, func(event.Event) error, func(event.Source, string)) error
 }
 
@@ -203,21 +203,21 @@ func (o *options) runWith(cmd *cobra.Command, paths []string, stdin io.Reader, d
 	// stops intake without racing or cancelling earlier admissions.
 	var admission sync.Mutex
 	total := 0
-	emit := func(e event.Event) error {
+	admit := func(e event.Event, final bool) error {
 		admission.Lock()
 		defer admission.Unlock()
 		if o.maxEvents > 0 && total >= o.maxEvents {
 			return errCap
 		}
-		if err := ctx.Err(); err != nil {
-			return err
+		if !final {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 		}
 		state.Add("received", 1)
 		if o.k.Follow {
 			select {
 			case in <- e:
-			case <-ctx.Done():
-				return ctx.Err()
 			default:
 				state.Add("dropped", 1)
 				gap(e.Source, "queue_drop")
@@ -238,6 +238,10 @@ func (o *options) runWith(cmd *cobra.Command, paths []string, stdin io.Reader, d
 		}
 		return nil
 	}
+	// Finalization never waits for space or reads more input. It shares the
+	// admission lock and cap with normal intake and reports bounded queue loss.
+	emit := func(e event.Event) error { return admit(e, false) }
+	finalize := func(e event.Event) error { return admit(e, true) }
 	var collector logCollector
 	if paths == nil {
 		collector, err = deps.collector(o.k)
@@ -276,13 +280,14 @@ func (o *options) runWith(cmd *cobra.Command, paths []string, stdin io.Reader, d
 			return
 		}
 		if o.k.Follow {
-			collected <- collector.Follow(ctx, emit, gap)
+			collected <- collector.Follow(ctx, emit, finalize, gap)
 		} else {
 			collected <- collector.Snapshot(ctx, emit, gap)
 		}
 	}()
 	state.Ready.Store(true)
 	budgetStopped := false
+	var evidenceErr error
 	// Intake limits stop producers only. Admitted provider work uses the process
 	// context and drains; operator cancellation still interrupts it.
 	analysisErr := engine.Run(process, in, func(e event.Event) error {
@@ -312,7 +317,7 @@ func (o *options) runWith(cmd *cobra.Command, paths []string, stdin io.Reader, d
 			}
 		}
 		r.Add(e)
-		if !o.json {
+		if !o.json && evidenceErr == nil && process.Err() == nil {
 			writer := cmd.OutOrStdout()
 			if store != nil {
 				writer = cmd.ErrOrStderr()
@@ -326,8 +331,13 @@ func (o *options) runWith(cmd *cobra.Command, paths []string, stdin io.Reader, d
 			if e.AnalysisError != "" {
 				fmt.Fprintf(&evidence, "  analysis: %s\n", event.Console(e.AnalysisError))
 			}
-			if _, err := output.Write(process, writer, evidence.Bytes()); err != nil {
-				return err
+			writeCtx, stop := context.WithTimeout(process, time.Second)
+			_, evidenceErr = output.Write(writeCtx, writer, evidence.Bytes())
+			stop()
+			if evidenceErr != nil {
+				// Stop fresh intake and suppress further evidence writes, but
+				// persist/report every admitted event before surfacing the error.
+				cancel()
 			}
 		}
 		if e.Truncated {
@@ -404,7 +414,7 @@ func (o *options) runWith(cmd *cobra.Command, paths []string, stdin io.Reader, d
 		if output.Final(cmd.OutOrStdout(), func(w io.Writer) error { return json.NewEncoder(w).Encode(value) }) != nil {
 			return errors.New("cannot write report output")
 		}
-	} else {
+	} else if evidenceErr == nil {
 		summary := value["summary"].(map[string]any)
 		writer := cmd.OutOrStdout()
 		if store != nil {
@@ -422,6 +432,9 @@ func (o *options) runWith(cmd *cobra.Command, paths []string, stdin io.Reader, d
 	}
 	if cmd.Context().Err() != nil {
 		return cmd.Context().Err()
+	}
+	if evidenceErr != nil {
+		return fmt.Errorf("cannot write evidence output: %w", evidenceErr)
 	}
 	if analysisErr != nil && !errors.Is(analysisErr, context.Canceled) && !errors.Is(analysisErr, context.DeadlineExceeded) {
 		return analysisErr
