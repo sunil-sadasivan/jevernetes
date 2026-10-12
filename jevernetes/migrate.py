@@ -94,7 +94,12 @@ def import_reviews(source, destination):
         if existing != value:
             raise ValueError('Destination differs; nothing overwritten. Choose a new destination')
         return False
-    raw = (json.dumps(value, ensure_ascii=False, indent=2) + '\n').encode()
+    raw = (json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(',', ':')) + '\n').encode()
+    # Compact output avoids whitespace expansion. Normalized numbers and other
+    # extension data can still grow, so check the encoded bytes before creating
+    # any publishable file. Every successful import must fit _read on rerun.
+    if len(raw) > MAX_BYTES:
+        raise ValueError('Serialized review rules exceed import limit')
     fd, temporary = tempfile.mkstemp(prefix='.review-import-', dir=destination.parent)
     try:
         with os.fdopen(fd, 'wb') as stream:

@@ -60,3 +60,47 @@ class RetainedParityTests(unittest.TestCase):
                             path.unlink()
                         path.write_bytes(b'retained bytes\n')
                         path.chmod(mode)
+
+    def test_explicit_repair_remains_byte_and_mode_pinned(self):
+        import hashlib
+        root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            def git(*args):
+                return subprocess.check_output(['git', *args], cwd=repo)
+            git('init', '-b', 'fixture')
+            git('config', 'user.name', 'Fixture')
+            git('config', 'user.email', 'fixture@example.invalid')
+            path = repo / 'jevernetes/migrate.py'
+            path.parent.mkdir()
+            path.write_bytes(b'original\n')
+            git('add', '.')
+            git('-c', 'commit.gpgsign=false', 'commit', '-m', 'base')
+            original_blob = git('rev-parse', 'HEAD:jevernetes/migrate.py').decode().strip()
+            path.write_bytes(b'repaired\n')
+            inventory = {'base': git('rev-parse', 'HEAD').decode().strip(),
+                         'retirement_allowed': False, 'workflows': [],
+                         'retained_repairs': {'jevernetes/migrate.py': {
+                             'base_blob': original_blob,
+                             'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}}}
+            (repo / 'tests').mkdir()
+            manifest = repo / 'tests/parity.json'
+            manifest.write_text(json.dumps(inventory))
+            shutil.copy(root / 'tools/check_parity.py', repo / 'check_parity.py')
+            def parity():
+                return subprocess.run([sys.executable, 'check_parity.py'], cwd=repo,
+                                      capture_output=True, text=True).returncode
+            self.assertEqual(parity(), 0)
+            path.write_bytes(b'unreviewed change\n')
+            self.assertNotEqual(parity(), 0)
+            path.write_bytes(b'repaired\n')
+            path.chmod(0o755)
+            self.assertNotEqual(parity(), 0)
+            path.chmod(0o644)
+            inventory['retained_repairs']['jevernetes/migrate.py']['base_blob'] = '0' * 40
+            manifest.write_text(json.dumps(inventory))
+            self.assertNotEqual(parity(), 0)
+            inventory['retained_repairs']['jevernetes/migrate.py']['base_blob'] = original_blob
+            inventory['retained_repairs']['not-retained'] = {}
+            manifest.write_text(json.dumps(inventory))
+            self.assertNotEqual(parity(), 0)

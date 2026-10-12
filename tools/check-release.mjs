@@ -88,5 +88,8 @@ for (const resource of resources.items) {
 }
 const docker=readRegular('Dockerfile','utf8');
 if (!docker.includes('CGO_ENABLED=0 go build')||!docker.includes('USER 65532:65532')||!docker.includes('ARG GO_IMAGE')) throw new Error('Container build contract');
+assert.ok(docker.indexOf('COPY third_party/spdystream ./third_party/spdystream') >= 0);
+assert.ok(readRegular('.dockerignore','utf8').split('\n').includes('!third_party/spdystream/**'));
+assert.ok(docker.indexOf('COPY third_party/spdystream ./third_party/spdystream') < docker.indexOf('RUN go mod download'));
 assert.match(docker,/ENTRYPOINT \["\/usr\/local\/bin\/jevernetes"\]/);
 console.log(`Checked ${files.length} source files (${textCount} text): coexisting runtimes included; credential/personal-path signatures=0; private/build paths=0; controller/container checks passed.`);

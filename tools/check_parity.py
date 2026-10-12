@@ -1,5 +1,6 @@
 """Executable acceptance inventory. --run executes each unique hermetic suite."""
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import shlex
@@ -21,12 +22,16 @@ for row in inventory['workflows']:
         if command not in commands:
             commands.append(command)
 # Compare raw git blobs and git file modes, independently of the index and
-# core.fileMode. New acceptance tests may be added; base assets stay immutable.
+# core.fileMode. New tests may be added; reviewed repairs pin replacement bytes.
 packages = {'Cargo.toml', 'Cargo.lock', 'pyproject.toml', 'MANIFEST.in',
             'requirements-dev.txt'}
 # The historical workflow base remains above; retained_base pins the exact
 # accepted coexistence tree, including its package/test adaptations and additions.
 base = subprocess.check_output(['git', 'ls-tree', '-rz', inventory.get('retained_base', inventory['base'])])
+# Explicit repairs retain the original blob identity and pin the reviewed new
+# bytes. No path is excluded from mode, symlink, existence, or content checks.
+repairs = inventory.get('retained_repairs', {})
+seen_repairs = set()
 retained = 0
 for entry in base.split(b'\0'):
     if not entry:
@@ -44,8 +49,15 @@ for entry in base.split(b'\0'):
     expected_mode = int(mode, 8) & 0o7777
     assert kind == b'blob' and stat.S_ISREG(info.st_mode) and stat.S_IMODE(info.st_mode) == expected_mode, f"Retained asset mode changed: {name}"
     expected = subprocess.check_output(['git', 'cat-file', 'blob', oid.decode()])
-    assert path.read_bytes() == expected, f"Retained asset bytes changed: {name}"
+    if name in repairs:
+        repair = repairs[name]
+        assert repair['base_blob'] == oid.decode(), f"Repair base changed: {name}"
+        assert hashlib.sha256(path.read_bytes()).hexdigest() == repair['sha256'], f"Retained repair bytes changed: {name}"
+        seen_repairs.add(name)
+    else:
+        assert path.read_bytes() == expected, f"Retained asset bytes changed: {name}"
     retained += 1
+assert seen_repairs == set(repairs), "Repair does not name a retained asset"
 if args.run:
     for command in commands:
         print(command, flush=True)

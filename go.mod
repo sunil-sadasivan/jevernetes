@@ -2,6 +2,9 @@ module github.com/sunil-sadasivan/jevernetes
 
 go 1.25.0
 
+// Pinned v0.5.0 with bounded receive decoding; see third_party/spdystream/README.md.
+replace github.com/moby/spdystream => ./third_party/spdystream
+
 require (
 	github.com/go-logr/logr v1.4.3
 	github.com/moby/spdystream v0.5.0

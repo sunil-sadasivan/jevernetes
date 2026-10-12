@@ -4,6 +4,7 @@ ARG RUNTIME_IMAGE
 FROM ${GO_IMAGE} AS build
 WORKDIR /build
 COPY go.mod go.sum ./
+COPY third_party/spdystream ./third_party/spdystream
 RUN go mod download
 COPY cmd ./cmd
 COPY internal ./internal

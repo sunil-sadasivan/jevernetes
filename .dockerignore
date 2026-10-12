@@ -5,3 +5,6 @@
 !cmd/**
 !internal/
 !internal/**
+!third_party/
+!third_party/spdystream/
+!third_party/spdystream/**

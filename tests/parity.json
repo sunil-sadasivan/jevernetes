@@ -182,5 +182,11 @@
       ],
       "commands": []
     }
-  ]
+  ],
+  "retained_repairs": {
+    "jevernetes/migrate.py": {
+      "base_blob": "bdca7f3b2d902e4fe627ae51d5255063e33743a7",
+      "sha256": "865224be2639f25edd5b06ac5590e53cdd0cd06bf6e623ab9ae56f0ce78ddd76"
+    }
+  }
 }
