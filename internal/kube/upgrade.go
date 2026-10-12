@@ -22,10 +22,12 @@ import (
 
 // One instance per Open, like client-go's stateful SPDY upgrader. The raw
 // connection is cancellable before proxy/TLS negotiation or ReadResponse starts.
-// client-go still owns dialing, auth wrappers and SPDY stream handling.
+// The tunnel owns raw socket shutdown; client-go owns SPDY stream cleanup.
 type cancellableSPDY struct {
 	base   *streamspdy.SpdyRoundTripper
+	mu     sync.Mutex // protects socket publication against tunnel shutdown
 	socket *upgradeSocket
+	closed bool
 	conn   net.Conn
 }
 
@@ -63,8 +65,17 @@ func newCancellableSPDY(tc *transport.Config, tlsConfig *tls.Config, targetHost 
 				if err != nil {
 					return nil, err
 				}
-				s.socket = newUpgradeSocket(ctx, conn)
-				return s.socket, nil
+				socket := newUpgradeSocket(ctx, conn)
+				s.mu.Lock()
+				s.socket = socket
+				closed := s.closed
+				s.mu.Unlock()
+				// Cancellation may precede a custom dialer's return. Never
+				// publish a live socket after its owner has already shut down.
+				if closed {
+					_ = socket.Close()
+				}
+				return socket, nil
 			}
 			if p == nil {
 				return rawDial(ctx, network, address)
@@ -250,7 +261,8 @@ func (s *cancellableSPDY) NewConnection(response *http.Response) (httpstream.Con
 			s.socket.Close()
 		} else {
 			// Negotiate closes the response body (and its request context) on success.
-			// Once upgraded, portforward owns socket closure through the tunnel stop.
+			// Detach only HTTP cancellation. The tunnel retains raw socket
+			// ownership and closes it before waiting for portforward cleanup.
 			s.socket.detach()
 		}
 	}
@@ -292,18 +304,21 @@ func (b *rejectedUpgradeBody) Close() error {
 	return b.body.Close()
 }
 
-// Cancellation closes the underlying socket, never this wrapper (which joins
-// that callback). Close and detach join it even when cancellation races success.
+// HTTP cancellation and tunnel/SPDY cleanup share exactly-once raw closure.
+// The callback must not call Close, which joins that same callback. Detaching
+// HTTP cancellation after upgrade does not relinquish tunnel ownership.
 type upgradeSocket struct {
 	net.Conn
-	stop func() bool
-	done chan struct{}
-	once sync.Once
+	stop      func() bool
+	done      chan struct{}
+	once      sync.Once
+	closeOnce sync.Once
+	closeErr  error
 }
 
 func newUpgradeSocket(ctx context.Context, conn net.Conn) *upgradeSocket {
 	c := &upgradeSocket{Conn: conn, done: make(chan struct{})}
-	c.stop = context.AfterFunc(ctx, func() { conn.Close(); close(c.done) })
+	c.stop = context.AfterFunc(ctx, func() { c.closeRaw(); close(c.done) })
 	return c
 }
 func (c *upgradeSocket) detach() {
@@ -313,12 +328,21 @@ func (c *upgradeSocket) detach() {
 		}
 	})
 }
-func (c *upgradeSocket) Close() error { err := c.Conn.Close(); c.detach(); return err }
+func (c *upgradeSocket) closeRaw() error {
+	c.closeOnce.Do(func() { c.closeErr = c.Conn.Close() })
+	return c.closeErr
+}
+func (c *upgradeSocket) Close() error { err := c.closeRaw(); c.detach(); return err }
 
-// Called after ForwardPorts joins, including redirect/auth/validation failures
-// where client-go never calls NewConnection.
+// Called before signaling tunnel stop and again after ForwardPorts joins,
+// including failures where client-go never calls NewConnection. Socket
+// registration and shutdown can race while a custom dialer is returning.
 func (s *cancellableSPDY) close() {
-	if s.socket != nil {
-		_ = s.socket.Close()
+	s.mu.Lock()
+	s.closed = true
+	socket := s.socket
+	s.mu.Unlock()
+	if socket != nil {
+		_ = socket.Close()
 	}
 }

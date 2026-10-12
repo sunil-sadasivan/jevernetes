@@ -29,14 +29,24 @@ type Forwarder interface {
 }
 type SPDYForwarder struct{ Config *rest.Config }
 type tunnel struct {
-	url  string
-	stop chan struct{}
-	done chan struct{}
-	once sync.Once
+	url         string
+	stop        chan struct{}
+	done        chan struct{}
+	once        sync.Once
+	closeSocket func()
 }
 
 func (t *tunnel) BaseURL() string { return t.url }
-func (t *tunnel) Close() error    { t.once.Do(func() { close(t.stop) }); <-t.done; return nil }
+func (t *tunnel) shutdown() {
+	t.once.Do(func() {
+		// client-go v0.35.3 resets streams and moby/spdystream v0.5.0
+		// writes GOAWAY synchronously before closing the connection. Interrupt
+		// raw I/O first so a non-reading peer cannot block that cleanup.
+		t.closeSocket()
+		close(t.stop)
+	})
+}
+func (t *tunnel) Close() error { t.shutdown(); <-t.done; return nil }
 func (f SPDYForwarder) Open(ctx context.Context, namespace, pod string, port int) (Tunnel, error) {
 	if port < 1 || port > 65535 {
 		return nil, errors.New("invalid inspection port")
@@ -60,14 +70,14 @@ func (f SPDYForwarder) Open(ctx context.Context, namespace, pod string, port int
 	if err != nil {
 		return nil, errors.New("port-forward unavailable")
 	}
-	t := &tunnel{stop: stop, done: make(chan struct{})}
+	t := &tunnel{stop: stop, done: make(chan struct{}), closeSocket: upgrader.close}
 	result := make(chan error, 1)
 	go func() {
 		defer close(t.done)
 		defer upgrader.close()
 		watched := make(chan struct{})
 		stopWatch := context.AfterFunc(ctx, func() {
-			t.once.Do(func() { close(t.stop) })
+			t.shutdown()
 			close(watched)
 		})
 		defer func() {
