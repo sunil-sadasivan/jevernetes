@@ -79,18 +79,26 @@ type Assessment struct {
 	SamplesLimited    bool   `json:"samples_limited"`
 	Reason            string `json:"reason"`
 }
+type Occurrences struct {
+	Count int     `json:"count"`
+	First *string `json:"first_seen"`
+	Last  *string `json:"last_seen"`
+}
 type Event struct {
-	ID             string  `json:"id"`
-	Source         Source  `json:"source"`
-	Timestamp      *string `json:"timestamp"`
-	Text           string  `json:"text"`
-	LineStart      uint64  `json:"line_start"`
-	LineEnd        uint64  `json:"line_end"`
-	LineCount      uint64  `json:"line_count"`
-	Truncated      bool    `json:"truncated"`
-	Sensitive      bool    `json:"sensitive"`
-	ParseUncertain bool    `json:"parse_uncertain,omitempty"`
-	GroupID        string  `json:"group_id"`
+	Review            map[string]any `json:"review,omitempty"`
+	OriginalJudgment  *Judgment      `json:"original_judgment,omitempty"`
+	SearchOccurrences *Occurrences   `json:"search_occurrences,omitempty"`
+	ID                string         `json:"id"`
+	Source            Source         `json:"source"`
+	Timestamp         *string        `json:"timestamp"`
+	Text              string         `json:"text"`
+	LineStart         uint64         `json:"line_start"`
+	LineEnd           uint64         `json:"line_end"`
+	LineCount         uint64         `json:"line_count"`
+	Truncated         bool           `json:"truncated"`
+	Sensitive         bool           `json:"sensitive"`
+	ParseUncertain    bool           `json:"parse_uncertain,omitempty"`
+	GroupID           string         `json:"group_id"`
 	Judgment
 	Baseline         Baseline    `json:"baseline"`
 	AnalysisReused   bool        `json:"analysis_reused"`
@@ -357,6 +365,18 @@ func (p *Parser) finishLine(partial bool) *Event {
 	p.goStack = goStart || goHeader.MatchString(text)
 	p.pending = &Event{Source: p.source, Timestamp: ts, Text: Clip(safe, MaxEvent), LineStart: p.line, LineEnd: p.line, LineCount: 1, Truncated: trunc || len(safe) > MaxEvent, Sensitive: changed || p.sourceSensitive, ParseUncertain: partial || invalid || ambiguous || orphan || (p.transport && !transportStamp), Judgment: Unknown("")}
 	return prev
+}
+
+// Preview returns detached, unclassified evidence without finalizing a frame.
+func (p *Parser) Preview() *Event {
+	if p.pending == nil {
+		return nil
+	}
+	e := *p.pending
+	e.Source = SafeSource(e.Source)
+	e.ID = Hash([]any{e.Source, e.Timestamp, e.LineStart, e.Text})[:20]
+	e.Judgment = Judgment{Importance: "pending", Severity: "unknown", Category: "unknown"}
+	return &e
 }
 func (p *Parser) Flush() *Event {
 	e := p.pending

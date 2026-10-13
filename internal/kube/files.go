@@ -17,7 +17,7 @@ import (
 // Load bytes ourselves: client-go's pathname loader and TLS/token helpers use
 // blocking opens. Preserve first-file-wins merging and origin-relative paths,
 // without its optional migration writes or implicit in-cluster fallback.
-func loadLocal(ctx context.Context, current string) (*rest.Config, error) {
+func loadLocal(ctx context.Context, current string, resolved ...*string) (*rest.Config, error) {
 	paths := clientcmd.NewDefaultClientConfigLoadingRules().GetLoadingPrecedence()
 	if len(paths) > 32 {
 		return nil, errors.New("too many configuration files")
@@ -71,6 +71,9 @@ func loadLocal(ctx context.Context, current string) (*rest.Config, error) {
 	}
 	if current == "" {
 		current = merged.CurrentContext
+	}
+	if len(resolved) > 0 && resolved[0] != nil {
+		*resolved[0] = current
 	}
 	selected := merged.Contexts[current]
 	if selected == nil {

@@ -92,6 +92,13 @@ func (r *Report) Snapshot(mode string, scope any, live bool, usage provider.Usag
 		Count    int          `json:"count"`
 		IDs      []string     `json:"event_ids"`
 	}
+	sources := map[string]bool{}
+	for _, e := range events {
+		sources[event.Hash(e.Source)] = true
+	}
+	for _, c := range coverage {
+		sources[event.Hash(c.Source)] = true
+	}
 	byID := map[string]*group{}
 	for _, e := range events {
 		if e.Importance != "important" {
@@ -116,7 +123,7 @@ func (r *Report) Snapshot(mode string, scope any, live bool, usage provider.Usag
 		return groups[i].ID < groups[j].ID
 	})
 	complete := Complete(live, m) && r.counts["unknown"] == 0
-	return map[string]any{"schema_version": 2, "runtime": "go", "created_at": time.Now().UTC().Format(time.RFC3339), "mode": mode, "scope": scope, "summary": map[string]any{"events": r.total, "lines": r.lines, "important": r.counts["important"], "routine": r.counts["routine"], "uncertain": r.counts["uncertain"], "unknown": r.counts["unknown"], "coverage_gaps": r.gaps, "api_requests": usage.Attempts, "total_api_requests": usage.Attempts, "total_estimated_cost_usd": usage.Cost, "reused_events": r.reused, "elapsed_seconds": time.Since(r.started).Seconds(), "complete_within_window": complete, "retained_events": len(events), "evicted_events": r.evicted}, "provider_usage": map[string]any{"risk": usage, "template": nil}, "usage": usage, "metrics": m, "events": events, "coverage": coverage, "important_groups": groups, "adaptive_learning": checkpoint, "template_learning": nil, "template_refinement": nil, "reviewed_template_rules": nil, "risk_contract": nil, "batches": m["provider_batches"]}
+	return map[string]any{"schema_version": 2, "runtime": "go", "created_at": time.Now().UTC().Format(time.RFC3339), "mode": mode, "scope": scope, "summary": map[string]any{"events": r.total, "lines": r.lines, "streams": len(sources), "source_count_scope": "retained events and coverage", "important": r.counts["important"], "routine": r.counts["routine"], "uncertain": r.counts["uncertain"], "unknown": r.counts["unknown"], "coverage_gaps": r.gaps, "api_requests": usage.Attempts, "total_api_requests": usage.Attempts, "total_estimated_cost_usd": usage.Cost, "reused_events": r.reused, "elapsed_seconds": time.Since(r.started).Seconds(), "complete_within_window": complete, "retained_events": len(events), "evicted_events": r.evicted}, "provider_usage": map[string]any{"risk": usage, "template": nil}, "usage": usage, "metrics": m, "events": events, "coverage": coverage, "important_groups": groups, "adaptive_learning": checkpoint, "template_learning": nil, "template_refinement": nil, "reviewed_template_rules": nil, "risk_contract": nil, "batches": m["provider_batches"]}
 }
 func Write(path string, value any) error {
 	parent := filepath.Dir(path)

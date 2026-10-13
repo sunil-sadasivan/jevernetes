@@ -12,6 +12,8 @@ fi
 unlink dist/bin/jev-go 2>/dev/null || true
 ln dist/bin/jevernetes-go dist/bin/jev-go
 node tools/smoke.mjs
+python3 tests/go_tui_pty.py dist/bin/jevernetes-go
+python3 tools/go-dashboard-smoke.py dist/bin/jevernetes-go
 # Only explicit product files enter the binary archive.
 tar -czf dist/jevernetes-go-binary.tar.gz -C dist/bin jevernetes-go jev-go -C ../.. LICENSE README.md
 # Use the worktree file list so a verified but uncommitted tree can be packaged.

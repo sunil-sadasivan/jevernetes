@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -14,6 +16,7 @@ import (
 	"github.com/sunil-sadasivan/jevernetes/internal/controller"
 	"github.com/sunil-sadasivan/jevernetes/internal/dashboard"
 	"github.com/sunil-sadasivan/jevernetes/internal/inspect"
+	"github.com/sunil-sadasivan/jevernetes/internal/investigation"
 	"github.com/sunil-sadasivan/jevernetes/internal/kube"
 	"github.com/sunil-sadasivan/jevernetes/internal/output"
 	"github.com/sunil-sadasivan/jevernetes/internal/report"
@@ -121,8 +124,16 @@ func remoteCommand(o *options) *cobra.Command {
 func dashboardCommand(o *options) *cobra.Command {
 	k := kube.Config{MaxBytes: 32 << 20, MaxStreams: 64}
 	var port, interval int
-	var listen, path, binary string
-	c := &cobra.Command{Use: "dashboard", Short: "Serve a read-only loopback report and controller dashboard", Args: cobra.NoArgs, RunE: func(c *cobra.Command, _ []string) error {
+	var listen, path, binary, reportsDir string
+	var inspectionOnly bool
+	var dashboardPort int
+	c := &cobra.Command{Use: "dashboard", Short: "Serve the native Go investigation and controller dashboards", Args: cobra.NoArgs, RunE: func(c *cobra.Command, _ []string) error {
+		if c.Flags().Changed("port") {
+			if c.Flags().Changed("listen") || dashboardPort < 1 || dashboardPort > 65535 {
+				return errors.New("--port must be 1–65535 and cannot combine with --listen")
+			}
+			listen = fmt.Sprintf("127.0.0.1:%d", dashboardPort)
+		}
 		host, _, err := net.SplitHostPort(listen)
 		if err != nil || net.ParseIP(host) == nil || !net.ParseIP(host).IsLoopback() {
 			return errors.New("dashboard requires numeric loopback listen address")
@@ -165,9 +176,38 @@ func dashboardCommand(o *options) *cobra.Command {
 		if _, err := fmt.Fprintf(output.Writer{Context: c.Context(), Output: c.ErrOrStderr()}, "Dashboard: http://%s\n", l.Addr().String()); err != nil {
 			return err
 		}
-		return d.Serve(c.Context(), l)
+		if inspectionOnly {
+			return d.Serve(c.Context(), l)
+		}
+		app, err := investigation.New(c.Context(), reportsDir, o.offline)
+		if err != nil {
+			return err
+		}
+		defer app.Close()
+		if path != "" {
+			if err = app.Import(path); err != nil {
+				return err
+			}
+		}
+		app.Scan = scanDashboard
+		app.Context = kube.FetchContext
+		full := app.Handler(l.Addr().String())
+		compact := d.Handler(l.Addr().String())
+		handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasPrefix(r.URL.Path, "/controller/") {
+				r = r.Clone(r.Context())
+				r.URL.Path = strings.TrimPrefix(r.URL.Path, "/controller")
+				compact.ServeHTTP(w, r)
+				return
+			}
+			full.ServeHTTP(w, r)
+		})
+		return inspect.ServeWithWriteTimeout(c.Context(), l, handler, true, 30*time.Second)
 	}}
 	f := c.Flags()
+	f.IntVar(&dashboardPort, "port", 8765, "Loopback dashboard port (alias for --listen)")
+	f.StringVar(&reportsDir, "reports-dir", ".runs", "Private report and human review directory")
+	f.BoolVar(&inspectionOnly, "inspection-only", false, "Serve the compact read-only controller inspection dashboard")
 	f.StringVar(&listen, "listen", "127.0.0.1:8765", "Numeric loopback address")
 	f.StringVar(&path, "report", "", "Local schema-1 or schema-2 report to inspect")
 	f.StringVar(&k.Context, "controller-context", "", "Fixed controller context")

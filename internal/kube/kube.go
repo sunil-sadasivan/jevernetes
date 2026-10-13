@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	v1 "k8s.io/api/core/v1"
@@ -22,6 +23,9 @@ import (
 )
 
 type Config struct {
+	SnapshotWorkers                   int
+	DiscoveryInterval                 time.Duration
+	resolved                          *string
 	Context, Namespace, Selector, Pod string
 	InCluster, Follow, NoPrevious     bool
 	Since                             int64
@@ -32,6 +36,9 @@ type Config struct {
 }
 
 func (c Config) Validate() error {
+	if c.SnapshotWorkers < 0 || c.SnapshotWorkers > 32 || c.DiscoveryInterval < 0 || c.DiscoveryInterval > time.Hour {
+		return errors.New("invalid collection scheduling bounds")
+	}
 	if c.Namespace != "" && len(validation.IsDNS1123Label(c.Namespace)) > 0 {
 		return errors.New("invalid namespace")
 	}
@@ -58,6 +65,14 @@ func (c Config) Validate() error {
 	}
 	return nil
 }
+
+// LoadResolvedContext pins the current context name alongside its transport.
+func LoadResolvedContext(ctx context.Context, c Config) (*rest.Config, string, error) {
+	name := c.Context
+	c.resolved = &name
+	cfg, err := LoadContext(ctx, c)
+	return cfg, name, err
+}
 func Load(c Config) (*rest.Config, error) {
 	return LoadContext(context.Background(), c)
 }
@@ -70,7 +85,7 @@ func LoadContext(ctx context.Context, c Config) (*rest.Config, error) {
 	if c.InCluster {
 		cfg, err = rest.InClusterConfig()
 	} else {
-		cfg, err = loadLocal(ctx, c.Context)
+		cfg, err = loadLocal(ctx, c.Context, c.resolved)
 	}
 	if err != nil {
 		return nil, errors.New("Kubernetes configuration unavailable")
@@ -87,6 +102,8 @@ type API interface {
 	Pods(string) core.PodInterface
 }
 type Collector struct {
+	Stats   func(map[string]uint64)
+	Pending func(event.Source, *event.Event)
 	// Immutable endpoint identity is set only from the resolved REST config.
 	clusterID string
 	API       API
@@ -218,37 +235,79 @@ func (c *Collector) Snapshot(ctx context.Context, emit func(event.Event) error, 
 	if err != nil {
 		return err
 	}
-	for _, p := range pods {
-		for _, s := range streams(p, !c.Config.NoPrevious, false) {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			source := c.source(s)
-			bounded, cancel := context.WithTimeout(ctx, 30*time.Second)
-			if err := c.validateStream(bounded, s); err != nil {
-				gap(source, identityGap(err))
-				cancel()
-				continue
-			}
-			r, err := c.OpenLog(bounded, p.Namespace, p.Name, &v1.PodLogOptions{Container: s.name, Previous: s.previous, Timestamps: true, SinceSeconds: &c.Config.Since, TailLines: &c.Config.Tail})
-			if err != nil {
-				gap(source, "log_unavailable")
-				cancel()
-				continue
-			}
-			var emitErr error
-			err = event.Read(bounded, r, source, c.Config.MaxBytes, func(e event.Event) error { emitErr = emit(e); return emitErr })
-			r.Close()
-			cancel()
-			if emitErr != nil {
-				return emitErr
-			}
-			if err != nil {
-				gap(source, "log_incomplete")
-				if ctx.Err() != nil {
-					return ctx.Err()
+	if c.Config.SnapshotWorkers <= 1 {
+		for _, p := range pods {
+			for _, s := range streams(p, !c.Config.NoPrevious, false) {
+				if err = c.snapshotStream(ctx, s, emit, gap); err != nil {
+					return err
 				}
 			}
+		}
+		return nil
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	jobs := make(chan stream)
+	var wg sync.WaitGroup
+	var once sync.Once
+	var first error
+	for i := 0; i < c.Config.SnapshotWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for s := range jobs {
+				if ctx.Err() != nil {
+					continue
+				}
+				if err := c.snapshotStream(ctx, s, emit, gap); err != nil {
+					once.Do(func() { first = err; cancel() })
+				}
+			}
+		}()
+	}
+dispatch:
+	for _, p := range pods {
+		for _, s := range streams(p, !c.Config.NoPrevious, false) {
+			select {
+			case jobs <- s:
+			case <-ctx.Done():
+				break dispatch
+			}
+		}
+	}
+	close(jobs)
+	wg.Wait()
+	if first != nil {
+		return first
+	}
+	return ctx.Err()
+}
+func (c *Collector) snapshotStream(ctx context.Context, s stream, emit func(event.Event) error, gap func(event.Source, string)) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	source := c.source(s)
+	bounded, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	if err := c.validateStream(bounded, s); err != nil {
+		gap(source, identityGap(err))
+		return nil
+	}
+	r, err := c.OpenLog(bounded, s.pod.Namespace, s.pod.Name, &v1.PodLogOptions{Container: s.name, Previous: s.previous, Timestamps: true, SinceSeconds: &c.Config.Since, TailLines: &c.Config.Tail})
+	if err != nil {
+		gap(source, "log_unavailable")
+		return nil
+	}
+	defer r.Close()
+	var emitErr error
+	err = event.Read(bounded, r, source, c.Config.MaxBytes, func(e event.Event) error { emitErr = emit(e); return emitErr })
+	if emitErr != nil {
+		return emitErr
+	}
+	if err != nil {
+		gap(source, "log_incomplete")
+		if ctx.Err() != nil {
+			return ctx.Err()
 		}
 	}
 	return nil

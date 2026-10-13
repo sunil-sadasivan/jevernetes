@@ -11,6 +11,7 @@ import (
 )
 
 type Config struct {
+	HumanReview func(event.Event) (event.Event, bool)
 	// Now supplies the local clock; nil uses time.Now.
 	Now                                  func() time.Time
 	Teacher                              provider.Teacher
@@ -83,8 +84,20 @@ func (e *Engine) Checkpoint() any { return e.groups.Checkpoint() }
 func (e *Engine) Batch(ctx context.Context, events []event.Event) []event.Event {
 	out := append([]event.Event(nil), events...)
 	defer func() { e.teach(ctx, out) }()
+	reviewed := make([]bool, len(out))
+	if e.config.HumanReview != nil {
+		for i, ev := range out {
+			out[i], reviewed[i] = e.config.HumanReview(ev)
+			if reviewed[i] {
+				e.Metrics["human_expected_events"]++
+			}
+		}
+	}
 	if e.config.Offline {
 		for i := range out {
+			if reviewed[i] {
+				continue
+			}
 			out[i].Judgment = event.Offline(out[i])
 			e.Metrics["classifications"]++
 		}
@@ -100,6 +113,9 @@ func (e *Engine) Batch(ctx context.Context, events []event.Event) []event.Event 
 	byTicket := map[Ticket]int{}
 	now := e.config.Now()
 	for i, ev := range out {
+		if reviewed[i] {
+			continue
+		}
 		ticket, cached, reason := e.groups.Observe(ev, now)
 		if cached != nil {
 			out[i].Judgment = *cached

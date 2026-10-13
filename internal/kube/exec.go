@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/sunil-sadasivan/jevernetes/internal/provider"
+	"github.com/sunil-sadasivan/jevernetes/internal/terminal"
 	"golang.org/x/sys/unix"
 	"golang.org/x/term"
 	authv1 "k8s.io/client-go/pkg/apis/clientauthentication/v1"
@@ -31,9 +32,6 @@ import (
 )
 
 var errExecAuth = errors.New("Kubernetes credential helper unavailable")
-
-// Foreground terminal ownership is process-wide, unlike each client cache.
-var interactiveExec = make(chan struct{}, 1)
 
 // Context-free client-go exec/OIDC auth is deliberately bypassed at both transport
 // boundaries. Credentials are scoped to this client, never a global cache.
@@ -255,12 +253,15 @@ func (a *execAuth) run(ctx context.Context) (credentials *execCredentials, runEr
 	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if interactive {
-		select {
-		case interactiveExec <- struct{}{}:
-		case <-ctx.Done():
-			return nil, ctx.Err()
+		release, err := terminal.Interactive(ctx)
+		if err != nil {
+			return nil, err
 		}
-		defer func() { <-interactiveExec }()
+		defer func() {
+			if err := release(); err != nil {
+				credentials, runErr = nil, errExecAuth
+			}
+		}()
 		// Terminal restoration runs from the parent's background group. Ignore
 		// SIGTTOU for this serialized handoff, preserving an inherited ignore.
 		ignored := signal.Ignored(syscall.SIGTTOU)

@@ -16,7 +16,11 @@ import (
 // reconnects. Queue ownership/backpressure belongs to the caller. finalize must
 // make bounded admissions of already-read evidence even after intake cancellation.
 func (c *Collector) Follow(ctx context.Context, emit, finalize func(event.Event) error, gap func(event.Source, string)) error {
-	ticker := time.NewTicker(5 * time.Second)
+	interval := c.Config.DiscoveryInterval
+	if interval == 0 {
+		interval = 5 * time.Second
+	}
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	return c.follow(ctx, emit, finalize, gap, ticker.C)
 }
@@ -27,6 +31,17 @@ func (c *Collector) follow(ctx context.Context, emit, finalize func(event.Event)
 	var wg sync.WaitGroup
 	defer wg.Wait()
 	active := map[string]context.CancelFunc{}
+	omitted := uint64(0)
+	publish := func() {
+		if c.Stats != nil {
+			c.Stats(map[string]uint64{"active_streams": uint64(len(active)), "unfollowed_streams": omitted})
+		}
+	}
+	defer func() {
+		if c.Stats != nil {
+			c.Stats(map[string]uint64{"active_streams": 0})
+		}
+	}()
 	done := make(chan string, c.Config.MaxStreams)
 	fatal := make(chan error, 1)
 	discover := func() error {
@@ -34,6 +49,7 @@ func (c *Collector) follow(ctx context.Context, emit, finalize func(event.Event)
 		if err != nil {
 			return err
 		}
+		omitted = 0
 		present := map[string]bool{}
 		for _, p := range pods {
 			for _, s := range streams(p, false, true) {
@@ -44,6 +60,7 @@ func (c *Collector) follow(ctx context.Context, emit, finalize func(event.Event)
 					continue
 				}
 				if len(active) >= c.Config.MaxStreams {
+					omitted++
 					gap(source, "stream_capacity")
 					continue
 				}
@@ -76,6 +93,7 @@ func (c *Collector) follow(ctx context.Context, emit, finalize func(event.Event)
 				gap(c.discoverySource(), "stream_removed")
 			}
 		}
+		publish()
 		return nil
 	}
 	if err := discover(); err != nil {
@@ -94,6 +112,7 @@ func (c *Collector) follow(ctx context.Context, emit, finalize func(event.Event)
 			}
 		case id := <-done:
 			delete(active, id)
+			publish()
 		case <-ticks:
 			if err := discover(); err != nil {
 				gap(c.discoverySource(), "discovery_unavailable")
@@ -149,7 +168,11 @@ func (c *Collector) followStreamWithFinalizer(ctx context.Context, s stream, emi
 		}
 		r, err := c.OpenLog(ctx, s.pod.Namespace, s.pod.Name, opts)
 		if err == nil {
-			err = readLiveWithFinalizer(ctx, r, parser, emit, finalize)
+			err = readLiveObserved(ctx, r, parser, emit, finalize, func(e *event.Event) {
+				if c.Pending != nil {
+					c.Pending(source, e)
+				}
+			})
 			r.Close()
 		} else {
 			err = errStreamRead
@@ -196,6 +219,12 @@ func readLive(ctx context.Context, r io.ReadCloser, p *event.Parser, emit func(e
 }
 
 func readLiveWithFinalizer(ctx context.Context, r io.ReadCloser, p *event.Parser, emit, finalize func(event.Event) error) error {
+	return readLiveObserved(ctx, r, p, emit, finalize, nil)
+}
+func readLiveObserved(ctx context.Context, r io.ReadCloser, p *event.Parser, emit, finalize func(event.Event) error, pending func(*event.Event)) error {
+	if pending != nil {
+		defer pending(nil)
+	}
 	type chunk struct {
 		data []byte
 		err  error
@@ -265,6 +294,9 @@ func readLiveWithFinalizer(ctx context.Context, r io.ReadCloser, p *event.Parser
 				if err := deliver(e); err != nil {
 					return &consumerError{err}
 				}
+			}
+			if pending != nil {
+				pending(p.Preview())
 			}
 			if v.err != nil {
 				for _, e := range p.Finish(v.err != io.EOF || ctx.Err() != nil) {

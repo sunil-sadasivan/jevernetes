@@ -33,9 +33,12 @@ type exitError struct {
 func (e exitError) Error() string { return e.message }
 
 type options struct {
+	workers, top                                                                            int
+	humanRules                                                                              string
 	templateModel                                                                           string
 	templateInput, templateOutput, templateCost, templateConfidence                         float64
 	templateRequests, templateSamples, templateCapacity, templateTTL                        int
+	tui                                                                                     bool
 	offline, json, noGrouping, adaptive, budgeted                                           bool
 	grouping, masking, risk, model, output, rules, templateProvider                         string
 	batch, maxBatches, maxEvents, queue, retain, capacity, ttl, normalInterval, maxAttempts int
@@ -98,6 +101,8 @@ func newCommand(in io.Reader, out, stderr io.Writer, deps runtimeDeps) *cobra.Co
 	root.SetFlagErrorFunc(func(_ *cobra.Command, _ error) error { return exitError{2, "invalid command-line option; see --help"} })
 	f := root.PersistentFlags()
 	f.BoolVar(&o.offline, "offline", false, "Use deterministic local rules; no provider credentials or calls")
+	f.StringVar(&o.humanRules, "rules-file", "", "Human expected-event rules (version 1; separate from template rules)")
+	f.BoolVar(&o.tui, "tui", false, "Interactive terminal tabs, details and exact/semantic search")
 	f.BoolVar(&o.json, "json", false, "Write JSON to stdout")
 	f.StringVar(&o.output, "output", "", "Atomically write a private JSON report")
 	f.BoolVar(&o.noGrouping, "no-grouping", false, "Disable reuse")
@@ -114,6 +119,8 @@ func newCommand(in io.Reader, out, stderr io.Writer, deps runtimeDeps) *cobra.Co
 	f.StringVar(&o.model, "model", "jev-latest", "Provider model identifier")
 	f.StringVar(&o.rules, "template-rules", "", "Reviewed rules artifact version 2")
 	f.StringVar(&o.templateProvider, "template-provider", "off", "off, openai or anthropic: shadow proposals / escalation review")
+	f.IntVar(&o.workers, "workers", 1, "Maximum concurrent provider requests (1–16)")
+	f.IntVar(&o.top, "top", 0, "Print this many important groups after the plain summary (0 disables)")
 	f.IntVar(&o.batch, "batch-size", 8, "Microbatch maximum (1–64); fill deadline 350ms")
 	f.IntVar(&o.maxBatches, "max-batches", 500, "Maximum provider batches")
 	f.IntVar(&o.maxEvents, "max-events", 100000, "Global event cap (controller default: 0, unbounded)")
@@ -141,6 +148,16 @@ func newCommand(in io.Reader, out, stderr io.Writer, deps runtimeDeps) *cobra.Co
 		if err := o.validate(c, false); err != nil {
 			return err
 		}
+		if o.tui {
+			for _, path := range args {
+				if path == "-" {
+					return errors.New("--tui cannot share stdin with log input")
+				}
+			}
+		}
+		if !c.Flags().Changed("rules-file") {
+			o.humanRules = ".runs/.review-rules.json"
+		}
 		return o.runWith(c, args, in, deps)
 	}}
 	files.Flags().Int64Var(&o.k.MaxBytes, "max-file-bytes", 32<<20, "Maximum decompressed bytes per input")
@@ -148,6 +165,9 @@ func newCommand(in io.Reader, out, stderr io.Writer, deps runtimeDeps) *cobra.Co
 	k8s := &cobra.Command{Use: "k8s", Aliases: []string{"kubernetes"}, Short: "Read Kubernetes snapshot or live logs", Args: cobra.NoArgs, RunE: func(c *cobra.Command, _ []string) error {
 		if err := o.validate(c, true); err != nil {
 			return err
+		}
+		if !c.Flags().Changed("rules-file") {
+			o.humanRules = ".runs/.review-rules.json"
 		}
 		return o.runWith(c, nil, in, deps)
 	}}
@@ -186,10 +206,10 @@ func newCommand(in io.Reader, out, stderr io.Writer, deps runtimeDeps) *cobra.Co
 	})
 	root.AddCommand(remoteCommand(o))
 	root.AddCommand(dashboardCommand(o))
-	for _, name := range []string{"search", "context", "review", "reviews", "tui"} {
+	for _, name := range []string{"search", "context", "review", "reviews"} {
 		name := name
 		root.AddCommand(&cobra.Command{Use: name, Short: "Available in the coexisting Rust/Python investigation runtimes", DisableFlagParsing: true, RunE: func(*cobra.Command, []string) error {
-			return fmt.Errorf("%s is available in the retained investigation runtimes: use jevernetes-legacy (python3 -m jevernetes) or the Rust --tui; see docs/migration.md", name)
+			return fmt.Errorf("%s is available in the native dashboard; use dashboard or files/k8s --tui; see docs/usage.md", name)
 		}})
 	}
 	root.CompletionOptions.DisableDefaultCmd = true
@@ -200,8 +220,12 @@ func collectionFlags(c *cobra.Command, k *kube.Config) {
 	f := c.Flags()
 	f.StringVar(&k.Context, "context", "", "Kubeconfig context")
 	f.BoolVar(&k.InCluster, "in-cluster", false, "Use mounted service account")
-	f.StringVar(&k.Namespace, "namespace", "", "Namespace (empty: all)")
-	f.StringVar(&k.Selector, "selector", "", "Label selector")
+	f.BoolP("all-namespaces", "A", false, "Scan all namespaces (default)")
+	f.IntVar(&k.SnapshotWorkers, "collect-workers", 1, "Concurrent snapshot streams (1–32)")
+	f.Int64("discovery-interval", 5, "Live discovery interval seconds (1–3600)")
+	f.StringVarP(&k.Namespace, "namespace", "n", "", "Namespace (empty: all)")
+	f.StringVarP(&k.Selector, "selector", "l", "", "Label selector")
+	c.MarkFlagsMutuallyExclusive("namespace", "all-namespaces")
 	f.StringVar(&k.Pod, "pod", "", "Exact pod name")
 	f.BoolVarP(&k.Follow, "follow", "f", false, "Follow live streams")
 	f.BoolVar(&k.Follow, "live", false, "Alias for --follow")
@@ -236,6 +260,12 @@ func seconds(s string) (int64, error) {
 	return n * factor, nil
 }
 func (o *options) validate(c *cobra.Command, cluster bool) error {
+	if o.tui && (o.json || c.Name() == "controller") {
+		return errors.New("--tui requires files or k8s and conflicts with --json")
+	}
+	if o.workers < 1 || o.workers > 16 || o.batch < 1 || o.batch > 64 || o.top < 0 || o.top > 100000 {
+		return errors.New("invalid worker or display bounds")
+	}
 	if o.noGrouping {
 		o.grouping = "off"
 	}
@@ -251,7 +281,7 @@ func (o *options) validate(c *cobra.Command, cluster bool) error {
 	}
 	for name := range o.unsupported {
 		if c.Flags().Changed(name) {
-			return fmt.Errorf("--%s is available in the retained investigation runtimes: use jevernetes-legacy (python3 -m jevernetes) or the Rust --tui; see docs/migration.md", name)
+			return fmt.Errorf("--%s is available in the native dashboard; use dashboard or files/k8s --tui; see docs/usage.md", name)
 		}
 	}
 	if o.templateProvider != "off" {
@@ -298,6 +328,11 @@ func (o *options) validate(c *cobra.Command, cluster bool) error {
 		return err
 	}
 	if cluster {
+		interval, _ := c.Flags().GetInt64("discovery-interval")
+		if interval < 1 || interval > 3600 {
+			return errors.New("invalid discovery interval")
+		}
+		o.k.DiscoveryInterval = time.Duration(interval) * time.Second
 		raw, _ := c.Flags().GetString("since")
 		n, err := seconds(raw)
 		if err != nil {
@@ -322,7 +357,7 @@ func (o *options) providerConfig() provider.Config {
 	return provider.Config{Kind: o.risk, Model: o.model, InputPrice: o.inputPrice, OutputPrice: o.outputPrice, MaxCost: o.maxCost, MaxAttempts: min(o.maxAttempts, o.maxBatches*3), MaxBatches: o.maxBatches}
 }
 func (o *options) analysisConfig() analysis.Config {
-	return analysis.Config{Offline: o.offline, Strategy: o.grouping, Masking: o.masking, Capacity: o.capacity, BatchSize: o.batch, TTL: time.Duration(o.ttl) * time.Second, Adaptive: o.adaptive, NormalInterval: uint64(o.normalInterval), ReviewIDs: o.reviewIDs, TemplateMinSamples: o.templateSamples, TemplateCapacity: o.templateCapacity, TemplateTTL: time.Duration(o.templateTTL) * time.Second, TemplateConfidence: o.templateConfidence}
+	return analysis.Config{Offline: o.offline, Strategy: o.grouping, Masking: o.masking, Capacity: o.capacity, BatchSize: min(64, o.batch*o.workers), TTL: time.Duration(o.ttl) * time.Second, Adaptive: o.adaptive, NormalInterval: uint64(o.normalInterval), ReviewIDs: o.reviewIDs, TemplateMinSamples: o.templateSamples, TemplateCapacity: o.templateCapacity, TemplateTTL: time.Duration(o.templateTTL) * time.Second, TemplateConfidence: o.templateConfidence}
 }
 
 func (o *options) templateConfig() provider.Config {

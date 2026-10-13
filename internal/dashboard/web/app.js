@@ -5,7 +5,7 @@
   const text = (id, value) => { $(id).textContent = value; };
   const active = () => enabled && !document.hidden && $('controller').open;
   async function get(path, signal) {
-    const response = await fetch(path, {signal, cache: 'no-store', credentials: 'same-origin'});
+    const response = await fetch((typeof location!=="undefined" && location.pathname.startsWith("/controller/") ? "/controller" : "") + path, {signal, cache: 'no-store', credentials: 'same-origin'});
     if (!response.ok) throw new Error('Sample unavailable');
     return response.json();
   }

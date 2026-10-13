@@ -11,10 +11,13 @@
 | `kube` | Official client-go pod discovery, log collection, reconnect state, exact selection and port-forward lifecycle |
 | `controller` | Pure-Go SQLite, migrations, writer lock, deterministic policy, novelty, verdicts, outbox and sinks |
 | `inspect` | Separate health/metrics and loopback inspection protocols; strict remote validation |
-| `dashboard` | Embedded static UI, fixed-target sampling/cache and same-origin read-only APIs |
+| `dashboard` | Compact controller inspector, fixed-target sampling/cache and same-origin read-only APIs |
+| `investigation` | Embedded investigation UI, Go scan orchestration, compatible report/review storage, CSRF/origin controls and bounded context/search APIs |
+| `search` | Frozen occurrence grouping, relevance cache, separate budgets, cancellation and paged results |
+| `tui` | Native terminal rendering/input, Unicode editing, frozen details, live/search progress and terminal lifecycle |
 | `cli` | Validation before inputs/credentials, cancellation, producer ownership, shutdown/reporting |
 
-A bounded producer channel feeds one analysis owner. Files/snapshots wait for capacity; live streams drop excess events with counters. Batches close at capacity or after 350ms. Provider I/O blocks that owner, so downstream latency includes earlier batches and provider latency. No occurrence-count threshold delays a new singleton judgment.
+A bounded producer channel feeds one analysis owner. Files/snapshots wait for capacity; live streams drop excess events with counters. Batches close at capacity or after 350ms. Provider I/O blocks that owner; `--workers` optionally splits a larger microbatch into bounded concurrent requests sharing one budget. Downstream latency includes earlier batches and provider latency. No occurrence-count threshold delays a new singleton judgment.
 
 Controller transitions and notification intents share a transaction. The single delivery loop records an attempt before sending, retaining stable idempotency keys across crashes. Inspection uses a nonblocking store lock and cannot fail ingestion merely because a reader contends. Metrics and report snapshots use independent locks. Shutdown cancels producers, closes streams, joins workers and writes the final report.
 

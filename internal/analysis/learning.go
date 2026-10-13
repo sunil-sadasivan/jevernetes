@@ -220,6 +220,9 @@ func (e *Engine) teach(ctx context.Context, events []event.Event) {
 // Learning cannot override the safety decision made by the primary lane. Apply
 // this gate both before reading saved state and before same-batch escalation.
 func (e *Engine) learningEligible(ev event.Event) bool {
+	if ev.Review != nil {
+		return false
+	}
 	if !Eligible(ev) || ev.AnalysisError == "stale template generation" {
 		return false
 	}

@@ -19,45 +19,60 @@
     },
     {
       "workflow": "tui-search",
-      "status": "coexistence",
+      "status": "equivalent",
       "assets": [
         "src/tui.rs",
         "src/search.rs",
         "jevernetes/tui.py",
-        "jevernetes/search.py"
+        "jevernetes/search.py",
+        "internal/tui",
+        "internal/search",
+        "tests/go_tui_pty.py"
       ],
       "commands": [
         "cargo test --locked --offline --all-features",
-        "python3 -m unittest discover -s tests -q"
+        "python3 -m unittest discover -s tests -q",
+        "go test ./internal/tui ./internal/search ./internal/provider",
+        "go build -o .runs/native-ui-check/jevernetes-go ./cmd/jevernetes",
+        "python3 tests/go_tui_pty.py .runs/native-ui-check/jevernetes-go"
       ]
     },
     {
       "workflow": "context-reviews-acknowledgements",
-      "status": "coexistence",
+      "status": "equivalent",
       "assets": [
         "jevernetes/context.py",
         "jevernetes/reviews.py",
-        "tests/test_context_reviews.py"
+        "tests/test_context_reviews.py",
+        "internal/investigation",
+        "internal/kube/context.go"
       ],
       "commands": [
         "python3 -m unittest discover -s tests -q",
         "node tests/test_context_ui.cjs",
-        "node tests/test_review_ui.cjs"
+        "node tests/test_review_ui.cjs",
+        "go test ./internal/investigation ./internal/kube"
       ]
     },
     {
       "workflow": "live-dashboard-investigation-api",
-      "status": "coexistence",
+      "status": "equivalent",
       "assets": [
         "jevernetes/dashboard.py",
         "jevernetes/live.py",
         "tests/test_dashboard.py",
-        "tests/test_live.py"
+        "tests/test_live.py",
+        "internal/investigation",
+        "internal/cli/investigation.go",
+        "tools/go-dashboard-smoke.py"
       ],
       "commands": [
         "python3 -m unittest discover -s tests -q",
         "node tests/test_search_ui.cjs",
-        "node tests/test_grouping_ui.cjs"
+        "node tests/test_grouping_ui.cjs",
+        "go test ./internal/investigation ./internal/cli",
+        "python3 tools/check_native_ui.py",
+        "python3 tools/go-dashboard-smoke.py .runs/native-ui-check/jevernetes-go"
       ]
     },
     {
@@ -65,10 +80,12 @@
       "status": "exact",
       "assets": [
         "jevernetes/web/prompt.js",
-        "tests/test_prompt_ui.cjs"
+        "tests/test_prompt_ui.cjs",
+        "internal/investigation/web/prompt.js"
       ],
       "commands": [
-        "node tests/test_prompt_ui.cjs"
+        "node tests/test_prompt_ui.cjs",
+        "python3 tools/check_native_ui.py"
       ]
     },
     {
@@ -134,11 +151,12 @@
     },
     {
       "workflow": "env-aliases-flags",
-      "status": "coexistence",
+      "status": "equivalent",
       "assets": [
         "internal/cli",
         "src/main.rs",
-        "jevernetes/cli.py"
+        "jevernetes/cli.py",
+        "internal/cli/native_ui_test.go"
       ],
       "commands": [
         "go test ./internal/cli",
@@ -163,15 +181,17 @@
     },
     {
       "workflow": "schema1-review-import",
-      "status": "coexistence",
+      "status": "equivalent",
       "assets": [
         "jevernetes/migrate.py",
         "tests/test_migration.py",
-        "internal/dashboard/report_test.go"
+        "internal/dashboard/report_test.go",
+        "internal/investigation/reviews.go"
       ],
       "commands": [
         "python3 -m unittest discover -s tests -q",
-        "go test ./internal/dashboard"
+        "go test ./internal/dashboard",
+        "go test ./internal/investigation"
       ]
     },
     {

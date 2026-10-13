@@ -11,6 +11,11 @@ go vet -C third_party/spdystream ./...
 go vet ./...
 tools/check-cross.sh
 for file in tests/*_ui.cjs; do node "$file"; done
+python3 tools/check_native_ui.py
+mkdir -p .runs/native-ui-check
+go build -o .runs/native-ui-check/jevernetes-go ./cmd/jevernetes
+python3 tests/go_tui_pty.py .runs/native-ui-check/jevernetes-go
+python3 tools/go-dashboard-smoke.py .runs/native-ui-check/jevernetes-go
 python3 -m unittest discover -s tests -q
 python3 tools/check_release.py
 python3 -m unittest discover -s tools -p test_retained_parity.py -q

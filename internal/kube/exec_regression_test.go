@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"github.com/sunil-sadasivan/jevernetes/internal/tui"
 	"golang.org/x/sys/unix"
 	"golang.org/x/term"
 	"io"
@@ -41,6 +42,13 @@ func TestCredentialHelperProcess(t *testing.T) {
 	marker := os.Getenv("JEV_AUTH_MARKER")
 	if os.Getenv("JEV_AUTH_TERMINAL") == "1" {
 		_ = os.WriteFile(marker, []byte(strconv.Itoa(os.Getpid())), 0600)
+		if expected := os.Getenv("JEV_AUTH_COOKED"); expected != "" {
+			_, _ = unix.Poll([]unix.PollFd{{Fd: int32(os.Stdin.Fd()), Events: unix.POLLIN}}, 0)
+			state, err := term.GetState(int(os.Stdin.Fd()))
+			if err != nil || fmt.Sprintf("%#v", state) != expected {
+				os.Exit(4)
+			}
+		}
 		// Change echo/canonical attributes for every exit path. The PTY driver
 		// re-enables ISIG before sending a real foreground Ctrl-C.
 		if _, err := term.MakeRaw(int(os.Stdin.Fd())); err != nil {
@@ -587,9 +595,38 @@ func TestExecInteractiveHarness(t *testing.T) {
 	}
 	config.ExecProvider.InteractiveMode = api.AlwaysExecInteractiveMode
 	config.ExecProvider.Env = append(config.ExecProvider.Env, api.ExecEnvVar{Name: "JEV_AUTH_TERMINAL", Value: "1"})
+	var stopUI context.CancelFunc
+	var uiDone chan error
+	if os.Getenv("JEV_AUTH_UI") == "1" {
+		config.ExecProvider.Env = append(config.ExecProvider.Env, api.ExecEnvVar{Name: "JEV_AUTH_COOKED", Value: fmt.Sprintf("%#v", before)})
+		uiCtx, stop := context.WithCancel(life)
+		stopUI = stop
+		defer stop()
+		uiDone = make(chan error, 1)
+		go func() { _, err := tui.Run(uiCtx, os.Stdin, nil, nil, tui.Options{Offline: true}); uiDone <- err }()
+		deadline := time.Now().Add(time.Second)
+		for {
+			state, err := term.GetState(int(os.Stdin.Fd()))
+			if err == nil && !reflect.DeepEqual(state, before) {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("UI did not enter raw mode")
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
 	status := 200
 	rt, _ := credentialTransport(t, config, &status, nil)
 	err = credentialRequest(t, rt)
+	if stopUI != nil {
+		stopUI()
+		select {
+		case <-uiDone:
+		case <-time.After(time.Second):
+			t.Fatal("UI did not release terminal after authentication")
+		}
+	}
 	if (err != nil) != (mode != "success") {
 		t.Fatal("incorrect interactive helper result")
 	}
@@ -618,7 +655,7 @@ func TestExecInteractivePTY(t *testing.T) {
 import os, pty, select, signal, sys, time, termios
 pid, fd = pty.fork()
 if pid == 0:
-    env = dict(os.environ, JEV_AUTH_PTY=sys.argv[2], GORACE="atexit_sleep_ms=0")
+    env = dict(os.environ, JEV_AUTH_PTY=sys.argv[2], JEV_AUTH_UI=sys.argv[3], GORACE="atexit_sleep_ms=0")
     os.execve(sys.argv[1], [sys.argv[1], "-test.run=^TestExecInteractiveHarness$"], env)
 output = b""
 sent = False
@@ -648,14 +685,16 @@ try:
 finally:
     os.close(fd)
 `
-	for _, mode := range []string{"success", "cancel", "error", "interrupt"} {
-		t.Run(mode, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
-			defer cancel()
-			cmd := exec.CommandContext(ctx, python, "-c", script, os.Args[0], mode)
-			if out, err := cmd.CombinedOutput(); err != nil {
-				t.Fatalf("PTY fixture failed: %v %s", err, out)
-			}
-		})
+	for _, ui := range []string{"0", "1"} {
+		for _, mode := range []string{"success", "cancel", "error", "interrupt"} {
+			t.Run(mode+"/tui="+ui, func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+				defer cancel()
+				cmd := exec.CommandContext(ctx, python, "-c", script, os.Args[0], mode, ui)
+				if out, err := cmd.CombinedOutput(); err != nil {
+					t.Fatalf("PTY fixture failed: %v %s", err, out)
+				}
+			})
+		}
 	}
 }

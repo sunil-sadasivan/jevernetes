@@ -1,3 +1,32 @@
+# Native Go investigation parity — 2026-10-13
+
+This pass started from `d1435dd` on the staged-coexistence branch and completes native investigation workflows in an isolated worktree. The previously published PR head (`629918d`) did not have TUI or investigation-dashboard parity. The new Go TUI and dashboard use the native collector/provider lifecycle; neither starts Python, Rust or kubectl. The 60 retained runtime/package/test assets remain byte-for-byte and mode-identical to the accepted retained base. Runtime retirement remains disabled.
+
+## Completed workflows
+
+- Native terminal: clickable/filter tabs, grouping, multiline details and occurrence IDs/timestamps, retained details across live eviction, Unicode query editing, frozen exact and TypeSafe semantic searches, occurrence-aware cache, separate search budgets, cancellation and final report/terminal cleanup.
+- Native investigation dashboard: established embedded browser interface, report history and schema-1/2 imports, uploads, snapshot/live collection, filtering/confidence/grouping, exact/semantic search, context lookup, reversible bulk reviews and version-1 expected rules, prompt/export and themes. The compact controller inspector remains available at `/controller/` and `--inspection-only`.
+- Compatibility: legacy scheduling flags and namespace aliases, shared human expected rules before provider dispatch, pinned source context/identity, source counts and live stream/rate counters, bounded pending evidence, independent search accounting and conservative partial coverage. See `docs/usage.md` for intentional differences in framing, defaults, event IDs and output layout.
+- Interactive Kubernetes authentication: the TUI suspends raw mode, mouse capture and alternate-screen rendering under a shared terminal lease. The helper receives the cooked terminal; UI input/rendering cannot consume login input or race foreground ownership. Success, failure, timeout and Ctrl-C all restore ownership and the saved terminal state, both with and without the TUI.
+
+## Verification
+
+Local Darwin arm64, Go 1.27.1 and Rust 1.94.0; synthetic evidence, local fixture listeners, in-memory transports and temporary private state. Sandbox escalation enabled the local listener/PTY tests. No tests were excluded or weakened. Nonfatal macOS linker minimum-version warnings remain.
+
+| Check | Result |
+| --- | --- |
+| `tools/check.sh` | Passed: all Go normal/race tests and vet, module tidy, vendored SPDY checks, Linux amd64/386/arm cross-builds, six retained browser suites and five suites against the Go embedded frontend, native executable PTY and HTTP tests, 128 Python tests, retained-asset mutation tests and source/privacy checks. Log: `.runs/native-complete-check.log`. |
+| `python3 tools/check_parity.py --run` | Passed all 26 executable suites across 14 workflows; all 60 retained assets verified by bytes/type/mode. Log: `.runs/native-parity-run.log`. |
+| `tools/release.sh` | Passed both binary aliases, offline/signal/state smoke, native terminal/HTTP smoke, source archive byte comparison and privacy/container manifest checks. Log: `.runs/native-release.log`. |
+| Native interactive auth PTYs | Passed all eight cases (success/error/timeout/Ctrl-C, with/without TUI), including cooked helper input, foreground ownership, complete terminal attributes and joined helper processes. Included in the full normal/race gate; focused log: `.runs/native-terminal-handoff.log`. |
+| Retained Rust | All 38 library and 7 CLI tests passed; fmt, clippy with warnings denied, build and all three PTYs passed. |
+| Native HTTP smoke | Actual binary: uploads, report history, embedded assets, controller route, origin/CSRF checks, exact search, reversible reviews and mode-0600 persistence passed. Runs in check/release gates. |
+| Browser observation | Chrome rendered a synthetic Go report in the established interface, including grouped occurrences. This was an initial render check, not a complete browser click-through; the computer-use service later became unavailable. Deterministic browser logic and HTTP acceptance remain covered above. |
+
+Hermetic workflow parity is implemented; live provider accuracy/billing, production cluster behavior, actual container-engine execution and a long production soak remain unverified. No live cluster/provider calls or deployment were performed. Hosted CI must validate the final pushed commit before merging. These limits do not disappear when local checks pass.
+
+---
+
 # Discovery redirects and shutdown draining — 2026-10-11
 
 Started at exact clean HEAD `eb5a98e3042cd29e7c334318fdd441e3ce4b526d` in the staged-coexistence worktree. Only this worktree was changed. No push, PR change, deployment or live service access occurred. Earlier entries below describe previous changes.

@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -20,6 +21,7 @@ import (
 	"github.com/sunil-sadasivan/jevernetes/internal/controller"
 	"github.com/sunil-sadasivan/jevernetes/internal/event"
 	"github.com/sunil-sadasivan/jevernetes/internal/inspect"
+	"github.com/sunil-sadasivan/jevernetes/internal/investigation"
 	"github.com/sunil-sadasivan/jevernetes/internal/kube"
 	"github.com/sunil-sadasivan/jevernetes/internal/output"
 	"github.com/sunil-sadasivan/jevernetes/internal/provider"
@@ -48,20 +50,29 @@ type logCollector interface {
 
 // Dependencies are internal test seams; no endpoint or command is browser/CLI supplied.
 type runtimeDeps struct {
-	provider  func(provider.Config, string) (riskProvider, error)
-	collector func(kube.Config) (logCollector, error)
+	sourceNames map[string]string
+	update      func(map[string]any)
+	finished    func(map[string]any)
+	quiet       bool
+	provider    func(provider.Config, string) (riskProvider, error)
+	collector   func(kube.Config) (logCollector, error)
 }
 
 func (o *options) runWith(cmd *cobra.Command, paths []string, stdin io.Reader, deps runtimeDeps) error {
+	if o.tui {
+		return o.runTerminal(cmd, paths, stdin, deps)
+	}
 	if deps.provider == nil {
 		deps.provider = func(c provider.Config, key string) (riskProvider, error) { return provider.New(c, key) }
 	}
 	if deps.collector == nil {
 		deps.collector = func(c kube.Config) (logCollector, error) {
-			cfg, err := kube.LoadContext(cmd.Context(), c)
+			cfg, resolved, err := kube.LoadResolvedContext(cmd.Context(), c)
 			if err != nil {
 				return nil, err
 			}
+			c.Context = resolved
+			o.k.Context = resolved
 			return kube.New(cfg, c)
 		}
 	}
@@ -78,6 +89,14 @@ func (o *options) runWith(cmd *cobra.Command, paths []string, stdin io.Reader, d
 		defer bounded()
 	}
 	cfg := o.analysisConfig()
+	if o.humanRules != "" {
+		reviewer, err := investigation.Reviewer(process, o.humanRules)
+		if err != nil {
+			return err
+		}
+		cfg.HumanReview = reviewer
+	}
+
 	if o.rules != "" {
 		raw, err := readBounded(ctx, o.rules, 1<<20)
 		if err != nil {
@@ -167,6 +186,9 @@ func (o *options) runWith(cmd *cobra.Command, paths []string, stdin io.Reader, d
 			return err
 		}
 		judge = client
+		if o.workers > 1 {
+			judge = provider.ParallelJudge{Next: client, Workers: o.workers, BatchSize: o.batch}
+		}
 	}
 	var teacher *provider.Client
 	if !o.offline && o.templateProvider != "off" {
@@ -188,6 +210,18 @@ func (o *options) runWith(cmd *cobra.Command, paths []string, stdin io.Reader, d
 	if err != nil {
 		return err
 	}
+	scope := func() map[string]any {
+		if paths != nil {
+			files := append([]string{}, paths...)
+			for i, path := range files {
+				if name, ok := deps.sourceNames[path]; ok {
+					files[i] = name
+				}
+			}
+			return map[string]any{"files": files}
+		}
+		return map[string]any{"context": o.k.Context, "namespace": o.k.Namespace, "selector": o.k.Selector, "since_seconds": o.k.Since, "tail": o.k.Tail}
+	}
 	r := report.New(o.retain)
 	state := inspect.NewState()
 	if store != nil {
@@ -199,11 +233,69 @@ func (o *options) runWith(cmd *cobra.Command, paths []string, stdin io.Reader, d
 		state.Add("coverage_"+reason, 1)
 	}
 	in := make(chan event.Event, o.queue)
+	var viewMu sync.Mutex
+	pendingEvents := map[string]event.Event{}
+	snapshotView := func() map[string]any {
+		u := provider.Usage{Complete: true}
+		if client != nil {
+			u = client.Usage()
+		}
+		mode := o.risk
+		if o.offline {
+			mode = "offline-rules"
+		}
+		v := r.Snapshot(mode, scope(), o.k.Follow || paths == nil, u, state.Metrics(), nil)
+		tail := append([]event.Event{}, v["events"].([]event.Event)...)
+		viewMu.Lock()
+		seen := map[string]bool{}
+		for _, e := range tail {
+			seen[e.ID] = true
+		}
+		keys := []string{}
+		for k := range pendingEvents {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			e := pendingEvents[key]
+			if !seen[e.ID] {
+				tail = append(tail, e)
+				seen[e.ID] = true
+			}
+		}
+		viewMu.Unlock()
+		if len(tail) > o.retain {
+			tail = tail[len(tail)-o.retain:]
+		}
+		v["tail_events"] = tail
+		if o.k.Follow {
+			v["live"] = map[string]any{"status": "running", "message": "Collecting and analyzing retained logs", "retained_events": len(tail), "queue_depth": len(in), "dropped": state.Metrics()["dropped"], "active_streams": state.Metrics()["active_streams"], "unfollowed_streams": state.Metrics()["unfollowed_streams"], "reconnects": state.Metrics()["coverage_stream_reconnect"], "events_per_second": float64(state.Metrics()["received"]) / max(.001, v["summary"].(map[string]any)["elapsed_seconds"].(float64))}
+		}
+		v["input_price"] = o.inputPrice
+		v["output_price"] = o.outputPrice
+		return v
+	}
+	pendingView := func(key string, e *event.Event) {
+		if deps.update == nil {
+			return
+		}
+		viewMu.Lock()
+		if e == nil {
+			delete(pendingEvents, key)
+		} else if _, exists := pendingEvents[key]; exists || len(pendingEvents) < o.retain {
+			pendingEvents[key] = *e
+		}
+		viewMu.Unlock()
+	}
 	// Serialize admissions across live streams so the Nth successful enqueue
 	// stops intake without racing or cancelling earlier admissions.
 	var admission sync.Mutex
 	total := 0
 	admit := func(e event.Event, final bool) error {
+		if name, ok := deps.sourceNames[fmt.Sprint(e.Source["path"])]; ok {
+			e.Source = event.SafeSource(e.Source)
+			e.Source["path"] = name
+		}
 		admission.Lock()
 		defer admission.Unlock()
 		if o.maxEvents > 0 && total >= o.maxEvents {
@@ -213,6 +305,17 @@ func (o *options) runWith(cmd *cobra.Command, paths []string, stdin io.Reader, d
 			if err := ctx.Err(); err != nil {
 				return err
 			}
+		}
+		admitted := false
+		if deps.update != nil {
+			pending := e
+			pending.Importance = "pending"
+			pendingView(e.ID, &pending)
+			defer func() {
+				if !admitted {
+					pendingView(e.ID, nil)
+				}
+			}()
 		}
 		state.Add("received", 1)
 		if o.k.Follow {
@@ -230,6 +333,7 @@ func (o *options) runWith(cmd *cobra.Command, paths []string, stdin io.Reader, d
 				return ctx.Err()
 			}
 		}
+		admitted = true
 		total++
 		if o.maxEvents > 0 && total == o.maxEvents {
 			gap(e.Source, "event_limit")
@@ -248,6 +352,10 @@ func (o *options) runWith(cmd *cobra.Command, paths []string, stdin io.Reader, d
 		if err != nil {
 			return err
 		}
+		if concrete, ok := collector.(*kube.Collector); ok && deps.update != nil {
+			concrete.Stats = state.Merge
+			concrete.Pending = func(source event.Source, e *event.Event) { pendingView("stream:"+event.Hash(source), e) }
+		}
 		gap(event.Source{"type": "kubernetes"}, "bounded_history")
 	}
 	background := make(chan error, 3)
@@ -265,6 +373,21 @@ func (o *options) runWith(cmd *cobra.Command, paths []string, stdin io.Reader, d
 			}
 		}()
 	}
+	if deps.update != nil {
+		start(func() error {
+			ticker := time.NewTicker(100 * time.Millisecond)
+			defer ticker.Stop()
+			for {
+				deps.update(snapshotView())
+				select {
+				case <-process.Done():
+					return nil
+				case <-ticker.C:
+				}
+			}
+		})
+	}
+
 	if store != nil {
 		start(func() error { return store.Deliver(process, sink) })
 		start(func() error { return inspect.Serve(process, listeners[0], inspect.Health(state), false) })
@@ -316,7 +439,10 @@ func (o *options) runWith(cmd *cobra.Command, paths []string, stdin io.Reader, d
 			}
 		}
 		r.Add(e)
-		if !o.json && evidenceErr == nil && process.Err() == nil {
+		if deps.update != nil {
+			pendingView(e.ID, nil)
+		}
+		if !o.json && !deps.quiet && evidenceErr == nil && process.Err() == nil {
 			writer := cmd.OutOrStdout()
 			if store != nil {
 				writer = cmd.ErrOrStderr()
@@ -391,7 +517,7 @@ func (o *options) runWith(cmd *cobra.Command, paths []string, stdin io.Reader, d
 	if o.offline {
 		mode = "offline-rules"
 	}
-	value := r.Snapshot(mode, map[string]any{"namespace": o.k.Namespace, "selector": o.k.Selector}, o.k.Follow || paths == nil, usage, metrics, engine.Checkpoint())
+	value := r.Snapshot(mode, scope(), o.k.Follow || paths == nil, usage, metrics, engine.Checkpoint())
 	if teacher != nil {
 		tu := teacher.Usage()
 		value["provider_usage"].(map[string]any)["template"] = tu
@@ -404,6 +530,15 @@ func (o *options) runWith(cmd *cobra.Command, paths []string, stdin io.Reader, d
 			value["template_refinement"] = engine.LearningReport()
 		}
 	}
+	value["input_price"] = o.inputPrice
+	value["output_price"] = o.outputPrice
+	if o.k.Follow {
+		value["tail_events"] = value["events"]
+		value["live"] = map[string]any{"status": "stopped", "message": "Collection stopped; retained evidence remains available", "active_streams": 0, "queue_depth": 0, "retained_events": len(value["events"].([]event.Event)), "events_per_second": float64(metrics["received"]) / max(.001, value["summary"].(map[string]any)["elapsed_seconds"].(float64)), "dropped": metrics["dropped"], "unfollowed_streams": metrics["unfollowed_streams"], "reconnects": metrics["coverage_stream_reconnect"]}
+	}
+	if deps.finished != nil {
+		deps.finished(value)
+	}
 	if o.output != "" {
 		if err := report.Write(o.output, value); err != nil {
 			return err
@@ -413,7 +548,7 @@ func (o *options) runWith(cmd *cobra.Command, paths []string, stdin io.Reader, d
 		if output.Final(cmd.OutOrStdout(), func(w io.Writer) error { return json.NewEncoder(w).Encode(value) }) != nil {
 			return errors.New("cannot write report output")
 		}
-	} else if evidenceErr == nil {
+	} else if evidenceErr == nil && !deps.quiet {
 		summary := value["summary"].(map[string]any)
 		writer := cmd.OutOrStdout()
 		if store != nil {
@@ -421,6 +556,19 @@ func (o *options) runWith(cmd *cobra.Command, paths []string, stdin io.Reader, d
 		}
 		if err := output.Final(writer, func(w io.Writer) error {
 			_, err := fmt.Fprintf(w, "events=%v important=%v uncertain=%v unknown=%v complete=%v\n", summary["events"], summary["important"], summary["uncertain"], summary["unknown"], summary["complete_within_window"])
+			if err == nil && o.top > 0 {
+				raw, _ := json.Marshal(value["important_groups"])
+				var groups []struct {
+					Text  string `json:"text"`
+					Count int    `json:"count"`
+				}
+				_ = json.Unmarshal(raw, &groups)
+				for _, g := range groups[:min(o.top, len(groups))] {
+					if _, err = fmt.Fprintf(w, "×%d %s\n", g.Count, event.Console(g.Text)); err != nil {
+						break
+					}
+				}
+			}
 			return err
 		}); err != nil {
 			return err
