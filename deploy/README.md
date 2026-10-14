@@ -2,7 +2,7 @@
 
 `base/resources.json` is a namespaced read-only controller example with pod get/list/watch and pod-log get permissions. Replace the example image and configure namespace, selection, provider secrets and webhook endpoint through your own delivery process. These files are not applied by tests or release scripts.
 
-Build the multi-stage Dockerfile with operator-approved digest-pinned `GO_IMAGE` (Go 1.25+) and Debian-compatible `RUNTIME_IMAGE`. Runtime user/group is 65532; provision `/var/lib/jevernetes` privately and use local persistent storage. The binary includes dashboard assets and requires no interpreter. The checked-in security context uses a read-only root filesystem, no privilege escalation and dropped capabilities.
+Build the multi-stage Dockerfile with operator-approved digest-pinned `GO_IMAGE` (Go 1.27.2+) and Debian-compatible `RUNTIME_IMAGE`. Runtime user/group is 65532; provision `/var/lib/jevernetes` privately and use local persistent storage. The binary includes dashboard assets and requires no interpreter. The checked-in security context uses a read-only root filesystem, no privilege escalation and dropped capabilities.
 
 Health/metrics use port 9090. Inspection is enabled on loopback 9091 and is deliberately absent from the Service. Inspecting operators separately need pod get/list and pods/portforward create; do not grant those additional permissions to the collector merely for inspection.
 

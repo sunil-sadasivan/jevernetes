@@ -70,8 +70,11 @@ try {
     assert.ifError(result.error);
     assert.equal(result.status,1);
     assert.equal(result.stderr.trim(),'health listener unavailable');
-    assert.equal(fs.statSync(state).mode&0o777,0o600);
-    assert.equal(fs.readFileSync(state).subarray(0,16).toString(),'SQLite format 3\0');
+    const fd=fs.openSync(state,fs.constants.O_RDONLY|fs.constants.O_NOFOLLOW);
+    try {
+      assert.equal(fs.fstatSync(fd).mode&0o777,0o600);
+      assert.equal(fs.readFileSync(fd).subarray(0,16).toString(),'SQLite format 3\0');
+    } finally { fs.closeSync(fd); }
     assert.equal(fs.existsSync(`${state}-shm`),false);
   };
   openState(`${volume}/state.db`);

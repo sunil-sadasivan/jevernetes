@@ -1,3 +1,19 @@
+# Public PR security follow-up — 2026-10-14
+
+Reviewed the public PR at `9cc8d93`, branch-specific CodeQL alerts, repository dependency/secret alerts, repository notifications and scheduled security runs. GitHub reported no open Dependabot or secret-scanning alerts; the October 12 scheduled full-history security run passed. The PR did report two high-severity Go path-injection alerts (#8/#9) and one JavaScript filesystem-race warning (#7). These counts are observations at review time, not a guarantee of absence of vulnerabilities.
+
+An independent `govulncheck` v1.9.0 scan found **13 reachable advisories** in the old Go 1.27.1 standard library and `golang.org/x/net`/`golang.org/x/text`: GO-2026-6617, 6613, 6612, 6611, 6610, 6609, 6608, 6607, 6605, 6603, 5970, 5026 and 4918. These include HTTP transport/parser denial-of-service and framing issues. Reachable symbols do not prove every advisory is exploitable in the application's configured protocols. The initial log is `.runs/security-govulncheck.log`; the official advisory database includes [GO-2026-6617](https://pkg.go.dev/vuln/GO-2026-6617).
+
+The module now requires **Go 1.27.2**, with `x/net` 0.60.0, `x/text` 0.42.0, `x/sys` 0.48.0 and `x/term` 0.46.0. The repeated source scan reports **No vulnerabilities found** (`.runs/patched-govulncheck.log`). CI runs the pinned vulnerability checker on Linux. The Go setup action is pinned to its official immutable commit; Docker builds require the operator-selected patched toolchain rather than silently downloading one. Offline cross-builds and nested-module checks use the selected project toolchain.
+
+Browser upload names remain validated display metadata but no longer become disk paths; uploads use generated private directories and fixed filenames, preserving gzip decoding and original source labels. Report IDs are explicitly reduced to a validated basename at the filesystem boundary. Traversal and source-name preservation are tested. The test-only state smoke now checks metadata and contents through one no-follow file descriptor. Existing Host/Origin/CSRF, private-file and read-only cluster boundaries remain in place; no scanner alert was manually dismissed.
+
+Hosted Linux race testing also exposed the one-second intake deadline expiring during cold collector initialization. Duration now starts after setup. The regression deliberately spends longer than the configured duration initializing the fake collector, then still requires the quiet pending event, partial coverage, joined stream and private final report. Affected package race tests and the complete pre-dependency-upgrade gate passed; the patched Go normal/race/vet suites and patched release/executable HTTP/PTY/archive checks passed. The complete patched gate and final hosted results are recorded with the final PR status.
+
+Logs are ignored under `.runs/`. No credentials were printed, no live provider/cluster or deployment was accessed, and no production evidence was used. Retained Rust/Python assets and runtime retirement policy are unchanged.
+
+---
+
 # Native Go investigation parity — 2026-10-13
 
 This pass started from `d1435dd` on the staged-coexistence branch and completes native investigation workflows in an isolated worktree. The previously published PR head (`629918d`) did not have TUI or investigation-dashboard parity. The new Go TUI and dashboard use the native collector/provider lifecycle; neither starts Python, Rust or kubectl. The 60 retained runtime/package/test assets remain byte-for-byte and mode-identical to the accepted retained base. Runtime retirement remains disabled.

@@ -85,7 +85,7 @@ func (s *Server) reportLocked(id string) (object, error) {
 	if id == s.initialID {
 		return clone(s.initial), nil
 	}
-	return readReport(s.ctx, filepath.Join(s.root, id))
+	return readReport(s.ctx, filepath.Join(s.root, filepath.Base(id)))
 }
 func (s *Server) sourceLocked(p object) (object, string, error) {
 	liveID, reportID := str(p, "live_id"), str(p, "report_id")
@@ -396,7 +396,11 @@ func (s *Server) start(p object) (object, error) {
 				if err = os.Mkdir(dir, 0700); err != nil {
 					break
 				}
-				path := filepath.Join(dir, file.name)
+				name := "upload.log"
+				if strings.HasSuffix(file.name, ".gz") {
+					name += ".gz"
+				}
+				path := filepath.Join(dir, name)
 				if err = os.WriteFile(path, file.data, 0600); err != nil {
 					break
 				}
@@ -425,6 +429,7 @@ func (s *Server) start(p object) (object, error) {
 				return normalize(v)
 			}
 			if err == nil {
+				p["_source_names"] = names
 				value, err = s.Scan(ctx, p, paths, func(v object) { v = rename(v); s.mu.Lock(); s.live = v; s.mu.Unlock() })
 				if value != nil {
 					value = rename(value)

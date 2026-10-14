@@ -1,8 +1,9 @@
-# Supply operator-approved digest-pinned Go 1.25+ and Debian-compatible base images.
+# Supply operator-approved digest-pinned Go 1.27.2+ and Debian-compatible base images.
 ARG GO_IMAGE
 ARG RUNTIME_IMAGE
 FROM ${GO_IMAGE} AS build
 WORKDIR /build
+ENV GOTOOLCHAIN=local
 COPY go.mod go.sum ./
 COPY third_party/spdystream ./third_party/spdystream
 RUN go mod download

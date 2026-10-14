@@ -1,6 +1,6 @@
 module github.com/sunil-sadasivan/jevernetes
 
-go 1.25.0
+go 1.27.2
 
 // Pinned v0.5.0 with bounded receive decoding; see third_party/spdystream/README.md.
 replace github.com/moby/spdystream => ./third_party/spdystream
@@ -10,10 +10,10 @@ require (
 	github.com/moby/spdystream v0.5.0
 	github.com/prometheus/client_golang v1.23.2
 	github.com/spf13/cobra v1.10.2
-	golang.org/x/net v0.47.0
-	golang.org/x/sys v0.42.0
-	golang.org/x/term v0.37.0
-	golang.org/x/text v0.31.0
+	golang.org/x/net v0.60.0
+	golang.org/x/sys v0.48.0
+	golang.org/x/term v0.46.0
+	golang.org/x/text v0.42.0
 	k8s.io/api v0.35.3
 	k8s.io/apimachinery v0.35.3
 	k8s.io/client-go v0.35.3

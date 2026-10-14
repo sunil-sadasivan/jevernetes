@@ -47,6 +47,9 @@ func scanDashboard(ctx context.Context, p map[string]any, paths []string, update
 	names := map[string]string{}
 	for _, path := range paths {
 		names[path] = filepath.Base(path)
+		if original, ok := p["_source_names"].(map[string]string); ok && original[path] != "" {
+			names[path] = original[path]
+		}
 	}
 	var final map[string]any
 	cmd := newCommand(strings.NewReader(""), io.Discard, io.Discard, runtimeDeps{sourceNames: names, quiet: true, update: update, finished: func(v map[string]any) { final = v }})

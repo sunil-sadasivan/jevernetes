@@ -127,6 +127,11 @@ func TestLiveQuietPendingEventSurvivesIntakeStop(t *testing.T) {
 			closed := make(chan struct{})
 			input := &observedInput{PipeReader: r, closed: closed}
 			deps := runtimeDeps{collector: func(cfg kube.Config) (logCollector, error) {
+				if stop == "duration" {
+					// Model cold startup longer than the intake duration. The
+					// duration must begin only after collector initialization.
+					time.Sleep(1100 * time.Millisecond)
+				}
 				return &kube.Collector{Config: cfg, API: fake.NewClientset(p).CoreV1(), OpenLog: func(context.Context, string, string, *v1.PodLogOptions) (io.ReadCloser, error) { return input, nil }}, nil
 			}}
 			var out, stderr bytes.Buffer

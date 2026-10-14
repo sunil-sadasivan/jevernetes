@@ -83,11 +83,6 @@ func (o *options) runWith(cmd *cobra.Command, paths []string, stdin io.Reader, d
 	defer cancelProcess()
 	ctx, cancel := context.WithCancel(process)
 	defer cancel()
-	if o.k.Duration > 0 && paths == nil {
-		var bounded context.CancelFunc
-		ctx, bounded = context.WithTimeout(ctx, o.k.Duration)
-		defer bounded()
-	}
 	cfg := o.analysisConfig()
 	if o.humanRules != "" {
 		reviewer, err := investigation.Reviewer(process, o.humanRules)
@@ -357,6 +352,12 @@ func (o *options) runWith(cmd *cobra.Command, paths []string, stdin io.Reader, d
 			concrete.Pending = func(source event.Source, e *event.Event) { pendingView("stream:"+event.Hash(source), e) }
 		}
 		gap(event.Source{"type": "kubernetes"}, "bounded_history")
+	}
+	// Duration bounds intake, not configuration, state or collector startup.
+	if o.k.Duration > 0 && paths == nil {
+		var bounded context.CancelFunc
+		ctx, bounded = context.WithTimeout(ctx, o.k.Duration)
+		defer bounded()
 	}
 	background := make(chan error, 3)
 	var workers sync.WaitGroup

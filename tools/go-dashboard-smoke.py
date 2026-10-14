@@ -1,5 +1,6 @@
 """Exercise the built Go dashboard over real loopback HTTP with synthetic logs."""
 import base64
+import gzip
 import json
 import os
 from pathlib import Path
@@ -84,6 +85,20 @@ with tempfile.TemporaryDirectory(prefix='jev-go-http-') as directory:
         saved = root / 'reports' / report_id
         assert saved.stat().st_mode & 0o777 == 0o600
         assert json.loads(saved.read_text())['events'][0]['importance'] == first['importance']
+        assert request('/api/analyze', {'kind': 'files', 'files': [{'name': '../escape.log', 'data': ''}]}, token)[0] == 400
+        code, compressed = request('/api/analyze', {'kind': 'files', 'offline': True, 'files': [{'name': 'archive.log.gz', 'data': base64.b64encode(gzip.compress(evidence)).decode()}]}, token)
+        assert code == 202, compressed
+        deadline = time.monotonic() + 10
+        while True:
+            _, state = request('/api/state')
+            if state['job']['status'] not in ('running', 'stopping'):
+                break
+            assert time.monotonic() < deadline
+            time.sleep(.03)
+        assert state['job']['status'] == 'complete', state['job']
+        _, compressed_report = request('/api/report?id=' + state['job']['report_id'])
+        assert compressed_report['summary']['events'] == 2
+        assert compressed_report['events'][0]['source']['path'] == 'archive.log.gz'
         print('PASS: Go dashboard HTTP: upload, report history, assets, CSRF/origin, exact search, reversible reviews, private persistence')
     finally:
         child.terminate()

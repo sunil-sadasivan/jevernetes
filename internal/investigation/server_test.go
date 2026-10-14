@@ -175,3 +175,32 @@ func TestLegacyRuleExtensionScopesAndConflictingIdentities(t *testing.T) {
 		t.Fatal("conflicting identities accepted")
 	}
 }
+
+func TestUploadNamesNeverSelectDiskPaths(t *testing.T) {
+	s := setup(t)
+	observed := make(chan string, 1)
+	s.Scan = func(ctx context.Context, p object, paths []string, update func(object)) (object, error) {
+		if len(paths) != 2 || filepath.Base(paths[0]) != "upload.log" || filepath.Base(paths[1]) != "upload.log.gz" {
+			observed <- "untrusted disk name"
+			return fixture(), nil
+		}
+		names, ok := p["_source_names"].(map[string]string)
+		if !ok || names[paths[0]] != "customer.log" || names[paths[1]] != "customer.gz" {
+			observed <- "lost display names"
+			return fixture(), nil
+		}
+		observed <- "ok"
+		return fixture(), nil
+	}
+	bad := request(s, "POST", "/api/analyze", object{"kind": "files", "files": []any{object{"name": "../escape", "data": ""}}}, s.token)
+	if bad.Code != 400 {
+		t.Fatal("accepted traversal")
+	}
+	got := request(s, "POST", "/api/analyze", object{"kind": "files", "_source_names": object{"bad": "/private/path"}, "files": []any{object{"name": "customer.log", "data": ""}, object{"name": "customer.gz", "data": ""}}}, s.token)
+	if got.Code != 202 {
+		t.Fatal(got.Body.String())
+	}
+	if result := <-observed; result != "ok" {
+		t.Fatal(result)
+	}
+}

@@ -1,5 +1,7 @@
 #!/bin/sh
 set -eu
+# Keep nested modules and offline cross-builds on the selected patched toolchain.
+export PATH="$(go env GOROOT)/bin:$PATH"
 [ -z "$(gofmt -l cmd internal examples third_party/spdystream)" ]
 go mod tidy
 git diff --exit-code -- go.mod go.sum
