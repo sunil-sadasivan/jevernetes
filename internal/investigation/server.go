@@ -85,7 +85,18 @@ func (s *Server) reportLocked(id string) (object, error) {
 	if id == s.initialID {
 		return clone(s.initial), nil
 	}
-	return readReport(s.ctx, filepath.Join(s.root, filepath.Base(id)))
+	// Resolve browser IDs against actual regular directory entries. The path
+	// passed to the file reader comes from the directory, never from the request.
+	entries, err := os.ReadDir(s.root)
+	if err != nil {
+		return nil, errors.New("report directory unavailable")
+	}
+	for _, entry := range entries {
+		if entry.Name() == id && entry.Type().IsRegular() {
+			return readReport(s.ctx, filepath.Join(s.root, entry.Name()))
+		}
+	}
+	return nil, errors.New("report unavailable")
 }
 func (s *Server) sourceLocked(p object) (object, string, error) {
 	liveID, reportID := str(p, "live_id"), str(p, "report_id")
@@ -151,7 +162,14 @@ func (s *Server) state() (object, error) {
 			continue
 		}
 		seen[item.name] = true
-		v, err := s.reportLocked(item.name)
+		// These names were obtained from the directory above, not HTTP input.
+		var v object
+		var err error
+		if item.name == s.initialID {
+			v = clone(s.initial)
+		} else {
+			v, err = readReport(s.ctx, filepath.Join(s.root, item.name))
+		}
 		if err != nil {
 			continue
 		}

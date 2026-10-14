@@ -204,3 +204,21 @@ func TestUploadNamesNeverSelectDiskPaths(t *testing.T) {
 		t.Fatal(result)
 	}
 }
+
+func TestReportLookupOnlyUsesRegularDirectoryEntries(t *testing.T) {
+	s := setup(t)
+	if _, err := s.reportLocked("test.json"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(s.root, "test.json"), filepath.Join(s.root, "alias.json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(s.root, "directory.json"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"alias.json", "directory.json", "missing.json", "../test.json", "/test.json"} {
+		if _, err := s.reportLocked(name); err == nil {
+			t.Fatalf("accepted %q", name)
+		}
+	}
+}
