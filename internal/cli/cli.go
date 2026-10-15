@@ -206,12 +206,6 @@ func newCommand(in io.Reader, out, stderr io.Writer, deps runtimeDeps) *cobra.Co
 	})
 	root.AddCommand(remoteCommand(o))
 	root.AddCommand(dashboardCommand(o))
-	for _, name := range []string{"search", "context", "review", "reviews"} {
-		name := name
-		root.AddCommand(&cobra.Command{Use: name, Short: "Available in the coexisting Rust/Python investigation runtimes", DisableFlagParsing: true, RunE: func(*cobra.Command, []string) error {
-			return fmt.Errorf("%s is available in the native dashboard; use dashboard or files/k8s --tui; see docs/usage.md", name)
-		}})
-	}
 	root.CompletionOptions.DisableDefaultCmd = true
 	configureHelpCommand(root)
 	return root

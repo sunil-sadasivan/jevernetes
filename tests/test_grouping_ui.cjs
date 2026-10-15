@@ -1,5 +1,5 @@
 const fs = require('node:fs'), vm = require('node:vm'), assert = require('node:assert/strict');
-const app = fs.readFileSync('jevernetes/web/app.js', 'utf8');
+const app = fs.readFileSync('internal/investigation/web/app.js', 'utf8');
 const elements = new Map();
 class Element {
   constructor(tag='div') { this.tagName=tag; this.children=[]; this.listeners={}; this.dataset={}; this.value=''; this.textContent=''; this.checked=false; this.open=false; this.classList={toggle(){},add(){},remove(){}}; }
@@ -20,7 +20,7 @@ const sandbox = {state, document:{createElement:tag=>new Element(tag)}, $:get,
   detail:(...args)=>{inspected=args;}, scopeValues:()=>({}),
   LogContext:{matches:()=>true,collected:r=>r.events}, TextEncoder};
 vm.createContext(sandbox);
-vm.runInContext(fs.readFileSync('jevernetes/web/prompt.js','utf8'), sandbox);
+vm.runInContext(fs.readFileSync('internal/investigation/web/prompt.js','utf8'), sandbox);
 for (const name of ['confidenceValue','confidenceBand','matchesConfidence','confidenceSummary','confidenceBadge','orderConfidenceRows','loadConfidencePreferences','saveConfidencePreferences','node','eventGroupKey','groupEvents','openInstances','renderInstances','renderEvents','renderSelection','selectEvents','selectedPrompt','selectedReview']) {
   const match = app.match(new RegExp(`^function ${name}\\([^]*?^\\}`, 'm'));
   // node() is intentionally a one-line helper.

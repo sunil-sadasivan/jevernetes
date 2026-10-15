@@ -5,9 +5,9 @@ import {execFileSync} from 'node:child_process';
 import path from 'node:path';
 const secrets = /(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{30,}|AKIA[0-9A-Z]{16}|sk-[A-Za-z0-9_-]{40,})/;
 const personal = /\/(?:Users|home)\/[A-Za-z0-9_.-]+\//;
-const privateParts = new Set(['.cache','.runs','reports','.git','.kube','dist','bin','build']);
+const privateParts = new Set(['.cache','.runs','reports','.git','.kube','dist','bin','build','target','.venv','.security-venv','__pycache__']);
 const binary = /\.(gif|png|mp4|jpg|jpeg|ico)$/i;
-const privateExtensions = new Set(['.pem','.key','.db','.sqlite','.pyc']);
+const privateExtensions = new Set(['.pem','.key','.db','.sqlite','.pyc','.pyo']);
 function readRegular(name, encoding) {
   let fd;
   try {
@@ -22,15 +22,19 @@ function readRegular(name, encoding) {
 }
 const listed = execFileSync('git',['ls-files','--cached','--others','--exclude-standard','-z'],{encoding:'utf8'}).split('\0').filter(Boolean);
 const files = [...new Set(listed)].sort();
+const retired = new Set(['Cargo.toml','Cargo.lock','pyproject.toml','MANIFEST.in','requirements-dev.txt']);
+for (const name of files) {
+  if (retired.has(name) || name.startsWith('jevernetes/') || name.startsWith('src/') || name.startsWith('tests/rust/')) throw new Error(`Retired implementation in source: ${name}`);
+}
 let textCount = 0;
 for (const name of files) {
   const parts = name.split('/');
   const base = path.posix.basename(name);
-  if (parts.some(p=>privateParts.has(p)) || base==='.env' || base==='kubeconfig' || privateExtensions.has(path.posix.extname(base))) throw new Error(`Private/build path in source: ${name}`);
+  if (parts.some(p=>privateParts.has(p)) || base.startsWith('.env') || base.startsWith('kubeconfig') || base==='.review-rules.json' || privateExtensions.has(path.posix.extname(base))) throw new Error(`Private/build path in source: ${name}`);
   const content = readRegular(name, binary.test(name) ? undefined : 'utf8');
+  if (secrets.test(content) || personal.test(content)) throw new Error(`Potential credential/personal path in ${name}; values suppressed`);
   if (binary.test(name)) continue;
   textCount++;
-  if (secrets.test(content) || personal.test(content)) throw new Error(`Potential credential/personal path in ${name}; values suppressed`);
 }
 const listAt = process.argv.indexOf('--write-list');
 if (listAt>=0) fs.writeFileSync(process.argv[listAt+1],files.join('\n')+'\n');
@@ -92,4 +96,4 @@ assert.ok(docker.indexOf('COPY third_party/spdystream ./third_party/spdystream')
 assert.ok(readRegular('.dockerignore','utf8').split('\n').includes('!third_party/spdystream/**'));
 assert.ok(docker.indexOf('COPY third_party/spdystream ./third_party/spdystream') < docker.indexOf('RUN go mod download'));
 assert.match(docker,/ENTRYPOINT \["\/usr\/local\/bin\/jevernetes"\]/);
-console.log(`Checked ${files.length} source files (${textCount} text): coexisting runtimes included; credential/personal-path signatures=0; private/build paths=0; controller/container checks passed.`);
+console.log(`Checked ${files.length} source files (${textCount} text): Go-only runtime/package boundaries passed; credential/personal-path signatures=0; private/build paths=0; controller/container checks passed.`);

@@ -1,14 +1,14 @@
 # CLI usage
 
 ```sh
-jevernetes-go files examples/mixed.log --offline --json
-jevernetes-go files application.txt.gz - --offline --output report.json
-jevernetes-go k8s --namespace demo --selector app=api --offline --since 30m
-jevernetes-go k8s -f --namespace demo --offline --tail 0 --duration 60
-jevernetes-go dashboard --report report.json
+jevernetes files examples/mixed.log --offline --json
+jevernetes files application.txt.gz - --offline --output report.json
+jevernetes k8s --namespace demo --selector app=api --offline --since 30m
+jevernetes k8s -f --namespace demo --offline --tail 0 --duration 60
+jevernetes dashboard --report report.json
 ```
 
-`kubernetes` aliases `k8s`; `--live` aliases `--follow`/`-f`. The Go release supplies the `jev-go` executable alias; existing Rust command names remain available. `--help` is the authoritative flag list. Unknown options and unsupported compatibility options fail before inputs or credentials are opened.
+`kubernetes` aliases `k8s`; `--live` aliases `--follow`/`-f`. The Go release supplies `jevernetes` and the `jev` alias. `--help` is the authoritative flag list. Unknown options and unsupported compatibility options fail before inputs or credentials are opened.
 
 Files support plain text, JSONL, stack-trace continuations, gzip including concatenated members, and `-` once for stdin. Missing files produce coverage gaps while subsequent inputs continue. `--max-file-bytes` limits decompressed input (default 32 MiB). Lines are bounded at 65,536 bytes and events at 16,000 UTF-8 bytes. Incomplete byte-limit fragments and oversized lines/events are marked truncated. Unterminated Kubernetes physical lines also mark the containing event truncated and parse-uncertain; normal file EOF does not. Secret-like fields, authorization strings, URL credentials and private-key blocks are redacted before event storage. Duplicate JSON keys retain their conflicting, safely redacted values within the evidence bounds and mark the event parse-uncertain, excluding grouping/durable reuse and requiring conservative policy handling (review by default). Interrupted finalization marks any pending event incomplete, even after a newline-terminated header. Redaction is best effort; reports remain sensitive.
 
@@ -30,8 +30,8 @@ Use `files PATH --tui` or `k8s -f --tui` for the native terminal. Keys: 1–5 or
 
 Press `/` (or `?`) for semantic search or `f` for exact text. While editing, Tab switches mode, Ctrl+B cycles 4/16/64 batches, Ctrl+U clears, arrows/Home/End move the cursor, and Backspace/Delete edit Unicode text. Search freezes the current retained window, includes pending evidence, groups exact occurrences, and caches successful decisions for five minutes with occurrence-aware keys. Its TypeSafe requests and $0.01 cost bound are separate from collection. Press x to stop a search while retaining completed results. Offline mode supports exact search without credentials or provider requests.
 
-Human expected-event rules use `--rules-file` (default `.runs/.review-rules.json` for files/k8s). They are literal and reversible, never model-template rules. Expected events skip provider dispatch; disabling the rule restores the original judgment, or explicit unknown when analysis was skipped. Dashboard reviews persist beside reports. Use one dashboard writer per review directory; do not run separate Python/Go writers against the same file concurrently.
+Human expected-event rules use `--rules-file` (default `.runs/.review-rules.json` for files/k8s). They are literal and reversible, never model-template rules. Expected events skip provider dispatch; disabling the rule restores the original judgment, or explicit unknown when analysis was skipped. Dashboard reviews persist beside reports. Use one dashboard writer per review directory, including during upgrades from an older installation.
 
 Compatibility controls include `--workers 1..16`, `--collect-workers 1..32`, `--discovery-interval 1..3600`, `-n`, `-l`, `-A`/`--all-namespaces`, and `--top`. Go defaults to one provider worker and one snapshot worker, five-second discovery, and no additional final top-group listing. Parallel provider requests share the same cumulative budgets and preserve result order. Snapshot workers share global admission limits. `--top N` appends N important groups to the plain summary.
 
-Go framing preserves delayed multiline continuations: a quiet singleton is displayed as pending and is finalized by the next header or stream end. This intentionally differs from the retained runtimes' quiet flush. Kubernetes coverage, retention/byte limits, event identities, runtime defaults and output layout are not byte-identical between runtimes. No exactly-once or complete-history guarantee is added. Intake caps/duration drain admitted work, and controller budget exhaustion exits for supervised restart.
+Go framing preserves delayed multiline continuations: a quiet singleton is displayed as pending and is finalized by the next header or stream end. This intentionally differs from the previous runtimes' quiet flush. Kubernetes coverage, retention/byte limits, event identities, runtime defaults and output layout are not byte-identical between runtimes. No exactly-once or complete-history guarantee is added. Intake caps/duration drain admitted work, and controller budget exhaustion exits for supervised restart.

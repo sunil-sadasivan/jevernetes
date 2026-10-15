@@ -1,6 +1,6 @@
 # Architecture
 
-`cmd/jevernetes` and `cmd/jev` invoke the same Cobra command tree. Packages under `internal/` provide the Go runtime. `src/` retains the supported Rust terminal/search runtime; `jevernetes/` retains the supported Python investigation service and UI. No runtime implicitly launches another. Release names keep installations side-by-side.
+`cmd/jevernetes` and `cmd/jev` invoke the same Cobra command tree. Packages under `internal/` provide the sole Go runtime, including the terminal and embedded investigation dashboard. Local builds, releases and containers use the canonical `jevernetes` command; `jev` is an alias. The previous Python and Rust implementations are available in Git history.
 
 | Package | Responsibility |
 | --- | --- |

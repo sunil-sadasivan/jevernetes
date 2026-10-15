@@ -1,3 +1,17 @@
+# Sole Go runtime and canonical executable — 2026-10-14
+
+At the explicit request to replace Python and Rust, Go is now the only product runtime. The previously required coexistence policy is superseded; earlier entries below remain historical records. Revision `e310a2b32d206a6061ec573d1bc32d7eb50335e9` preserves the last coexistence tree in Git, with all hosted checks passing and no open branch CodeQL, repository dependency or secret alerts at that review.
+
+Removed the Python package, Rust sources, their packaging manifests and runtime-specific build/test jobs. Native CLI, TUI, dashboard and controller code remain. `make build` (or `go build -o ./jevernetes ./cmd/jevernetes`) produces `./jevernetes`; releases provide `jevernetes` and `jev`. Removed obsolete help placeholders advertising retired runtimes. Schema-1/2 reports and version-1 human review rules open directly in Go; migration and rollback instructions preserve filenames, private backups and separate model-template rules.
+
+The six browser acceptance suites now load Go's embedded assets directly, with their assertions unchanged. The executable inventory covers 14 workflows and 21 native suites. Retirement regression checks reject reintroduced Python/Rust runtime/package paths and changed browser fixtures; source/archive checks reject old implementations, private state and credential signatures. Python/Node remain development-only test tools. Go vulnerability/race checks, secrets scanning and CodeQL for Go, JavaScript and remaining Python fixtures stay enabled.
+
+Local Darwin arm64 verification: the full `tools/check.sh` gate passed (normal/race/vet, vendored SPDY, Linux amd64/386/arm cross-builds, browser contracts, native HTTP and PTY, retirement and privacy checks). `make build` produced the canonical executable. `tools/release.sh` passed alias/offline/signal/state/HTTP/PTY checks and source archive byte comparisons; the binary archive contains only `jevernetes`, `jev`, `LICENSE` and `README.md`. CLI tests passed again after removing the help placeholders. Logs are ignored under `.runs/native-only-check.log` and `.runs/native-only-release.log`. Final CI verifies the pushed revision.
+
+Workflow equivalence retains the documented framing/default/identity differences. Live provider accuracy/billing, production clusters, actual container-engine execution and a long production soak remain unverified. No real provider/cluster, deployment or production evidence was used.
+
+---
+
 # Public PR security follow-up — 2026-10-14
 
 Reviewed the public PR at `9cc8d93`, branch-specific CodeQL alerts, repository dependency/secret alerts, repository notifications and scheduled security runs. GitHub reported no open Dependabot or secret-scanning alerts; the October 12 scheduled full-history security run passed. The PR did report two high-severity Go path-injection alerts (#8/#9) and one JavaScript filesystem-race warning (#7). These counts are observations at review time, not a guarantee of absence of vulnerabilities.

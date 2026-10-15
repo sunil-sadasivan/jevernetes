@@ -65,7 +65,7 @@ const server=createServer(async(req,res)=>{
   }
   if(path==='/api/search')return res.end(JSON.stringify(searchResult()));
   const files={'/':'index.html','/app.js':'app.js','/context.js':'context.js','/prompt.js':'prompt.js','/search.js':'search.js','/style.css':'style.css','/favicon.svg':'favicon.svg'};
-  if(files[path]){res.setHeader('Content-Type',path.endsWith('.js')?'text/javascript':path.endsWith('.css')?'text/css':path.endsWith('.svg')?'image/svg+xml':'text/html');return res.end(await readFile(join(root,'jevernetes/web',files[path])));}
+  if(files[path]){res.setHeader('Content-Type',path.endsWith('.js')?'text/javascript':path.endsWith('.css')?'text/css':path.endsWith('.svg')?'image/svg+xml':'text/html');return res.end(await readFile(join(root,'internal/investigation/web',files[path])));}
   res.writeHead(404);res.end();
  }catch(e){console.error(e.message);res.writeHead(500);res.end();}
 });

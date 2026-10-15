@@ -1,13 +1,13 @@
 # Remote inspection
 
 ```sh
-jevernetes-go remote --context example --namespace monitoring --watch --json
-jevernetes-go remote --context example --namespace monitoring --pod controller-example --json
-jevernetes-go remote --namespace monitoring --incident <64-hex-incident-id>
-jevernetes-go dashboard --controller-context example --controller-namespace monitoring
+jevernetes remote --context example --namespace monitoring --watch --json
+jevernetes remote --context example --namespace monitoring --pod controller-example --json
+jevernetes remote --namespace monitoring --incident <64-hex-incident-id>
+jevernetes dashboard --controller-context example --controller-namespace monitoring
 ```
 
-These workstation commands use the Go binary `jevernetes-go` (`jev-go` is its alias); the coexisting Rust `jevernetes` CLI does not provide these operations. Inside the Go controller image only, the binary is named `/usr/local/bin/jevernetes`.
+Workstations and the controller image use the Go binary `jevernetes` (`jev` is its alias).
 
 The controller must enable `--inspect-port 9091`. The workstation reads its configured Kubernetes context, selects exactly one running, non-terminating pod and opens client-go SPDY port-forwarding. Discovery uses `app=jevernetes` by default, requests at most two pods, and rejects pagination/multiple/empty results. Exact `--pod` uses GET and conflicts with `--selector`. Namespace is mandatory.
 

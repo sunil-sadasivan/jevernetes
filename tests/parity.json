@@ -1,54 +1,40 @@
 {
   "base": "3a08dcb1c3611c0014b000074006701ad767bfa2",
-  "retained_base": "3338ea130d7daaca9d4916985654c047af296612",
-  "retirement_allowed": false,
+  "retirement_allowed": true,
   "workflows": [
     {
       "workflow": "ingestion",
       "status": "equivalent",
       "assets": [
         "internal/event",
-        "internal/cli",
-        "src/events.rs"
+        "internal/cli"
       ],
       "commands": [
-        "go test ./internal/event ./internal/cli",
-        "cargo test --locked --offline --all-features",
-        "python3 -m unittest discover -s tests -q"
+        "go test ./internal/event ./internal/cli"
       ]
     },
     {
       "workflow": "tui-search",
       "status": "equivalent",
       "assets": [
-        "src/tui.rs",
-        "src/search.rs",
-        "jevernetes/tui.py",
-        "jevernetes/search.py",
         "internal/tui",
         "internal/search",
         "tests/go_tui_pty.py"
       ],
       "commands": [
-        "cargo test --locked --offline --all-features",
-        "python3 -m unittest discover -s tests -q",
         "go test ./internal/tui ./internal/search ./internal/provider",
-        "go build -o .runs/native-ui-check/jevernetes-go ./cmd/jevernetes",
-        "python3 tests/go_tui_pty.py .runs/native-ui-check/jevernetes-go"
+        "go build -o .runs/native-ui-check/jevernetes ./cmd/jevernetes",
+        "python3 tests/go_tui_pty.py .runs/native-ui-check/jevernetes"
       ]
     },
     {
       "workflow": "context-reviews-acknowledgements",
       "status": "equivalent",
       "assets": [
-        "jevernetes/context.py",
-        "jevernetes/reviews.py",
-        "tests/test_context_reviews.py",
         "internal/investigation",
         "internal/kube/context.go"
       ],
       "commands": [
-        "python3 -m unittest discover -s tests -q",
         "node tests/test_context_ui.cjs",
         "node tests/test_review_ui.cjs",
         "go test ./internal/investigation ./internal/kube"
@@ -58,46 +44,36 @@
       "workflow": "live-dashboard-investigation-api",
       "status": "equivalent",
       "assets": [
-        "jevernetes/dashboard.py",
-        "jevernetes/live.py",
-        "tests/test_dashboard.py",
-        "tests/test_live.py",
         "internal/investigation",
         "internal/cli/investigation.go",
         "tools/go-dashboard-smoke.py"
       ],
       "commands": [
-        "python3 -m unittest discover -s tests -q",
         "node tests/test_search_ui.cjs",
         "node tests/test_grouping_ui.cjs",
         "go test ./internal/investigation ./internal/cli",
-        "python3 tools/check_native_ui.py",
-        "python3 tools/go-dashboard-smoke.py .runs/native-ui-check/jevernetes-go"
+        "python3 tools/go-dashboard-smoke.py .runs/native-ui-check/jevernetes"
       ]
     },
     {
       "workflow": "prompt-export",
       "status": "exact",
       "assets": [
-        "jevernetes/web/prompt.js",
         "tests/test_prompt_ui.cjs",
         "internal/investigation/web/prompt.js"
       ],
       "commands": [
-        "node tests/test_prompt_ui.cjs",
-        "python3 tools/check_native_ui.py"
+        "node tests/test_prompt_ui.cjs"
       ]
     },
     {
       "workflow": "reports-private-writes",
       "status": "equivalent",
       "assets": [
-        "internal/report",
-        "jevernetes/report.py"
+        "internal/report"
       ],
       "commands": [
-        "go test ./internal/report",
-        "python3 -m unittest discover -s tests -q"
+        "go test ./internal/report"
       ]
     },
     {
@@ -116,26 +92,20 @@
       "workflow": "provider-contracts",
       "status": "equivalent",
       "assets": [
-        "internal/provider",
-        "src/jev.rs",
-        "jevernetes/jev.py"
+        "internal/provider"
       ],
       "commands": [
-        "go test ./internal/provider",
-        "cargo test --locked --offline --all-features",
-        "python3 -m unittest discover -s tests -q"
+        "go test ./internal/provider"
       ]
     },
     {
       "workflow": "kubernetes-snapshot-follow-reconnect",
       "status": "equivalent",
       "assets": [
-        "internal/kube",
-        "src/kubernetes.rs"
+        "internal/kube"
       ],
       "commands": [
-        "go test ./internal/kube",
-        "cargo test --locked --offline --all-features"
+        "go test ./internal/kube"
       ]
     },
     {
@@ -154,14 +124,12 @@
       "status": "equivalent",
       "assets": [
         "internal/cli",
-        "src/main.rs",
-        "jevernetes/cli.py",
-        "internal/cli/native_ui_test.go"
+        "internal/cli/native_ui_test.go",
+        "cmd/jevernetes",
+        "cmd/jev"
       ],
       "commands": [
-        "go test ./internal/cli",
-        "cargo test --locked --offline --all-features",
-        "python3 -m unittest discover -s tests -q"
+        "go test ./internal/cli"
       ]
     },
     {
@@ -170,26 +138,21 @@
       "assets": [
         "Dockerfile",
         "deploy/base/resources.json",
-        "pyproject.toml",
-        "Cargo.toml"
+        "tools/release.sh",
+        "tools/smoke.mjs"
       ],
       "commands": [
-        "node tools/check-release.mjs",
-        "python3 tools/check_release.py",
-        "python3 -m unittest discover -s tools -p test_retained_parity.py -q"
+        "node tools/check-release.mjs"
       ]
     },
     {
       "workflow": "schema1-review-import",
       "status": "equivalent",
       "assets": [
-        "jevernetes/migrate.py",
-        "tests/test_migration.py",
         "internal/dashboard/report_test.go",
         "internal/investigation/reviews.go"
       ],
       "commands": [
-        "python3 -m unittest discover -s tests -q",
         "go test ./internal/dashboard",
         "go test ./internal/investigation"
       ]
@@ -203,10 +166,14 @@
       "commands": []
     }
   ],
-  "retained_repairs": {
-    "jevernetes/migrate.py": {
-      "base_blob": "bdca7f3b2d902e4fe627ae51d5255063e33743a7",
-      "sha256": "865224be2639f25edd5b06ac5590e53cdd0cd06bf6e623ab9ae56f0ce78ddd76"
-    }
+  "runtime": "go",
+  "legacy_reference": "e310a2b32d206a6061ec573d1bc32d7eb50335e9",
+  "browser_contracts": {
+    "tests/test_prompt_ui.cjs": "5e4b40565b852b8655cb4c8b7d446237df0574b75050d1f78321bc5676d8ff27",
+    "tests/test_grouping_ui.cjs": "713bb51f824604a7e0467e32082e74849d40eb9f389b48e6d695f7490527da3a",
+    "tests/test_dashboard_ui.cjs": "41b446e6f32368de94df91ff5ebcba8d0fd6e2e48e7e8eba15bc2687b6a839aa",
+    "tests/test_review_ui.cjs": "7a7bfff5d8355d3b94c3b7c9f98da1994c26d495dba98d5942db5d3eee796477",
+    "tests/test_context_ui.cjs": "4971c7f202362f7cccc67face17e9f6ec40444e31859483ed893df2b9f367792",
+    "tests/test_search_ui.cjs": "013331bcbef3731ef554171729981e6ecc212afa39ee379d697b65e93a2bd873"
   }
 }

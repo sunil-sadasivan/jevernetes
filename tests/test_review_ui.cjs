@@ -1,5 +1,5 @@
 const fs = require('node:fs'), vm = require('node:vm'), assert = require('node:assert/strict');
-const source = fs.readFileSync('jevernetes/web/app.js', 'utf8');
+const source = fs.readFileSync('internal/investigation/web/app.js', 'utf8');
 const helper = source.match(/^function expectedPattern\(e\) \{[\s\S]*?^\}/m);
 assert.ok(helper, 'Expected-pattern helper exists');
 const sandbox = {};

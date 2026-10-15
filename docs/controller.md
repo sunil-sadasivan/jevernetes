@@ -1,11 +1,11 @@
 # Durable controller
 
 ```sh
-jevernetes-go controller --namespace demo --state /var/lib/jevernetes/state.db \
+jevernetes controller --namespace demo --state /var/lib/jevernetes/state.db \
   --offline --sink stdout --inspect-port 9091 --selector app=api
 ```
 
-Host/operator examples use `jevernetes-go` (or `jev-go`) during staged coexistence; `jevernetes` remains the Rust CLI. The Go container image installs its binary as `/usr/local/bin/jevernetes`; deployment commands inside that image intentionally use that path.
+Workstation and container commands use the same Go executable, `jevernetes` (alias `jev`). The container installs it at `/usr/local/bin/jevernetes`.
 
 Controller mode uses in-cluster configuration and requires namespace/state. It continuously collects read-only logs, evaluates deterministic policy, and atomically records novelty, incident counters and notification intent in SQLite. It cannot execute model actions or modify workloads. `--policy` accepts a strict JSON object; omitted fields use defaults. Unknown fields and invalid ranges fail before credentials or collection.
 

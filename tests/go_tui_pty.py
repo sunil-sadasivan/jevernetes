@@ -95,6 +95,6 @@ def check(binary, action):
 
 
 if __name__ == "__main__":
-    binary = Path(sys.argv[1] if len(sys.argv) > 1 else ".runs/jevernetes-go").resolve()
+    binary = Path(sys.argv[1] if len(sys.argv) > 1 else ".runs/jevernetes").resolve()
     for action in ("search", "ctrl-c", "sigterm"):
         check(binary, action)

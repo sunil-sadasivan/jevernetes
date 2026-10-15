@@ -27,7 +27,7 @@ kubeconfig.*
 /.cache/
 /bin/
 
-# Coexisting runtimes
+# Development fixtures and historical local build artifacts
 /target/
 __pycache__/
 *.pyc
@@ -35,3 +35,7 @@ __pycache__/
 .venv/
 
 .security-venv/
+
+# Native local build (the former Python package is retired)
+/jevernetes
+/jev
