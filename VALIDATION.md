@@ -1,3 +1,13 @@
+# Kubernetes TUI idle-input freeze — 2026-10-15
+
+A user-authorized live Kubernetes TUI launch exposed a blocked keyboard read after terminal polling reported readiness. The goroutine dump showed the UI waiting in `os.File.Read` while holding the terminal frame lease, preventing redraw and credential handoff. Cluster discovery itself remained available.
+
+Terminal input now uses a nonblocking syscall under the existing terminal lease, restores the original descriptor flags on every return, handles interrupted/would-block reads as idle, and reports hangup. Idle frames wait for at most 100 ms with command cancellation. Regression coverage exercises empty input, readable input, EOF, and preservation of both initially blocking and nonblocking flags. This avoids relying on terminal readiness as a guarantee that a subsequent blocking read will complete.
+
+Focused Go TUI tests passed, including race detection alongside the interactive Kubernetes authentication PTYs. The native executable PTY suite passed exact search, Ctrl-C and SIGTERM with terminal restoration and private report persistence. A bounded, read-only live Kubernetes run populated the TUI with 1,776 events, reported zero provider requests, and restored terminal state after quitting (exit 2 for partial Kubernetes coverage). No cluster mutation or AI provider call occurred; no production log text or cluster identifiers are included here. This establishes one live collection/display check, not production soak, all-cluster compatibility or provider correctness.
+
+---
+
 # Sole Go runtime and canonical executable — 2026-10-14
 
 At the explicit request to replace Python and Rust, Go is now the only product runtime. The previously required coexistence policy is superseded; earlier entries below remain historical records. Revision `e310a2b32d206a6061ec573d1bc32d7eb50335e9` preserves the last coexistence tree in Git, with all hosted checks passing and no open branch CodeQL, repository dependency or secret alerts at that review.

@@ -458,22 +458,20 @@ func Run(ctx context.Context, tty *os.File, updates <-chan map[string]any, done 
 			if err != nil {
 				return err
 			}
-			fds := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}
-			n, err := unix.Poll(fds, 100)
-			if err == unix.EINTR {
-				return nil
-			}
+			buf := make([]byte, 512)
+			n, err := readInput(fd, buf)
 			if err != nil {
 				return err
 			}
 			if n > 0 {
-				buf := make([]byte, 512)
-				n, err := tty.Read(buf)
-				if err != nil {
-					return err
-				}
 				pending += string(buf[:n])
 				lastInput = time.Now()
+			} else {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(100 * time.Millisecond):
+				}
 			}
 			return nil
 		})
@@ -576,6 +574,32 @@ func Run(ctx context.Context, tty *os.File, updates <-chan map[string]any, done 
 			}
 		}
 	}
+}
+
+// readInput must run under the terminal frame lease. Readiness is only a hint:
+// a blocking read after poll can stall rendering, cancellation and auth handoff.
+// Use the syscall directly so os.File cannot turn EAGAIN into an unbounded wait,
+// and restore descriptor flags before releasing the terminal to a login helper.
+func readInput(fd int, buf []byte) (n int, err error) {
+	flags, err := unix.FcntlInt(uintptr(fd), unix.F_GETFL, 0)
+	if err != nil {
+		return 0, err
+	}
+	if err = unix.SetNonblock(fd, true); err != nil {
+		return 0, err
+	}
+	defer func() {
+		_, restoreErr := unix.FcntlInt(uintptr(fd), unix.F_SETFL, flags)
+		err = errors.Join(err, restoreErr)
+	}()
+	n, err = unix.Read(fd, buf)
+	if errors.Is(err, unix.EAGAIN) || errors.Is(err, unix.EWOULDBLOCK) || errors.Is(err, unix.EINTR) {
+		return 0, nil
+	}
+	if n == 0 && err == nil {
+		return 0, io.EOF
+	}
+	return n, err
 }
 
 func nextKey(s string) (string, string, bool) {
