@@ -167,6 +167,29 @@ func CredentialContext(ctx context.Context, kind string, lookup func(string) str
 	}
 	return "", errors.New("selected provider key missing; use --offline for local rules")
 }
+
+// choiceAnswer is one System One choice answer. The API also returns the full
+// per-option probability distribution; accept it so a strict decode of a current
+// response does not reject every verdict, but only the chosen option is used.
+type choiceAnswer struct {
+	Type          string             `json:"type"`
+	Choice        string             `json:"choice"`
+	Confidence    *float64           `json:"confidence"`
+	Probabilities map[string]float64 `json:"probabilities,omitempty"`
+}
+
+func (a choiceAnswer) Validate() error {
+	if a.Type != "choice" || a.Confidence == nil || !(*a.Confidence >= 0 && *a.Confidence <= 1) {
+		return ErrSchema
+	}
+	for _, p := range a.Probabilities {
+		if !(p >= 0 && p <= 1) {
+			return ErrSchema
+		}
+	}
+	return nil
+}
+
 func Request(kind, model string, groups []Dossier) any {
 	state := map[string]any{"groups": groups}
 	b, _ := json.Marshal(state)
@@ -199,11 +222,7 @@ func Decode(kind string, raw []byte, count int) ([]event.Judgment, error) {
 		return nil, ErrSchema
 	}
 	if kind == "typesafe" {
-		var answers map[string]struct {
-			Type       string   `json:"type"`
-			Choice     string   `json:"choice"`
-			Confidence *float64 `json:"confidence"`
-		}
+		var answers map[string]choiceAnswer
 		if Strict(v["answers"], &answers) != nil || len(answers) != count*3 {
 			return nil, ErrSchema
 		}
@@ -212,7 +231,7 @@ func Decode(kind string, raw []byte, count int) ([]event.Judgment, error) {
 			a, ok := answers[fmt.Sprintf("g%d_importance", i)]
 			b, ok2 := answers[fmt.Sprintf("g%d_severity", i)]
 			c, ok3 := answers[fmt.Sprintf("g%d_category", i)]
-			if !ok || !ok2 || !ok3 || a.Type != "choice" || b.Type != "choice" || c.Type != "choice" {
+			if !ok || !ok2 || !ok3 || a.Validate() != nil || b.Validate() != nil || c.Validate() != nil {
 				return nil, ErrSchema
 			}
 			out[i] = event.Judgment{Importance: a.Choice, Severity: b.Choice, Category: c.Choice, ImportanceConfidence: a.Confidence, SeverityConfidence: b.Confidence, CategoryConfidence: c.Confidence}
