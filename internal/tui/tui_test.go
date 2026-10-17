@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"context"
+	"errors"
 	"github.com/sunil-sadasivan/jevernetes/internal/event"
 	"strings"
 	"testing"
@@ -65,5 +67,29 @@ func TestUnicodeEditorModeBudgetAndDelete(t *testing.T) {
 	m.Key("\x15")
 	if m.Query != "" || m.Cursor != 0 {
 		t.Fatal("clear")
+	}
+}
+
+func TestCollectionStatusSurvivesSearchMessages(t *testing.T) {
+	for _, tc := range []struct {
+		outcome Completion
+		want    string
+	}{
+		{Completion{}, "Collection complete"},
+		{Completion{Partial: true}, "Collection stopped · partial coverage"},
+		{Completion{Err: context.Canceled}, "Collection interrupted"},
+		{Completion{Err: errors.New("sensitive transport detail")}, "Collection failed"},
+	} {
+		m := New()
+		m.Done = true
+		m.Outcome = tc.outcome
+		m.Message = "Search finished"
+		rendered := m.Render(180, 30)
+		if !strings.Contains(rendered, tc.want) || strings.Contains(rendered, "sensitive transport detail") {
+			t.Fatal("incorrect collection status", rendered)
+		}
+		if tc.want != "Collection complete" && strings.Contains(rendered, "Collection complete") {
+			t.Fatal("false success", rendered)
+		}
 	}
 }

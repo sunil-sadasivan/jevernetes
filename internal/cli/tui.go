@@ -32,7 +32,7 @@ func (o *options) runTerminal(cmd *cobra.Command, paths []string, stdin io.Reade
 	defer cancel()
 	updates := make(chan map[string]any, 1)
 	result := make(chan error, 1)
-	done := make(chan error, 1)
+	done := make(chan tui.Completion, 1)
 	copy := *o
 	copy.tui = false
 	deps.quiet = true
@@ -53,7 +53,16 @@ func (o *options) runTerminal(cmd *cobra.Command, paths []string, stdin io.Reade
 	deps.update = send
 	deps.finished = send
 	cmd.SetContext(ctx)
-	go func() { err := copy.runWith(cmd, paths, stdin, deps); result <- err; done <- err }()
+	go func() {
+		err := copy.runWith(cmd, paths, stdin, deps)
+		result <- err
+		outcome := tui.Completion{Err: err}
+		var partial exitError
+		if errors.As(err, &partial) && partial.code == 2 {
+			outcome = tui.Completion{Partial: true}
+		}
+		done <- outcome
+	}()
 	quit, uiErr := tui.Run(ctx, tty, updates, done, tui.Options{Offline: o.offline, Client: func(ctx context.Context, budget int) (search.Client, error) {
 		key, err := provider.CredentialContext(ctx, "typesafe", os.Getenv)
 		if err != nil {

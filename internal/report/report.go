@@ -4,6 +4,7 @@ package report
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -126,6 +127,36 @@ func (r *Report) Snapshot(mode string, scope any, live bool, usage provider.Usag
 	return map[string]any{"schema_version": 2, "runtime": "go", "created_at": time.Now().UTC().Format(time.RFC3339), "mode": mode, "scope": scope, "summary": map[string]any{"events": r.total, "lines": r.lines, "streams": len(sources), "source_count_scope": "retained events and coverage", "important": r.counts["important"], "routine": r.counts["routine"], "uncertain": r.counts["uncertain"], "unknown": r.counts["unknown"], "coverage_gaps": r.gaps, "api_requests": usage.Attempts, "total_api_requests": usage.Attempts, "total_estimated_cost_usd": usage.Cost, "reused_events": r.reused, "elapsed_seconds": time.Since(r.started).Seconds(), "complete_within_window": complete, "retained_events": len(events), "evicted_events": r.evicted}, "provider_usage": map[string]any{"risk": usage, "template": nil}, "usage": usage, "metrics": m, "events": events, "coverage": coverage, "important_groups": groups, "adaptive_learning": checkpoint, "template_learning": nil, "template_refinement": nil, "reviewed_template_rules": nil, "risk_contract": nil, "batches": m["provider_batches"]}
 }
 func Write(path string, value any) error {
+	return write(path, value, 0)
+}
+
+// ErrSizeLimit means a bounded write was rejected before publishing any change.
+var ErrSizeLimit = errors.New("report exceeds size limit")
+
+// WriteBounded applies the limit to the bytes actually encoded, including
+// indentation, escaping and the final newline. Size rejection preserves the old file.
+func WriteBounded(path string, value any, maxBytes int64) error {
+	if maxBytes <= 0 {
+		return ErrSizeLimit
+	}
+	return write(path, value, maxBytes)
+}
+
+type boundedWriter struct {
+	w         io.Writer
+	remaining int64
+}
+
+func (w *boundedWriter) Write(p []byte) (int, error) {
+	if int64(len(p)) > w.remaining {
+		return 0, ErrSizeLimit
+	}
+	n, err := w.w.Write(p)
+	w.remaining -= int64(n)
+	return n, err
+}
+
+func write(path string, value any, maxBytes int64) error {
 	parent := filepath.Dir(path)
 	if err := os.MkdirAll(parent, 0700); err != nil {
 		return errors.New("cannot create report directory")
@@ -140,9 +171,19 @@ func Write(path string, value any) error {
 	if err = f.Chmod(0600); err != nil {
 		return errors.New("cannot secure report")
 	}
-	enc := json.NewEncoder(f)
+	var destination io.Writer = f
+	if maxBytes > 0 {
+		destination = &boundedWriter{w: f, remaining: maxBytes}
+	}
+	enc := json.NewEncoder(destination)
 	enc.SetIndent("", "  ")
-	if enc.Encode(value) != nil || f.Sync() != nil || f.Close() != nil {
+	if err := enc.Encode(value); err != nil {
+		if errors.Is(err, ErrSizeLimit) {
+			return ErrSizeLimit
+		}
+		return errors.New("cannot write report")
+	}
+	if f.Sync() != nil || f.Close() != nil {
 		return errors.New("cannot write report")
 	}
 	if os.Rename(name, path) != nil {

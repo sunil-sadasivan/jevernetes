@@ -1,3 +1,15 @@
+# Review storage limits and TUI collection failures — 2026-10-17
+
+Both review findings were reproduced against `776ef1b` with synthetic inputs. A compact review store below 16 MiB passed the save check but exceeded the read bound after indentation, making the next state read fail. An invalid context in an isolated empty kubeconfig left the TUI showing successful completion until quit. The new regressions failed before the fixes (`.runs/pr-review/rules-before.log`, `.runs/pr-review/tui-before.log`).
+
+Review persistence now uses a bounded atomic writer that counts the actual encoded bytes, including indentation, escaping and the final newline. A size rejection removes its temporary file and leaves prior review bytes readable and unchanged. Regression coverage checks the large review-store case through HTTP, an exact byte boundary, a one-byte overflow, private modes and temporary-file cleanup.
+
+The CLI passes a typed completion outcome to the TUI while retaining the original error for process exit. Successful collection, partial coverage, interruption and failure have distinct status banners. A failure stays visible while browsing/searching retained evidence; raw diagnostic text is not drawn into the TUI, and quitting exposes the normal CLI error with the original nonzero exit code. Native PTYs cover invalid-context failure (exit 1) and partial file coverage (exit 2), alongside successful search, Ctrl-C and SIGTERM with complete terminal restoration.
+
+The affected package suites and complete `tools/check.sh` gate passed on Darwin arm64: Go normal/race/vet, vendored SPDY, Linux cross-builds, all browser contracts, native executable HTTP/PTY checks, retirement checks and source privacy. Logs: `.runs/pr-review/fixes-focused.log` and `.runs/pr-review/fixes-full-check.log`. Tests used temporary synthetic files and local fixture listeners; no live cluster/provider or production evidence was accessed. Hosted CI checks the final pushed revision.
+
+---
+
 # Kubernetes TUI idle-input freeze — 2026-10-15
 
 A user-authorized live Kubernetes TUI launch exposed a blocked keyboard read after terminal polling reported readiness. The goroutine dump showed the UI waiting in `os.File.Read` while holding the terminal frame lease, preventing redraw and credential handoff. Cluster discovery itself remained available.

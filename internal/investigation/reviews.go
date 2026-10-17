@@ -385,11 +385,11 @@ func (s *Server) review(p object) error {
 	default:
 		return errors.New("unknown review action")
 	}
-	raw, err := json.Marshal(rules)
-	if err != nil || len(raw) > 16<<20 {
+	err = report.WriteBounded(s.rulesPath, rules, 16<<20)
+	if errors.Is(err, report.ErrSizeLimit) {
 		return errors.New("review storage limit reached")
 	}
-	return report.Write(s.rulesPath, rules)
+	return err
 }
 func readReport(ctx context.Context, path string) (object, error) {
 	raw, err := safefile.ReadConfig(ctx, path, 64<<20)

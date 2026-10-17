@@ -41,6 +41,7 @@ type Model struct {
 	Summary                             map[string]any
 	Tab, Selected, Scroll, DetailScroll int
 	Grouped, Detail, Instances, Done    bool
+	Outcome                             Completion
 	Query, Editing, Message             string
 	Results                             []event.Event
 	Search                              *search.Run
@@ -151,7 +152,16 @@ func (m *Model) Render(w, h int) string {
 	lines := []string{"Jevernetes · Go · read-only log investigation"}
 	status := "Collecting"
 	if m.Done {
-		status = "Collection complete · browsing retained window"
+		switch {
+		case errors.Is(m.Outcome.Err, context.Canceled):
+			status = "Collection interrupted · browsing retained window"
+		case m.Outcome.Err != nil:
+			status = "Collection failed · press q for error"
+		case m.Outcome.Partial:
+			status = "Collection stopped · partial coverage"
+		default:
+			status = "Collection complete · browsing retained window"
+		}
 	}
 	lines = append(lines, fmt.Sprintf("%s | events=%v important=%v uncertain=%v unknown=%v", status, m.Summary["events"], m.Summary["important"], m.Summary["uncertain"], m.Summary["unknown"]))
 	labels := []string{}
@@ -371,12 +381,19 @@ func (m *Model) Key(key string) (quit, submit bool) {
 	return
 }
 
+// Completion distinguishes a bounded/partial collection from an actual failure.
+// Err is preserved for status classification; raw diagnostics are not rendered.
+type Completion struct {
+	Err     error
+	Partial bool
+}
+
 type Options struct {
 	Offline bool
 	Client  func(context.Context, int) (search.Client, error)
 }
 
-func Run(ctx context.Context, tty *os.File, updates <-chan map[string]any, done <-chan error, options Options) (bool, error) {
+func Run(ctx context.Context, tty *os.File, updates <-chan map[string]any, done <-chan Completion, options Options) (bool, error) {
 	fd := int(tty.Fd())
 	if !term.IsTerminal(fd) {
 		return false, errors.New("--tui requires an interactive terminal")
@@ -434,8 +451,9 @@ func Run(ctx context.Context, tty *os.File, updates <-chan map[string]any, done 
 			} else {
 				updates = nil
 			}
-		case _, ok := <-done:
+		case outcome, ok := <-done:
 			if ok {
+				m.Outcome = outcome
 				m.Done = true
 			}
 			done = nil
