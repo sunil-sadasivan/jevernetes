@@ -1,0 +1,179 @@
+{
+  "base": "3a08dcb1c3611c0014b000074006701ad767bfa2",
+  "retirement_allowed": true,
+  "workflows": [
+    {
+      "workflow": "ingestion",
+      "status": "equivalent",
+      "assets": [
+        "internal/event",
+        "internal/cli"
+      ],
+      "commands": [
+        "go test ./internal/event ./internal/cli"
+      ]
+    },
+    {
+      "workflow": "tui-search",
+      "status": "equivalent",
+      "assets": [
+        "internal/tui",
+        "internal/search",
+        "tests/go_tui_pty.py"
+      ],
+      "commands": [
+        "go test ./internal/tui ./internal/search ./internal/provider",
+        "go build -o .runs/native-ui-check/jevernetes ./cmd/jevernetes",
+        "python3 tests/go_tui_pty.py .runs/native-ui-check/jevernetes"
+      ]
+    },
+    {
+      "workflow": "context-reviews-acknowledgements",
+      "status": "equivalent",
+      "assets": [
+        "internal/investigation",
+        "internal/kube/context.go"
+      ],
+      "commands": [
+        "node tests/test_context_ui.cjs",
+        "node tests/test_review_ui.cjs",
+        "go test ./internal/investigation ./internal/kube"
+      ]
+    },
+    {
+      "workflow": "live-dashboard-investigation-api",
+      "status": "equivalent",
+      "assets": [
+        "internal/investigation",
+        "internal/cli/investigation.go",
+        "tools/go-dashboard-smoke.py"
+      ],
+      "commands": [
+        "node tests/test_search_ui.cjs",
+        "node tests/test_grouping_ui.cjs",
+        "go test ./internal/investigation ./internal/cli",
+        "python3 tools/go-dashboard-smoke.py .runs/native-ui-check/jevernetes"
+      ]
+    },
+    {
+      "workflow": "prompt-export",
+      "status": "exact",
+      "assets": [
+        "tests/test_prompt_ui.cjs",
+        "internal/investigation/web/prompt.js"
+      ],
+      "commands": [
+        "node tests/test_prompt_ui.cjs"
+      ]
+    },
+    {
+      "workflow": "reports-private-writes",
+      "status": "equivalent",
+      "assets": [
+        "internal/report"
+      ],
+      "commands": [
+        "go test ./internal/report"
+      ]
+    },
+    {
+      "workflow": "go-dashboard",
+      "status": "equivalent",
+      "assets": [
+        "internal/dashboard",
+        "tests/test_dashboard_ui.cjs"
+      ],
+      "commands": [
+        "go test ./internal/dashboard",
+        "node tests/test_dashboard_ui.cjs"
+      ]
+    },
+    {
+      "workflow": "provider-contracts",
+      "status": "equivalent",
+      "assets": [
+        "internal/provider"
+      ],
+      "commands": [
+        "go test ./internal/provider"
+      ]
+    },
+    {
+      "workflow": "kubernetes-snapshot-follow-reconnect",
+      "status": "equivalent",
+      "assets": [
+        "internal/kube"
+      ],
+      "commands": [
+        "go test ./internal/kube"
+      ]
+    },
+    {
+      "workflow": "controller-state-outbox-inspection",
+      "status": "equivalent",
+      "assets": [
+        "internal/controller",
+        "internal/inspect"
+      ],
+      "commands": [
+        "go test ./internal/controller ./internal/inspect"
+      ]
+    },
+    {
+      "workflow": "env-aliases-flags",
+      "status": "equivalent",
+      "assets": [
+        "internal/cli",
+        "internal/cli/native_ui_test.go",
+        "cmd/jevernetes",
+        "cmd/jev"
+      ],
+      "commands": [
+        "go test ./internal/cli"
+      ]
+    },
+    {
+      "workflow": "packaging-rbac-upgrade",
+      "status": "equivalent",
+      "assets": [
+        "Dockerfile",
+        "deploy/base/resources.json",
+        "tools/release.sh",
+        "tools/smoke.mjs"
+      ],
+      "commands": [
+        "node tools/check-release.mjs"
+      ]
+    },
+    {
+      "workflow": "schema1-review-import",
+      "status": "equivalent",
+      "assets": [
+        "internal/dashboard/report_test.go",
+        "internal/investigation/reviews.go"
+      ],
+      "commands": [
+        "go test ./internal/dashboard",
+        "go test ./internal/investigation"
+      ]
+    },
+    {
+      "workflow": "live-provider-cluster-container",
+      "status": "unverified",
+      "assets": [
+        "docs/migration.md"
+      ],
+      "commands": []
+    }
+  ],
+  "runtime": "go",
+  "legacy_reference": "e310a2b32d206a6061ec573d1bc32d7eb50335e9",
+  "browser_contracts": {
+    "tests/test_prompt_ui.cjs": "5e4b40565b852b8655cb4c8b7d446237df0574b75050d1f78321bc5676d8ff27",
+    "tests/test_grouping_ui.cjs": "713bb51f824604a7e0467e32082e74849d40eb9f389b48e6d695f7490527da3a",
+    "tests/test_dashboard_ui.cjs": "41b446e6f32368de94df91ff5ebcba8d0fd6e2e48e7e8eba15bc2687b6a839aa",
+    "tests/test_review_ui.cjs": "7a7bfff5d8355d3b94c3b7c9f98da1994c26d495dba98d5942db5d3eee796477",
+    "tests/test_context_ui.cjs": "4971c7f202362f7cccc67face17e9f6ec40444e31859483ed893df2b9f367792",
+    "tests/test_search_ui.cjs": "013331bcbef3731ef554171729981e6ecc212afa39ee379d697b65e93a2bd873"
+  }
+}

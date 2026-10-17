@@ -1,0 +1,63 @@
+Baseline: aa75b6ce58f56e888ec8c936f8f11c9f7d8bdaf0 (clean before test additions)
+Only internal/kube/compatibility_test.go existed as an untracked change during this run.
+No production edits had been made.
+Command: GOPROXY=off GOSUMDB=off GOCACHE="$PWD/.cache/build" go test -count=1 ./internal/kube -run 'TestCollectorEndpoint|TestSPDYTargetSNI|TestOIDCCachedTokenCompatibility'
+Result: exit 1. Local linker path/warning omitted below.
+
+--- FAIL: TestCollectorEndpointDurableIdentity (0.06s)
+    --- FAIL: TestCollectorEndpointDurableIdentity/context (0.04s)
+        compatibility_test.go:75: different endpoints share event source
+        compatibility_test.go:76: different endpoints share drain scope
+        compatibility_test.go:75: different endpoints share event source
+        compatibility_test.go:76: different endpoints share drain scope
+        compatibility_test.go:75: different endpoints share event source
+        compatibility_test.go:76: different endpoints share drain scope
+        compatibility_test.go:75: different endpoints share event source
+        compatibility_test.go:76: different endpoints share drain scope
+        compatibility_test.go:75: different endpoints share event source
+        compatibility_test.go:76: different endpoints share drain scope
+        compatibility_test.go:89: durable cache crossed endpoint or lost same-cluster reuse: calls=1, want 2
+    --- FAIL: TestCollectorEndpointDurableIdentity/default (0.01s)
+        compatibility_test.go:75: different endpoints share event source
+        compatibility_test.go:76: different endpoints share drain scope
+        compatibility_test.go:75: different endpoints share event source
+        compatibility_test.go:76: different endpoints share drain scope
+        compatibility_test.go:75: different endpoints share event source
+        compatibility_test.go:76: different endpoints share drain scope
+        compatibility_test.go:75: different endpoints share event source
+        compatibility_test.go:76: different endpoints share drain scope
+        compatibility_test.go:75: different endpoints share event source
+        compatibility_test.go:76: different endpoints share drain scope
+        compatibility_test.go:89: durable cache crossed endpoint or lost same-cluster reuse: calls=1, want 2
+    --- FAIL: TestCollectorEndpointDurableIdentity/in-cluster (0.01s)
+        compatibility_test.go:75: different endpoints share event source
+        compatibility_test.go:76: different endpoints share drain scope
+        compatibility_test.go:75: different endpoints share event source
+        compatibility_test.go:76: different endpoints share drain scope
+        compatibility_test.go:75: different endpoints share event source
+        compatibility_test.go:76: different endpoints share drain scope
+        compatibility_test.go:75: different endpoints share event source
+        compatibility_test.go:76: different endpoints share drain scope
+        compatibility_test.go:75: different endpoints share event source
+        compatibility_test.go:76: different endpoints share drain scope
+        compatibility_test.go:89: durable cache crossed endpoint or lost same-cluster reuse: calls=1, want 2
+--- FAIL: TestSPDYTargetSNI (1.02s)
+    --- FAIL: TestSPDYTargetSNI/direct/insecure (0.00s)
+        compatibility_test.go:152: SNI-required TLS failed: client=remote error: tls: internal error; peer=SNI "", want "api.fixture.invalid"
+    --- FAIL: TestSPDYTargetSNI/http/insecure (0.00s)
+        compatibility_test.go:152: SNI-required TLS failed: client=remote error: tls: internal error; peer=SNI "", want "api.fixture.invalid"
+    --- FAIL: TestSPDYTargetSNI/https/insecure (1.00s)
+        compatibility_test.go:152: SNI-required TLS failed: client=remote error: tls: internal error; peer=SNI "", want "api.fixture.invalid"
+    --- FAIL: TestSPDYTargetSNI/socks5/insecure (0.00s)
+        compatibility_test.go:152: SNI-required TLS failed: client=remote error: tls: internal error; peer=SNI "", want "api.fixture.invalid"
+--- FAIL: TestOIDCCachedTokenCompatibility (0.00s)
+    compatibility_test.go:173: OIDC config initialization: no Auth Provider found for name "oidc"
+--- FAIL: TestCollectorEndpointIdentityPrivacyAndLegacy (0.01s)
+    compatibility_test.go:191: missing opaque cluster identity
+    compatibility_test.go:199: scheme, port, or API prefix identity collided
+    compatibility_test.go:199: scheme, port, or API prefix identity collided
+    compatibility_test.go:199: scheme, port, or API prefix identity collided
+    compatibility_test.go:214: pre-endpoint cache key remained reachable
+FAIL
+FAIL	github.com/sunil-sadasivan/jevernetes/internal/kube	1.897s
+FAIL

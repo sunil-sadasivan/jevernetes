@@ -92,7 +92,7 @@ const server = createServer(async (req, res) => {
       res.end(JSON.stringify({status: 'saved'}));
     } else if (assets[path]) {
       res.setHeader('Content-Type', assets[path][1]);
-      res.end(await readFile(join(root, 'jevernetes/web', assets[path][0])));
+      res.end(await readFile(join(root, 'internal/investigation/web', assets[path][0])));
     } else { res.writeHead(404); res.end(); }
   } catch { res.writeHead(500); res.end(); }
 });

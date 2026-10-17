@@ -1,0 +1,25 @@
+Baseline: d6161ff0e29ed0e84047be8897974883441e2ede
+Only regression tests added; no production edits. Offline local HTTP over net.Pipe and child-process OS pipes.
+Command: go test -timeout=20s -count=1 ./internal/kube ./internal/controller ./internal/cli -run TestOIDCRotationPersists|TestOIDCRequestCancellation|TestStdoutCancellationPipe|TestPlainOutputError|TestPlainCancellationPipe
+Full ignored log: .cache/ownership-before-final.log
+
+--- FAIL: TestOIDCRotationPersists (0.00s)
+    oidc_regression_test.go:115: rotated refresh token was not persisted
+--- FAIL: TestOIDCRequestCancellation (0.81s)
+    --- FAIL: TestOIDCRequestCancellation/discovery (0.40s)
+        oidc_regression_test.go:161: OIDC issuer outlived request cancellation
+    --- FAIL: TestOIDCRequestCancellation/refresh (0.41s)
+        oidc_regression_test.go:161: OIDC issuer outlived request cancellation
+FAIL
+FAIL	github.com/sunil-sadasivan/jevernetes/internal/kube	2.256s
+--- FAIL: TestStdoutCancellationPipe (2.01s)
+    output_regression_test.go:33: stdout child did not join after cancellation: signal: killed
+FAIL
+FAIL	github.com/sunil-sadasivan/jevernetes/internal/controller	2.378s
+--- FAIL: TestPlainOutputError (0.00s)
+    output_regression_test.go:20: plain write error ignored: exit 0
+--- FAIL: TestPlainCancellationPipe (3.01s)
+    output_regression_test.go:42: plain child did not join after cancellation: signal: killed
+FAIL
+FAIL	github.com/sunil-sadasivan/jevernetes/internal/cli	3.985s
+FAIL

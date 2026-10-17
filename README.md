@@ -1,52 +1,20 @@
 # Jevernetes
 
-**Jevernetes uses Rust to collect and analyze Kubernetes logs.** The `jevernetes` binary provides bounded streaming ingestion, local offline rules, typed [Jev](https://docs.typesafe.ai) analysis, an interactive terminal UI, and JSON reports. Collection is read-only and judgments are advisory.
+Read-only log triage and investigation in one Go executable: CLI, TUI, dashboard and durable controller. No Python, Rust or kubectl runtime is required.
 
-## Quick start
-
-Install Rust 1.94 (the verified toolchain), then build from this repository:
+Build with Go 1.27.2 or newer:
 
 ```sh
-cargo build --release --locked
-./target/release/jevernetes files - --offline --json <<'LOGS'
-2026-09-20T12:00:00Z ERROR dependency unavailable
-  at synthetic_worker:12
-2026-09-20T12:00:01Z INFO ready
-LOGS
+go build -o ./jevernetes ./cmd/jevernetes
+./jevernetes files examples/mixed.log --offline --tui
+./jevernetes k8s -f --offline --tui
+./jevernetes dashboard --reports-dir .runs
 ```
 
-To install the default binary:
+`make build` builds the same local executable. `tools/release.sh` produces `dist/bin/jevernetes`, its `jev` alias, and `dist/jevernetes-binary.tar.gz`. The container uses the same `jevernetes` command.
 
-```sh
-cargo install --path . --locked
-jevernetes k8s --offline --namespace example --since 1h --output .runs/snapshot.json
-jevernetes k8s -f --offline --tail 0 --max-streams 64 --output .runs/live.json
-jevernetes k8s -f --tail 0 --tui
-```
+The terminal supports clickable tabs, multiline details, exact and semantic search, grouped occurrences and independent search budgets. The dashboard supports uploads, live collection, filters, confidence/grouping, semantic search, bounded context, bulk reviews, expected rules, themes and prompt export. Controller monitoring is available at `/controller/`; `--inspection-only` serves the compact read-only dashboard.
 
-Kubernetes access uses the Rust Kubernetes client with your trusted kubeconfig, or service-account configuration with `--in-cluster`. No `kubectl` or Python is needed for the Rust runtime. Offline file analysis makes no network requests. Online analysis requires `TYPESAFE_API_KEY`, `TYPESAFEAI_API_KEY`, or `TYPESAFE_API_KEY_FILE`; omit `--offline` to enable it. Never put credentials into command-line arguments or git.
+Existing schema-1/schema-2 reports and version-1 `.review-rules.json` open directly in Go. Keep their filenames and select their directory with `--reports-dir`. Model-reviewed template rules remain separate from human reviews.
 
-Live mode reports queue pressure and coverage gaps on stderr, batches analysis, and saves a final report on SIGINT/SIGTERM or a configured duration/budget stop. Reports contain a bounded retained window, cumulative counters, and usage estimates. Kubernetes reports conservatively report restricted history; exit code 2 means partial coverage, not a crash.
-
-Use `--tui` for clickable Important, Routine, Needs Review, All, and Search tabs. Press `/` to ask Jev, `f` to find exact text, Enter for event details, and `q` to stop and exit. Completed collection stays open for browsing and saves its report on exit. Search freezes the retained window and has separate usage and budgets. Add `--offline` for local rules and exact search without API calls. See [terminal usage](docs/usage.md#interactive-terminal).
-
-## Compatibility
-
-The **Python companion is legacy** and remains available for the dashboard, review overrides, context fetching, investigation-prompt export, and its older terminal UI:
-
-```sh
-python3 -m jevernetes dashboard
-python3 -m jevernetes k8s -f --offline --tui
-```
-
-These commands still use the legacy Python collector and require Python 3.11+ and `kubectl`. Installing the Python package provides `jevernetes-legacy`, so it cannot overwrite the Rust command. Rust report schema 2 is not yet an input contract for the legacy UI. Existing UI screenshots and demos show the legacy companion.
-
-See [Rust usage](docs/usage.md), [architecture](docs/architecture.md), [exact parity and removal plan](docs/migration.md), and the [legacy dashboard guide](docs/legacy-dashboard.md).
-
-## Data and security
-
-Jev mode sends redacted log text and source metadata to TypeSafe over verified HTTPS. Redaction is best effort, including streamed private-key suppression. Use offline mode when evidence must stay local. Logs are untrusted data; neither model answers nor log content can invoke tools or mutate Kubernetes resources. Keep reports, kubeconfigs, real logs, and credentials outside git.
-
-[Security policy](SECURITY.md) · [Security review scope](SECURITY_REVIEW.md) · [Contributing](CONTRIBUTING.md) · [Validation](VALIDATION.md)
-
-Licensed under the MIT License. Inspired by [Log Sentinel](https://github.com/dabit3/jev-experiments/tree/main/log-sentinel).
+See [usage](docs/usage.md), [migration and rollback](docs/migration.md), [controller](docs/controller.md), [deployment](deploy/README.md), [workflow acceptance](tests/parity.json), and [validation](VALIDATION.md). External provider and cluster operations require operator configuration; automated tests use synthetic inputs and local fakes.

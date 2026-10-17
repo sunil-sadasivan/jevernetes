@@ -21,8 +21,8 @@ const sandbox={state,$:get,fmt:String,scopeValues:()=>({}),sourceName:s=>s.path,
   api:async(path,options)=>{if(options){posted=JSON.parse(options.body);return {id:'query',report};}return result;}};
 const result={id:'query',query:'db issues',mode:'jev',status:'complete',matched_groups:1,matching_instances:1,possible_groups:0,examined_groups:2,total_groups:2,unexamined_groups:0,failed_groups:0,partial:false,message:'Complete',usage:{request_attempts:1,estimated_cost_usd:.0001,cost_complete:true},cache_hits:0,elapsed_seconds:1,result_count:1,results:[{event_id:'important',count:1,relevance:'match',confidence:.98}]};
 vm.createContext(sandbox);
-vm.runInContext(fs.readFileSync('jevernetes/web/app.js','utf8').match(/^function switchView\([^]*?^\}/m)[0],sandbox);
-vm.runInContext(fs.readFileSync('jevernetes/web/search.js','utf8'),sandbox);
+vm.runInContext(fs.readFileSync('internal/investigation/web/app.js','utf8').match(/^function switchView\([^]*?^\}/m)[0],sandbox);
+vm.runInContext(fs.readFileSync('internal/investigation/web/search.js','utf8'),sandbox);
 (async()=>{
   get('source-filter').value='all';
   sandbox.openLogSearch();
