@@ -1,6 +1,6 @@
 # Jevernetes
 
-Read-only log triage and investigation in one Go executable: CLI, TUI, dashboard and durable controller. No Python, Rust or kubectl runtime is required.
+Read-only log triage and investigation in one Go executable: CLI, TUI, dashboard and durable controller.
 
 Build with Go 1.27.2 or newer:
 
