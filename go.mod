@@ -6,7 +6,7 @@ go 1.27.2
 replace github.com/moby/spdystream => ./third_party/spdystream
 
 require (
-	github.com/go-logr/logr v1.4.3
+	github.com/go-logr/logr v1.4.4
 	github.com/moby/spdystream v0.5.0
 	github.com/prometheus/client_golang v1.23.2
 	github.com/spf13/cobra v1.10.2
