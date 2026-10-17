@@ -33,18 +33,14 @@ func (c *Client) Search(ctx context.Context, query string, events []event.Event)
 	if Strict(raw, &body) != nil {
 		return nil, ErrSchema
 	}
-	var answers map[string]struct {
-		Type       string   `json:"type"`
-		Choice     string   `json:"choice"`
-		Confidence *float64 `json:"confidence"`
-	}
+	var answers map[string]choiceAnswer
 	if Strict(body["answers"], &answers) != nil || len(answers) != len(events) {
 		return nil, ErrSchema
 	}
 	out := make([]Relevance, len(events))
 	for i, e := range events {
 		a, ok := answers[fmt.Sprintf("e%d_relevance", i)]
-		if !ok || a.Type != "choice" || (a.Choice != "match" && a.Choice != "possible" && a.Choice != "unrelated") || a.Confidence == nil || !(*a.Confidence >= 0 && *a.Confidence <= 1) {
+		if !ok || a.Validate() != nil || (a.Choice != "match" && a.Choice != "possible" && a.Choice != "unrelated") {
 			return nil, ErrSchema
 		}
 		if *a.Confidence < .7 || e.Truncated || e.ParseUncertain {

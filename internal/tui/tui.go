@@ -38,7 +38,7 @@ type Model struct {
 	FrozenDetail                        *row
 	FrozenEvents                        []event.Event
 	Events                              []event.Event
-	Summary                             map[string]any
+	Summary, Live                       map[string]any
 	Tab, Selected, Scroll, DetailScroll int
 	Grouped, Detail, Instances, Done    bool
 	Outcome                             Completion
@@ -77,6 +77,40 @@ func (m *Model) Update(v map[string]any) {
 		m.Events = events
 	}
 	m.Summary, _ = v["summary"].(map[string]any)
+	m.Live, _ = v["live"].(map[string]any)
+}
+
+// Pending counts retained events still awaiting a verdict.
+func (m *Model) Pending() int {
+	n := 0
+	for _, e := range m.Events {
+		if e.Importance == "pending" {
+			n++
+		}
+	}
+	return n
+}
+
+// emptyState explains an empty tab in terms of what collection is doing, so a
+// live run never looks idle while streams open or verdicts are outstanding.
+func (m *Model) emptyState() string {
+	if m.Tab == 4 {
+		return "No search results. Press / to ask Jev or f for exact text."
+	}
+	if len(m.Events) > 0 {
+		msg := fmt.Sprintf("No %s events yet · %d retained", strings.ToLower(tabs[m.Tab]), len(m.Events))
+		if pending := m.Pending(); pending > 0 {
+			msg += fmt.Sprintf(" · %d awaiting verdict", pending)
+		}
+		return msg + " · press 4 for all events"
+	}
+	if !m.Done && m.Live != nil {
+		return fmt.Sprintf("Opening log streams… %v active · waiting for the first log line", m.Live["active_streams"])
+	}
+	if !m.Done {
+		return "Collecting… no events received yet"
+	}
+	return "No events in this view. Collection coverage may be partial."
 }
 func (m *Model) Rows() []row {
 	events := m.Events
@@ -163,7 +197,11 @@ func (m *Model) Render(w, h int) string {
 			status = "Collection complete · browsing retained window"
 		}
 	}
-	lines = append(lines, fmt.Sprintf("%s | events=%v important=%v uncertain=%v unknown=%v", status, m.Summary["events"], m.Summary["important"], m.Summary["uncertain"], m.Summary["unknown"]))
+	statusLine := fmt.Sprintf("%s | events=%v important=%v uncertain=%v unknown=%v", status, m.Summary["events"], m.Summary["important"], m.Summary["uncertain"], m.Summary["unknown"])
+	if m.Live != nil && !m.Done {
+		statusLine += fmt.Sprintf(" | streams=%v queue=%v dropped=%v", m.Live["active_streams"], m.Live["queue_depth"], m.Live["dropped"])
+	}
+	lines = append(lines, statusLine)
 	labels := []string{}
 	for i, t := range tabs {
 		if i == m.Tab {
@@ -229,7 +267,7 @@ func (m *Model) Render(w, h int) string {
 			lines = append(lines, fmt.Sprintf("%s ×%-4d %-12s %s %s", mark, r.Count, label, fit(source, min(30, w/3)), r.Event.Text))
 		}
 		if len(rows) == 0 {
-			lines = append(lines, "No events in this view. Collection coverage may be partial.")
+			lines = append(lines, m.emptyState())
 		}
 	}
 	for len(lines) < h-1 {

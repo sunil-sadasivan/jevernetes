@@ -92,8 +92,13 @@ func LoadContext(ctx context.Context, c Config) (*rest.Config, error) {
 	}
 	cfg.Wrap(func(base http.RoundTripper) http.RoundTripper { return lifecycleTransport{ctx, base} })
 	cfg.Timeout = 15 * time.Second
-	cfg.QPS = 5
-	cfg.Burst = 10
+	// Following a full cluster opens up to MaxStreams (64) streams at once, each
+	// needing an identity GET and a log GET. A 5 QPS / 10 burst limiter queued
+	// those for 10+ seconds, timing out identity checks and delaying the first
+	// event past what a terminal user will wait. Allow the initial fan-out to
+	// pass immediately and throttle only sustained churn.
+	cfg.QPS = 20
+	cfg.Burst = 200
 	cfg.UserAgent = "jevernetes-go"
 	return cfg, nil
 }
