@@ -93,6 +93,6 @@ jobs:
           queries: security-extended
       - if: matrix.language == 'go'
         run: go build ./...
-      - uses: github/codeql-action/analyze@1c5b675653bb5c22dbe9b12b556ec555138e09fd
+      - uses: github/codeql-action/analyze@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee
         with:
           category: /language:${{ matrix.language }}
