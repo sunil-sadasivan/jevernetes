@@ -35,7 +35,7 @@ jobs:
           printf 'base=%s\n' "$base" >> "$GITHUB_OUTPUT"
       - name: Scan introduced changes
         if: github.event_name == 'push' || github.event_name == 'pull_request'
-        uses: trufflesecurity/trufflehog@f714bf454f350590f4a24c3ddb1aef02c35bf5b6
+        uses: trufflesecurity/trufflehog@c85580b712841eda4c53bc28fc6ace6100e8c16c
         with:
           version: '3.97.5'
           base: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || steps.push-base.outputs.base }}
@@ -43,7 +43,7 @@ jobs:
           extra_args: --no-verification --fail-on-scan-errors
       - name: Scan full history for verified findings
         if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-        uses: trufflesecurity/trufflehog@f714bf454f350590f4a24c3ddb1aef02c35bf5b6
+        uses: trufflesecurity/trufflehog@c85580b712841eda4c53bc28fc6ace6100e8c16c
         with:
           version: '3.97.5'
           extra_args: --only-verified --fail-on-scan-errors
